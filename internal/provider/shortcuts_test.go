@@ -447,9 +447,12 @@ func installFakes(t *testing.T, f *setupFakes) {
 	}
 }
 
-func TestRunShortcutsSetupSkipsAlreadyInstalled(t *testing.T) {
+func TestRunShortcutsSetupSkipsCurrent(t *testing.T) {
 	f := &setupFakes{installed: map[string]bool{"Ask AI": true}}
 	installFakes(t, f)
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return currentShortcutActionCount(), nil // already up to date
+	})
 
 	cfg, err := config.Parse(`[shortcuts]
 names = { "apple-pro" = "Ask AI" }
@@ -467,10 +470,120 @@ install = ["apple-pro"]
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.opened) != 0 {
-		t.Errorf("open was called %d times, want 0 (already installed)", len(f.opened))
+		t.Errorf("open was called %d times, want 0 (already current)", len(f.opened))
 	}
-	if !strings.Contains(stdout.String(), "already installed") {
-		t.Errorf("stdout = %q, want a mention of \"already installed\"", stdout.String())
+	if !strings.Contains(stdout.String(), "up to date") {
+		t.Errorf("stdout = %q, want a mention of being up to date", stdout.String())
+	}
+}
+
+func TestRunShortcutsSetupRegeneratesOutdated(t *testing.T) {
+	f := &setupFakes{installed: map[string]bool{"Ask AI": true}}
+	installFakes(t, f)
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return shortcutV1ActionCount, nil // outdated: still the marker-less v1 format
+	})
+
+	cfg, err := config.Parse(`[shortcuts]
+names = { "apple-pro" = "Ask AI" }
+install = ["apple-pro"]
+`)
+	if err != nil {
+		t.Fatalf("config.Parse: %v", err)
+	}
+
+	var stdout, stderr strings.Builder
+	if err := runShortcutsSetup(context.Background(), cfg, &stdout, &stderr); err != nil {
+		t.Fatalf("runShortcutsSetup: %v", err)
+	}
+
+	f.mu.Lock()
+	opened := len(f.opened)
+	f.mu.Unlock()
+	if opened != 1 {
+		t.Errorf("open was called %d times, want 1 (regenerate + reopen an outdated shortcut)", opened)
+	}
+	if !strings.Contains(stdout.String(), "outdated") {
+		t.Errorf("stdout = %q, want a mention of being outdated", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Replace") {
+		t.Errorf("stdout = %q, want it to tell the user to click Replace (not Add Shortcut)", stdout.String())
+	}
+	// shortcutActionCountCmd is still faked to return shortcutV1ActionCount,
+	// so waitForShortcutUpdate never sees the new count and should time out
+	// -- this test only cares that regeneration+reopen happened, not that
+	// the (unverified, see MERGE NOTES) Replace click was simulated too.
+	if !strings.Contains(stderr.String(), "timed out") {
+		t.Errorf("stderr = %q, want a timeout message (the fake action count never changes)", stderr.String())
+	}
+}
+
+func TestRunShortcutsSetupAssumesCurrentOnActionCountError(t *testing.T) {
+	f := &setupFakes{installed: map[string]bool{"Ask AI": true}}
+	installFakes(t, f)
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return 0, errors.New("osascript: Shortcuts Events not available")
+	})
+
+	cfg, err := config.Parse(`[shortcuts]
+names = { "apple-pro" = "Ask AI" }
+install = ["apple-pro"]
+`)
+	if err != nil {
+		t.Fatalf("config.Parse: %v", err)
+	}
+
+	var stdout, stderr strings.Builder
+	if err := runShortcutsSetup(context.Background(), cfg, &stdout, &stderr); err != nil {
+		t.Fatalf("runShortcutsSetup: %v", err)
+	}
+
+	f.mu.Lock()
+	opened := len(f.opened)
+	f.mu.Unlock()
+	if opened != 0 {
+		t.Errorf("open was called %d times, want 0 (an action-count error must never trigger a reopen)", opened)
+	}
+	if !strings.Contains(stdout.String(), "assuming current") {
+		t.Errorf("stdout = %q, want a mention of assuming current on a check failure", stdout.String())
+	}
+}
+
+// TestShortcutSetupKeysIncludesAlreadyInstalledVariant covers "Also
+// include in the install list any shelp-named variant that is already
+// installed even if not listed in config, so upgrades cover everything
+// the user has": apple-pro (as "Ask AI") is installed but not in
+// [shortcuts].install, which only names chatgpt.
+func TestShortcutSetupKeysIncludesAlreadyInstalledVariant(t *testing.T) {
+	sc := shortcutsConfig{Names: map[string]string{"apple-pro": "Ask AI"}}
+	wanted := []string{"chatgpt"}
+	installed := map[string]bool{"Ask AI": true}
+
+	got := shortcutSetupKeys(wanted, sc, installed)
+
+	wantContains := map[string]bool{"chatgpt": false, "apple-pro": false}
+	for _, k := range got {
+		if _, ok := wantContains[k]; ok {
+			wantContains[k] = true
+		}
+	}
+	for k, found := range wantContains {
+		if !found {
+			t.Errorf("shortcutSetupKeys(%v) = %v, missing %q", wanted, got, k)
+		}
+	}
+	if got[0] != "chatgpt" {
+		t.Errorf("shortcutSetupKeys(%v) = %v, want configured keys first", wanted, got)
+	}
+}
+
+func TestShortcutSetupKeysNoExtras(t *testing.T) {
+	sc := shortcutsConfig{}
+	wanted := []string{"apple-pro"}
+	installed := map[string]bool{} // nothing else installed
+	got := shortcutSetupKeys(wanted, sc, installed)
+	if len(got) != 1 || got[0] != "apple-pro" {
+		t.Errorf("shortcutSetupKeys(%v) = %v, want just %v unchanged", wanted, got, wanted)
 	}
 }
 

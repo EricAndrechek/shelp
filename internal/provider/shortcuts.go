@@ -471,10 +471,80 @@ func waitForShortcut(ctx context.Context, name string, progress io.Writer) (bool
 	}
 }
 
-// runShortcutsSetup is the "shortcuts" SetupStep: for each variant in the
-// install list not already installed, it generates and signs a shortcut
-// into a temp dir, opens it (the user must click "Add Shortcut"), and
-// polls until it appears.
+// waitForShortcutUpdate polls name's installed action count (via
+// shortcutActionCountCmd) until it equals wantCount, printing one "." per
+// attempt, up to shortcutsPollTimeout. It checks immediately before ever
+// sleeping, like waitForShortcut. Used after re-opening an ALREADY
+// installed, outdated shortcut for the user to click "Replace": unlike
+// waitForShortcut (which waits for a new name to appear in `shortcuts
+// list`), the name is already installed throughout, so presence alone
+// can't distinguish an accepted replace from a declined/unopened import
+// dialog -- only the action count actually changing can.
+func waitForShortcutUpdate(ctx context.Context, name string, wantCount int, progress io.Writer) (bool, error) {
+	deadline := time.Now().Add(shortcutsPollTimeout)
+	for {
+		count, err := shortcutActionCountCmd(ctx, name)
+		if err != nil {
+			return false, err
+		}
+		if count == wantCount {
+			return true, nil
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		fmt.Fprint(progress, ".")
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(shortcutsPollInterval):
+		}
+	}
+}
+
+// shortcutSetupKeys returns the variant keys runShortcutsSetup should
+// process: installList's keys (config/env, in order), plus -- so an
+// upgrade covers everything the user already has, not just what's
+// currently configured -- any other shortcutVariants entry whose resolved
+// name is already installed. Unknown keys from installList are left in
+// place; the caller reports and skips them (as before), since a typo
+// there is a config problem worth surfacing, not silently dropping.
+func shortcutSetupKeys(wanted []string, sc shortcutsConfig, installed map[string]bool) []string {
+	keys := append([]string(nil), wanted...)
+	seen := make(map[string]bool, len(wanted))
+	for _, k := range wanted {
+		seen[k] = true
+	}
+	for _, v := range shortcutVariants {
+		if seen[v.key] {
+			continue
+		}
+		if installed[resolveName(v, sc)] {
+			keys = append(keys, v.key)
+			seen[v.key] = true
+		}
+	}
+	return keys
+}
+
+// runShortcutsSetup is the "shortcuts" SetupStep. For each variant in
+// shortcutSetupKeys, it handles one of three states:
+//
+//   - missing: generate, sign, open (user clicks "Add Shortcut"), poll
+//     `shortcuts list` until the name appears -- as before.
+//   - outdated (installed, but its action count doesn't match the current
+//     generator's -- see shortcutgen.go's currentShortcutActionCount):
+//     regenerate, sign, open (user clicks "Replace" this time -- Shortcuts
+//     offers that button when importing over an existing name; UNVERIFIED
+//     without a human actually doing it, see MERGE NOTES), then poll the
+//     action count (not presence: the name doesn't change) until it
+//     matches the current count, with the same timeout as install.
+//   - current: skip with a message.
+//
+// An action-count check that itself fails (Shortcuts Events unavailable,
+// transient) is never treated as outdated -- same reasoning as Detect's
+// outdatedShortcutNote -- so that variant is skipped with a note instead
+// of being needlessly re-opened.
 func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr io.Writer) error {
 	if runtime.GOOS != "darwin" {
 		fmt.Fprintln(stdout, "shortcuts: darwin only, nothing to do here")
@@ -503,41 +573,70 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	}
 	defer os.RemoveAll(tmpDir)
 
-	for _, key := range wanted {
+	current := currentShortcutActionCount()
+	for _, key := range shortcutSetupKeys(wanted, sc, installed) {
 		v, ok := variantByKey(key)
 		if !ok {
 			fmt.Fprintf(stderr, "shortcuts: unknown variant %q in install list, skipping\n", key)
 			continue
 		}
 		name := resolveName(v, sc)
-		if installed[name] {
-			fmt.Fprintf(stdout, "shortcuts: %s: %q already installed, skipping\n", v.id, name)
+
+		if !installed[name] {
+			fmt.Fprintf(stdout, "shortcuts: %s: generating %q...\n", v.id, name)
+			path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
+			if err != nil {
+				return fmt.Errorf("%s: generate: %w", v.id, err)
+			}
+			fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click \"Add Shortcut\" to install %q\n", v.id, name)
+			if err := openCmd(ctx, path); err != nil {
+				return fmt.Errorf("%s: open: %w", v.id, err)
+			}
+			fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to add it (up to %s) ", v.id, shortcutsPollTimeout)
+			added, err := waitForShortcut(ctx, name, stdout)
+			fmt.Fprintln(stdout)
+			if err != nil {
+				return fmt.Errorf("%s: %w", v.id, err)
+			}
+			if !added {
+				fmt.Fprintf(stderr, "shortcuts: %s: timed out waiting for %q; run `shelp setup shortcuts` again once it's added\n", v.id, name)
+				continue
+			}
+			fmt.Fprintf(stdout, "shortcuts: %s: %q installed\n", v.id, name)
+			installed[name] = true
 			continue
 		}
 
-		fmt.Fprintf(stdout, "shortcuts: %s: generating %q...\n", v.id, name)
+		count, cerr := shortcutActionCountCmd(ctx, name)
+		if cerr != nil {
+			fmt.Fprintf(stdout, "shortcuts: %s: %q installed, couldn't check its version (%v); assuming current\n", v.id, name, cerr)
+			continue
+		}
+		if count == current {
+			fmt.Fprintf(stdout, "shortcuts: %s: %q already up to date (v%d), skipping\n", v.id, name, ShortcutFormatVersion)
+			continue
+		}
+
+		fmt.Fprintf(stdout, "shortcuts: %s: %q is outdated (%d actions, current v%d expects %d); regenerating...\n", v.id, name, count, ShortcutFormatVersion, current)
 		path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
 		if err != nil {
 			return fmt.Errorf("%s: generate: %w", v.id, err)
 		}
-
-		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click \"Add Shortcut\" to install %q\n", v.id, name)
+		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click \"Replace\" to update %q\n", v.id, name)
 		if err := openCmd(ctx, path); err != nil {
 			return fmt.Errorf("%s: open: %w", v.id, err)
 		}
-
-		fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to add it (up to %s) ", v.id, shortcutsPollTimeout)
-		ok, err = waitForShortcut(ctx, name, stdout)
+		fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to replace it (up to %s) ", v.id, shortcutsPollTimeout)
+		updated, err := waitForShortcutUpdate(ctx, name, current, stdout)
 		fmt.Fprintln(stdout)
 		if err != nil {
 			return fmt.Errorf("%s: %w", v.id, err)
 		}
-		if !ok {
-			fmt.Fprintf(stderr, "shortcuts: %s: timed out waiting for %q; run `shelp setup shortcuts` again once it's added\n", v.id, name)
+		if !updated {
+			fmt.Fprintf(stderr, "shortcuts: %s: timed out waiting for %q to update; run `shelp setup shortcuts` again once it's replaced\n", v.id, name)
 			continue
 		}
-		fmt.Fprintf(stdout, "shortcuts: %s: %q installed\n", v.id, name)
-		installed[name] = true
+		fmt.Fprintf(stdout, "shortcuts: %s: %q updated to v%d\n", v.id, name, ShortcutFormatVersion)
 	}
 
 	fmt.Fprintln(stdout, "shortcuts: status:")

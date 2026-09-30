@@ -332,6 +332,12 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 		reason := p.Description()
 		if !sts[i].Available {
 			st, reason = "unavailable", sts[i].Reason
+		} else if sts[i].Reason != "" {
+			// Available but Detect still has something to say (e.g.
+			// shortcuts.go's outdated-shortcut note): show it alongside the
+			// description rather than dropping it, since an "ok" row
+			// otherwise only ever prints Description.
+			reason = fmt.Sprintf("%s -- %s", p.Description(), sts[i].Reason)
 		}
 		rows[i] = row{
 			ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
