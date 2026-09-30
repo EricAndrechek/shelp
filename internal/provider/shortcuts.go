@@ -207,6 +207,14 @@ func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, 
 		}
 		return "", err
 	}
+	// A rate-limited "Use Model" run typically still exits 0: the shortcut
+	// itself "succeeds" and its output IS the error text (observed
+	// verbatim: "Error: You have reached the usage limit for this model.
+	// Please try again later."), not a non-zero exit -- so this check runs
+	// unconditionally, before and independent of ExitCode.
+	if reason, ok := shortcutsRateLimitReason(res.Stdout, res.Stderr); ok {
+		return "", RateLimited(p.ID(), 0, "%s", reason)
+	}
 	if res.ExitCode != 0 {
 		msg := FirstLine(res.Stderr)
 		if msg == "" {
@@ -221,6 +229,46 @@ func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, 
 		return "", Unavailable(p.ID(), "%s", msg)
 	}
 	return strings.TrimSpace(res.Stdout), nil
+}
+
+// shortcutsRateLimitPhrases are lowercase substrings that, found in a
+// completed "shortcuts run" call's stdout or stderr, mean Apple's model
+// backend rejected the call for being over its usage limit. Observed live
+// on Apple Intelligence Pro during a shelp-bench run: ~93 calls in ~2.5
+// minutes, then every further call replied
+// "Error: You have reached the usage limit for this model. Please try
+// again later." (reset window unknown). Every failed Shortcuts run also
+// posts a macOS notification, which is the whole reason this matters:
+// once this phrase is seen, provider.Chain and the bench breaker both
+// stop calling the shortcut instead of retrying it (and renotifying) on
+// every subsequent trial/call. Matching is case-insensitive.
+var shortcutsRateLimitPhrases = []string{"usage limit", "try again later"}
+
+// shortcutsRateLimitReason reports whether stdout/stderr contain a known
+// rate-limit phrase (see shortcutsRateLimitPhrases) and, if so, a short
+// human-readable reason for it: the first non-empty line of whichever
+// stream matched, falling back to a generic "usage limit" if somehow both
+// are blank.
+func shortcutsRateLimitReason(stdout, stderr string) (string, bool) {
+	low := strings.ToLower(stdout + "\n" + stderr)
+	matched := false
+	for _, phrase := range shortcutsRateLimitPhrases {
+		if strings.Contains(low, phrase) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return "", false
+	}
+	reason := FirstLine(stdout)
+	if reason == "" {
+		reason = FirstLine(stderr)
+	}
+	if reason == "" {
+		reason = "usage limit"
+	}
+	return reason, true
 }
 
 // --- `shortcuts list` cache --------------------------------------------

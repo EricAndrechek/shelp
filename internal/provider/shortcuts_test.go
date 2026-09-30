@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -137,6 +138,75 @@ func TestVerifyBackendArgsNeverUsesBareLog(t *testing.T) {
 	}
 	if args[1] != "show" {
 		t.Errorf("VerifyBackendArgs[1] = %q, want show", args[1])
+	}
+}
+
+// --- Rate-limit classification (pure function, no `shortcuts` calls) ---
+
+func TestShortcutsRateLimitReason(t *testing.T) {
+	cases := []struct {
+		name           string
+		stdout, stderr string
+		wantOK         bool
+		wantReason     string
+	}{
+		{
+			"usage limit in stdout (observed verbatim on Apple Intelligence Pro)",
+			"Error: You have reached the usage limit for this model. Please try again later.", "",
+			true, "Error: You have reached the usage limit for this model. Please try again later.",
+		},
+		{"case insensitive", "USAGE LIMIT reached", "", true, "USAGE LIMIT reached"},
+		{"try again later alone", "please try again later", "", true, "please try again later"},
+		{"in stderr instead of stdout", "", "usage limit exceeded", true, "usage limit exceeded"},
+		{"not a rate limit", "find ~ -type f -size +100M", "", false, ""},
+		{"empty", "", "", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reason, ok := shortcutsRateLimitReason(c.stdout, c.stderr)
+			if ok != c.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if ok && reason != c.wantReason {
+				t.Errorf("reason = %q, want %q", reason, c.wantReason)
+			}
+		})
+	}
+}
+
+// TestShortcutsProviderGenerateRateLimitedEvenOnExitZero exercises the
+// whole Generate rate-limit path (not just the pure helper above) via
+// RunCmd's real `sh -c`-less exec of a fake "shortcuts" binary: a
+// rate-limited "Use Model" run typically still exits 0 with the error text
+// AS its output, so this must be classified as *RateLimitedError before
+// any exit-code handling ever runs.
+func TestShortcutsProviderGenerateRateLimitedEvenOnExitZero(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "shortcuts")
+	script := "#!/bin/sh\nprintf '%s' 'Error: You have reached the usage limit for this model. Please try again later.'\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := &shortcutsProvider{
+		variant: shortcutVariant{id: "shortcuts:apple-pro", model: "Apple Intelligence Pro"},
+		name:    "shelp · Apple Intelligence Pro",
+	}
+	_, err := p.Generate(context.Background(), Request{Prompt: "hi"})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var rle *RateLimitedError
+	if !errors.As(err, &rle) {
+		t.Fatalf("error = %v (%T), want *RateLimitedError", err, err)
+	}
+	if !strings.Contains(rle.Reason, "usage limit") {
+		t.Errorf("Reason = %q, want it to mention usage limit", rle.Reason)
+	}
+	var ue *UnavailableError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error = %v, want also *UnavailableError via errors.As", err)
 	}
 }
 
