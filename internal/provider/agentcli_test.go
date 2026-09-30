@@ -895,8 +895,6 @@ func TestGenerate_ErrorMapping(t *testing.T) {
 		{"codex generic error", codexSpec, "", "some codex failure", "codex exited"},
 		{"copilot model unavailable", copilotSpec, "gpt-5.4", "Error: Model \"gpt-5.4\" from --model flag is not available.", "not available"},
 		{"antigravity not logged in", antigravitySpec, "gemini-3.8-flash-low", "Print mode: not logged in and no controlling terminal; cannot complete interactive login", "not logged in"},
-		{"antigravity overloaded", antigravitySpec, "gemini-3.8-flash-low", "The model API is currently overloaded and may experience intermittent errors.", "overloaded"},
-		{"antigravity high traffic", antigravitySpec, "gemini-3.8-flash-low", "Our servers are experiencing high traffic right now, please try again in a minute.", "overloaded"},
 		{"antigravity invalid model", antigravitySpec, "totally-bogus-model-xyz", "error: invalid model selection (--model \"totally-bogus-model-xyz\" --effort \"\"): model totally-bogus-model-xyz is not recognized as a known model or custom model in settings", "agy exited"},
 		{"antigravity generic error", antigravitySpec, "gemini-3.8-flash-low", "boom", "boom"},
 	}
@@ -942,6 +940,8 @@ func TestGenerate_RateLimitMapping(t *testing.T) {
 		{"gemini 429", geminiSpec, "", "Error: got status 429 Too Many Requests"},
 		{"codex usage limit", codexSpec, "", "usage limit reached for this account"},
 		{"copilot rate limit", copilotSpec, "gpt-5.4", "Error: You have hit the rate limit. Please wait and try again."},
+		{"antigravity overloaded", antigravitySpec, "gemini-3.8-flash-low", "The model API is currently overloaded and may experience intermittent errors."},
+		{"antigravity high traffic", antigravitySpec, "gemini-3.8-flash-low", "Our servers are experiencing high traffic right now, please try again in a minute."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

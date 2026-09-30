@@ -870,8 +870,10 @@ func antigravityParse(id string, res CmdResult, outFile string) (string, error) 
 			// errors.", "Our servers are experiencing high traffic right
 			// now, please try again in a minute.") rather than observed
 			// live, to avoid deliberately exhausting this free-tier
-			// account's daily quota.
-			return "", Unavailable(id, "antigravity rate limited or overloaded: %s", msg)
+			// account's daily quota. RateLimited (not Unavailable), like
+			// every other agentcli parse func's rate-limit case, so the
+			// cooldown breaker applies here too.
+			return "", RateLimited(id, 0, "antigravity rate limited or overloaded: %s", msg)
 		default:
 			return "", Unavailable(id, "agy exited %d: %s", res.ExitCode, msg)
 		}
