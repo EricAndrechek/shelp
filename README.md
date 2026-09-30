@@ -61,9 +61,7 @@ config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
 | `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI | `shelp setup shortcuts` generates and opens each `.shortcut`; click "Add Shortcut" once per shortcut (no import API exists) |
 | `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
 | `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
-
-`claude:*`/`gemini:*`/`codex:*`/`copilot:*` (headless AI CLIs) are planned
-but not merged into this repo yet.
+| `claude:haiku`, `claude:sonnet`, `gemini:default`, `codex:default`, `copilot:default` | agent-cli | the CLI installed and logged in (`claude`, `gemini`, `codex`, `copilot`) | log in with each CLI's own command (`claude /login`, `gemini` once interactively, `codex login`, `copilot login`) |
 
 `shelp providers` probes every registered provider and prints which are
 `ok` vs `unavailable` (and why) on this machine right now.
@@ -114,6 +112,17 @@ base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
 [shortcuts]
 names = { "apple-pro" = "Ask AI" }   # reuse an already-installed shortcut
 install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` creates
+
+# Headless AI CLIs: one optional sub-table per CLI. `models` overrides that
+# CLI's built-in variant ids/flag values (a name matching a built-in id
+# like "haiku" reuses its flag value; anything else is passed through
+# verbatim as both the id and the -m/--model value). `disabled` drops a
+# CLI's providers even when it's installed.
+[agentcli.claude]
+models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
+
+[agentcli.copilot]
+disabled = true   # e.g. to keep it out of the default fallback chain
 ```
 
 ## Benchmark
@@ -142,9 +151,10 @@ By default shelp tells the model only your OS and shell (`context =
 (`--context os,shell,cwd,tools`, or the config's `context` list) because
 they leave the machine once a cloud provider is in the chain. Apple's
 on-device `fm` never sends anything off your Mac. Any cloud provider —
-Shortcuts' Apple Intelligence Pro / ChatGPT, or an `[[openai.endpoint]]` —
-receives your full prompt: the task or command you gave it, plus whatever
-context fields are enabled.
+Shortcuts' Apple Intelligence Pro / ChatGPT, an `[[openai.endpoint]]`, or
+one of the agent CLIs (`claude`, `gemini`, `codex`, `copilot`, each
+talking to its own cloud account) — receives your full prompt: the task
+or command you gave it, plus whatever context fields are enabled.
 
 ## Caveats
 
@@ -155,3 +165,8 @@ context fields are enabled.
   click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
   and signs the shortcut and opens it for you, but can't click through
   the import dialog itself — there's no API for that.
+- The `claude`/`gemini`/`codex`/`copilot` agent-cli providers spend your
+  subscription's usage quota on every call, same as using that CLI
+  directly, and are noticeably slower than the other backends: about 2-6s
+  per call (they're full coding agents starting up in headless mode, not
+  a lightweight API request).
