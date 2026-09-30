@@ -33,11 +33,7 @@ func Command(s string) string {
 		lines = lines[:len(lines)-1]
 	}
 	if len(lines) == 1 {
-		l := strings.TrimSpace(lines[0])
-		if m := wrapTicks.FindStringSubmatch(l); m != nil {
-			l = m[1]
-		}
-		l = labelLine.ReplaceAllString(l, "")
+		l := labelLine.ReplaceAllString(strings.TrimSpace(lines[0]), "")
 		if m := wrapTicks.FindStringSubmatch(l); m != nil {
 			l = m[1]
 		}
