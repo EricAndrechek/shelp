@@ -273,6 +273,12 @@ func TestGenerate_Claude_ArgvAndCwd(t *testing.T) {
 	if !contains(r.args, "-p") {
 		t.Error("missing -p (print/non-interactive)")
 	}
+	if v, ok := argAfter(r.args, "--output-format"); !ok || v != "json" {
+		t.Errorf("suggest --output-format = %q, %v; want json", v, ok)
+	}
+	if v, ok := argAfter(r.args, "--json-schema"); !ok || v != claudeCommandSchema {
+		t.Errorf("suggest --json-schema = %q, %v; want the command schema", v, ok)
+	}
 	if v, ok := argAfter(r.args, "--tools"); !ok || v != "" {
 		t.Errorf("--tools = %q, %v; want empty string (no tools)", v, ok)
 	}
@@ -392,8 +398,11 @@ func TestGenerate_Claude_Streams(t *testing.T) {
 	fakePATH(t)
 	t.Setenv("SHELP_FAKE_STDOUT", "the reply")
 
+	// Only explain mode streams (plain text); suggest mode returns a JSON
+	// envelope that must be parsed whole.
 	var chunks []string
 	req := agentTestReq()
+	req.Mode = Explain
 	req.OnChunk = func(s string) { chunks = append(chunks, s) }
 
 	p := newProvider(claudeSpec, "haiku")
@@ -612,5 +621,35 @@ func TestUnavailableMsg_PrefersErrorLine(t *testing.T) {
 	}
 	if m := unavailableMsg(CmdResult{Stderr: "plain failure\nmore"}); m != "plain failure" {
 		t.Fatalf("fallback = %q", m)
+	}
+}
+
+func TestClaudeParse_StructuredAndText(t *testing.T) {
+	ok := CmdResult{Stdout: `{"type":"result","is_error":false,"result":"{\"command\":\"ls -la\"}","structured_output":{"command":"ls -la"},"num_turns":2}`}
+	if got, err := claudeParse("claude:haiku", ok); err != nil || got != "ls -la" {
+		t.Fatalf("structured: got %q, %v", got, err)
+	}
+	limited := CmdResult{Stdout: `{"type":"result","is_error":true,"result":"Claude AI usage limit reached"}`}
+	var rl *RateLimitedError
+	if _, err := claudeParse("claude:haiku", limited); !errors.As(err, &rl) {
+		t.Fatalf("is_error usage limit: err = %v, want RateLimited", err)
+	}
+	empty := CmdResult{Stdout: `{"type":"result","is_error":false,"result":""}`}
+	if _, err := claudeParse("claude:haiku", empty); err == nil {
+		t.Fatal("missing structured_output should be an error")
+	}
+	text := CmdResult{Stdout: "This command lists files.\n"}
+	if got, err := claudeParse("claude:haiku", text); err != nil || got != text.Stdout {
+		t.Fatalf("explain text: got %q, %v", got, err)
+	}
+}
+
+func TestClaudeArgs_ExplainIsPlainText(t *testing.T) {
+	args := claudeArgs("/tmp/x", "haiku", Request{Mode: Explain, System: "s", Prompt: "p"})
+	if v, ok := argAfter(args, "--output-format"); !ok || v != "text" {
+		t.Fatalf("explain --output-format = %q, %v; want text", v, ok)
+	}
+	if contains(args, "--json-schema") {
+		t.Fatal("explain must not use --json-schema")
 	}
 }

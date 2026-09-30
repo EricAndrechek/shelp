@@ -237,7 +237,12 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 	runCtx, cancel := context.WithTimeout(ctx, generateTimeout)
 	defer cancel()
 
-	onChunk := req.OnChunk // both remaining CLIs' stdout is exactly the reply
+	// Explain mode's text output is exactly the reply, so it can stream;
+	// suggest mode's JSON envelope can't.
+	onChunk := req.OnChunk
+	if req.Mode == Suggest {
+		onChunk = nil
+	}
 
 	var env []string
 	if len(p.spec.extraEnv) > 0 {
@@ -347,13 +352,25 @@ func claudeIdentify(ctx context.Context) Status {
 	return Status{Available: true, Version: line}
 }
 
+// claudeCommandSchema is the structured-output schema for suggest mode.
+// Without it, haiku with thinking off occasionally wraps the command in
+// prose ("Wait, that won't preserve order. Let me correct: ...") in ~5% of
+// benchmark answers (2026-09-30); with it the reply is always a JSON object
+// whose only field is the command. Explain mode stays plain text: prose is
+// the answer there.
+const claudeCommandSchema = `{"type":"object","properties":{"command":{"type":"string","description":"the shell command only, no prose"}},"required":["command"],"additionalProperties":false}`
+
 func claudeArgs(dir, model string, req Request) []string {
 	args := []string{"-p"}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
+	if req.Mode == Suggest {
+		args = append(args, "--output-format", "json", "--json-schema", claudeCommandSchema)
+	} else {
+		args = append(args, "--output-format", "text")
+	}
 	args = append(args,
-		"--output-format", "text",
 		"--setting-sources", "",
 		"--strict-mcp-config",
 		"--tools", "",
@@ -380,6 +397,28 @@ func claudeParse(id string, res CmdResult) (string, error) {
 	}
 	if strings.TrimSpace(res.Stdout) == "" {
 		return "", Unavailable(id, "claude returned no output")
+	}
+	// Suggest mode asks for --output-format json with a schema: unwrap the
+	// result envelope. Explain mode's plain text never parses as one.
+	var env struct {
+		Type             string `json:"type"`
+		IsError          bool   `json:"is_error"`
+		Result           string `json:"result"`
+		StructuredOutput *struct {
+			Command string `json:"command"`
+		} `json:"structured_output"`
+	}
+	if json.Unmarshal([]byte(res.Stdout), &env) == nil && env.Type == "result" {
+		if env.IsError {
+			if reason, ok := agentRateLimitReason(env.Result); ok {
+				return "", RateLimited(id, 0, "%s", reason)
+			}
+			return "", Unavailable(id, "claude: %s", FirstLine(env.Result))
+		}
+		if env.StructuredOutput == nil || strings.TrimSpace(env.StructuredOutput.Command) == "" {
+			return "", Unavailable(id, "claude returned no structured command")
+		}
+		return env.StructuredOutput.Command, nil
 	}
 	return res.Stdout, nil
 }
