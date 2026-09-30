@@ -106,7 +106,7 @@ os = ["macos"]
 difficulty = "easy"
 tags = ["grep"]
 rubric = '''
-Must list filenames only. Correct: grep -rl 'TODO' src (or grep -rl TODO src/, rg -l TODO src).
+Must list filenames only. Correct: grep -rl 'TODO' src (or grep -rl TODO src/). rg -l TODO src works but rg isn't on stock macOS = 1 (like wget/watch) unless the tools context lists it.
 Minor (1): printing matching lines instead of names (grep -rn).
 Wrong: missing -r; searching . instead of src.
 '''
@@ -120,10 +120,9 @@ os = ["macos"]
 difficulty = "hard"
 tags = ["loop", "rename"]
 rubric = '''
-macOS APFS is case-insensitive by default, so mv File file can fail or be a no-op; a two-step mv via a temp name is fully correct (2).
-A simple loop is acceptable (1) if otherwise right: for f in *; do mv -- "$f" "$(echo "$f" | tr '[:upper:]' '[:lower:]')"; done.
-zsh-specific: zmv/autoload or ${f:l} is fine for zsh.
-Wrong: `rename` (not on macOS by default), unquoted "$f" breaking on spaces is 1 at best, recursing into subdirectories unasked is minor.
+A loop that lowercases each regular file's name, with names quoted, is correct (2): e.g. for f in *; do mv -- "$f" "$(echo "$f" | tr '[:upper:]' '[:lower:]')"; done, or zsh ${f:l}. Case-only renames work on APFS (verified 2026-09-30).
+zsh-specific: zmv with autoload, or ${f:l} / ${(L)f}, is fine for zsh; ${(l)f} is a flag error (0).
+Wrong: `rename` (not on macOS by default); unquoted "$f" breaking on spaces is 1 at best; recursing into subdirectories unasked is minor.
 '''
 
 [[case]]
