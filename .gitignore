@@ -3,3 +3,4 @@
 *.test
 # benchmark raw runs are large and machine-specific; grades + summaries are tracked
 /bench/runs/
+/.worktrees/
