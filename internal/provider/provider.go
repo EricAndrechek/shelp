@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
+	"github.com/ericandrechek/shelp/internal/cooldown"
 )
 
 // Mode is what the model is asked to do.
@@ -72,7 +73,10 @@ type Provider interface {
 	Detect(ctx context.Context) Status
 	// Generate returns the model's raw text. Return an *UnavailableError
 	// when the backend is missing or refused before generating, so callers
-	// can fall through to the next provider.
+	// can fall through to the next provider. Return a *RateLimitedError
+	// (via RateLimited) specifically when the backend says it's
+	// rate-limited or out of quota, so Chain can remember to skip it for a
+	// while instead of calling it again on the very next invocation.
 	Generate(ctx context.Context, req Request) (string, error)
 }
 
@@ -94,6 +98,57 @@ func (e *UnavailableError) Error() string { return e.ID + ": " + e.Reason }
 // Unavailable is a convenience constructor for *UnavailableError.
 func Unavailable(id, format string, args ...any) error {
 	return &UnavailableError{ID: id, Reason: fmt.Sprintf(format, args...)}
+}
+
+// RateLimitedError means a provider is currently rate-limited or out of
+// quota: a usage-limit message from Apple Shortcuts, an HTTP 429 from an
+// OpenAI-compatible endpoint, or a quota error from an agent CLI. It
+// satisfies errors.As(err, &*UnavailableError) via Unwrap, so every
+// existing "is this provider unavailable" check (provider.Chain,
+// internal/bench) treats a rate limit as unavailable without any changes
+// on their part; provider.Chain additionally recognizes *RateLimitedError
+// specifically (via errors.As) to put the provider into cooldown (see
+// internal/cooldown) so a fallback chain -- or a benchmark run -- doesn't
+// keep hammering (and, for Apple Shortcuts, keep triggering a macOS
+// notification from) a backend that just said no.
+type RateLimitedError struct {
+	ID     string
+	Reason string
+	// RetryAfter is how long the backend says to wait before trying again,
+	// when it told us (e.g. an HTTP Retry-After header). Zero means "not
+	// specified": callers fall back to their own default
+	// (cooldown.DefaultDuration, or shelp's `cooldown` config key).
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string { return e.ID + ": rate limited: " + e.Reason }
+
+// Unwrap lets errors.As(err, &*UnavailableError) find a RateLimitedError
+// too: a rate limit is a form of unavailability.
+func (e *RateLimitedError) Unwrap() error { return &UnavailableError{ID: e.ID, Reason: e.Reason} }
+
+// RateLimited is a convenience constructor for *RateLimitedError.
+func RateLimited(id string, retryAfter time.Duration, format string, args ...any) error {
+	return &RateLimitedError{ID: id, Reason: fmt.Sprintf(format, args...), RetryAfter: retryAfter}
+}
+
+// CooldownSkippedError means Chain declined to even call a provider
+// because a previous RateLimitedError put it in cooldown (see
+// internal/cooldown); Generate was never invoked. Pass force=true to
+// Chain to bypass this for one call. It satisfies
+// errors.As(err, &*UnavailableError) via Unwrap, like RateLimitedError.
+type CooldownSkippedError struct {
+	ID     string
+	Until  time.Time
+	Reason string
+}
+
+func (e *CooldownSkippedError) Error() string {
+	return fmt.Sprintf("%s rate-limited until %s (%s); skipping", e.ID, e.Until.Local().Format("15:04"), e.Reason)
+}
+
+func (e *CooldownSkippedError) Unwrap() error {
+	return &UnavailableError{ID: e.ID, Reason: fmt.Sprintf("in cooldown until %s (%s)", e.Until.Local().Format("15:04"), e.Reason)}
 }
 
 var (
@@ -187,11 +242,37 @@ func Call(ctx context.Context, p Provider, req Request) (Result, error) {
 	return Result{Text: text, ProviderID: p.ID(), Latency: lat, FirstChunk: first}, err
 }
 
-// Chain tries each provider ID in order and returns the first success.
-// onFallback, if non-nil, is told about each failure before moving on.
-func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, onFallback func(id string, err error)) (Result, error) {
+// Chain tries each provider ID in order and returns the first success. A
+// provider currently in cooldown (see internal/cooldown -- it hit a rate
+// limit recently) is skipped without being called at all, unless force is
+// true. onFallback, if non-nil, is told about each skip/failure before
+// moving on.
+//
+// A *RateLimitedError from a live call additionally puts that provider
+// into cooldown for next time: until = now + the error's RetryAfter when
+// it specified one, else now + cfg's top-level `cooldown` key (default
+// cooldown.DefaultDuration). A successful call never clears a cooldown --
+// cooldowns just expire on their own.
+func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, force bool, onFallback func(id string, err error)) (Result, error) {
 	var errs []error
+	cds := cooldown.Load()
+	cdDur := cooldown.DefaultDuration
+	if cfg != nil && cfg.Cooldown != "" {
+		if d, perr := time.ParseDuration(cfg.Cooldown); perr == nil && d > 0 {
+			cdDur = d
+		}
+	}
 	for _, id := range ids {
+		if !force {
+			if e, ok := cooldown.Active(cds, id); ok {
+				err := &CooldownSkippedError{ID: id, Until: e.Until, Reason: e.Reason}
+				errs = append(errs, err)
+				if onFallback != nil {
+					onFallback(id, err)
+				}
+				continue
+			}
+		}
 		p, err := Get(cfg, id)
 		if err == nil {
 			var res Result
@@ -201,6 +282,14 @@ func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, o
 			}
 			if err == nil {
 				err = Unavailable(id, "empty response")
+			}
+			var rle *RateLimitedError
+			if errors.As(err, &rle) {
+				until := time.Now().Add(cdDur)
+				if rle.RetryAfter > 0 {
+					until = time.Now().Add(rle.RetryAfter)
+				}
+				_ = cooldown.Set(id, until, rle.Reason) // best-effort; a write failure never blocks the chain
 			}
 		}
 		errs = append(errs, err)

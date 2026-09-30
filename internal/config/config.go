@@ -26,6 +26,11 @@ type Config struct {
 	// Context lists what to tell the model about the environment:
 	// "os", "shell", "cwd", "tools". Empty means prompt.DefaultContext.
 	Context []string `toml:"context"`
+	// Cooldown is how long a rate-limited provider is skipped for after
+	// hitting a usage limit, e.g. "30m" (see internal/cooldown and
+	// provider.Chain). Empty, or not a valid duration, means
+	// cooldown.DefaultDuration.
+	Cooldown string `toml:"cooldown"`
 
 	meta     toml.MetaData
 	sections map[string]toml.Primitive
@@ -76,6 +81,8 @@ func Parse(data string) (*Config, error) {
 			err = meta.PrimitiveDecode(v, &c.Template)
 		case "context":
 			err = meta.PrimitiveDecode(v, &c.Context)
+		case "cooldown":
+			err = meta.PrimitiveDecode(v, &c.Cooldown)
 		default:
 			c.sections[k] = v
 		}
