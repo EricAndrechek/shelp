@@ -1,20 +1,157 @@
 # shelp
 
-Turn a task into a shell command, or explain one, with whatever model you
-already have.
+shelp turns a task into a shell command, or explains one, using whatever
+model you already have on your machine: Apple's on-device model (`fm`),
+Apple's cloud models via Shortcuts (Apple Intelligence Pro, ChatGPT),
+OpenAI-compatible endpoints (hosted with an API key, or local servers like
+LM Studio, Ollama, or `llama-server`), or installed AI CLIs. It tries
+providers in order and falls back automatically, so it keeps working when
+one backend is offline, unlicensed, or rate-limited. It's the successor to
+the `ghcs`/`ghce` shell functions some of us grew up with.
 
 ```console
 $ shelp find all files over 100MB in my home dir
-$ find ~ -type f -size +100M          # lands on your prompt line, ready to edit
+find ~ -type f -size +100M
+
 $ shelp explain 'lsof -nP -iTCP:8080 -sTCP:LISTEN'
+Lists processes with a listening TCP socket on port 8080; -n and -P skip
+DNS and service-name lookups for speed.
 ```
 
-Status: early, local-only. Benchmark results will live here.
+Status: early, local-only (no remote for this repo yet).
 
-## Install (for now)
+## Install
 
 ```sh
-make install                     # -> ~/.local/bin/shelp
-eval "$(shelp init zsh)"         # in ~/.zshrc (bash: init bash; fish: shelp init fish | source)
-shelp providers                  # what works on this machine
+make install                 # -> ~/.local/bin/shelp
+eval "$(shelp init zsh)"     # add to ~/.zshrc
+eval "$(shelp init bash)"    # add to ~/.bashrc, or:
+shelp init fish | source     # add to ~/.config/fish/config.fish
+
+# optional: keep the old ghcs/ghce muscle memory
+alias ghcs=shelp
+alias ghce='shelp explain'
 ```
+
+The shell integration wraps `shelp` in a function (zsh/bash/fish, in the
+style of zoxide/starship) so a suggested command lands on your prompt line
+ready to edit or run — shelp never executes anything itself.
+
+## Usage
+
+```console
+$ shelp find all files over 100MB in my home dir       # suggest (default)
+$ shelp explain 'tar -xzvf a.tgz'                       # explain (alias: -e)
+$ shelp -p fm,shortcuts:apple-pro list 5 recent commits # explicit fallback chain
+$ shelp --template v2 -v print yesterday as YYYY-MM-DD  # -v: provider+latency on stderr
+$ shelp providers                                       # what works on this machine
+$ shelp providers --json                                # same, machine-readable
+$ shelp setup shortcuts                                 # install the Apple Shortcuts this needs
+```
+
+Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
+config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
+`--json`, `-v`/`--verbose`. Run `shelp -h` for the full usage.
+
+## Providers
+
+| ID pattern | kind | needs | setup |
+|---|---|---|---|
+| `fm` | on-device | macOS 27+, Apple Intelligence enabled | `sudo fm license` (once, machine-wide) |
+| `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI | `shelp setup shortcuts` generates and opens each `.shortcut`; click "Add Shortcut" once per shortcut (no import API exists) |
+| `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
+| `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
+
+`claude:*`/`gemini:*`/`codex:*`/`copilot:*` (headless AI CLIs) are planned
+but not merged into this repo yet.
+
+`shelp providers` probes every registered provider and prints which are
+`ok` vs `unavailable` (and why) on this machine right now.
+
+## Configuration
+
+`~/.config/shelp/config.toml` (or `$SHELP_CONFIG`, or
+`$XDG_CONFIG_HOME/shelp/config.toml`). Every key and table is optional;
+each provider family decodes only its own table, so unrelated tables are
+ignored.
+
+```toml
+# Fallback chain shelp tries in order; first success wins. Overridden by
+# -p/--provider and $SHELP_PROVIDER. Default: ["shortcuts:apple-pro", "fm"]
+providers = ["shortcuts:apple-pro", "openrouter:anthropic/claude-3.5-haiku", "fm"]
+
+# Prompt template: "v1" (default), "v2" (rules), "v3" (few-shot). See
+# internal/prompt/templates.go and bench/README.md for how they compare.
+template = "v1"
+
+# What to tell the model about your environment. cwd/tools are opt-in --
+# they leave the machine once a cloud provider is in the chain. Default:
+# ["os", "shell"].
+context = ["os", "shell"]
+
+# Hosted, key-authenticated OpenAI-compatible endpoints. `preset` fills in
+# base_url + api_key_env for a well-known host; set them yourself for
+# anything else (e.g. a self-hosted gateway).
+[[openai.endpoint]]
+name = "openrouter"
+preset = "openrouter"   # openai | openrouter | groq | gemini | anthropic |
+                         # xai | mistral | deepseek | cerebras
+models = ["anthropic/claude-3.5-haiku", "meta-llama/llama-3.1-70b-instruct"]
+
+[[openai.endpoint]]
+name = "work-llm"
+base_url = "https://llm.internal.example.com/v1"
+api_key_env = "WORK_LLM_API_KEY"
+models = ["gpt-4o-mini"]
+temperature = 0.2
+
+# Local OpenAI-compatible servers, in addition to the built-in ones
+# (lmstudio :1234, ollama :11434, llamacpp :8080).
+[[openai.local]]
+name = "fm-serve"
+base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
+
+[shortcuts]
+names = { "apple-pro" = "Ask AI" }   # reuse an already-installed shortcut
+install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` creates
+```
+
+## Benchmark
+
+shelp ships a benchmark harness, `shelp-bench` (see
+[bench/README.md](bench/README.md) for the full command reference, case
+format, and scoring rules), that runs every case in `bench/cases/*.toml`
+against whichever providers and prompt templates you choose, applies
+automatic checks (syntax, dangerous commands, GNU-isms on macOS, ...), and
+produces a graded markdown report.
+
+```sh
+make bench-build
+./bin/shelp-bench run --providers available
+./bin/shelp-bench report --readme README.md
+```
+
+<!-- bench:start -->
+_Results pending._
+<!-- bench:end -->
+
+## Privacy
+
+By default shelp tells the model only your OS and shell (`context =
+["os", "shell"]`); the `cwd` and `tools` context fields are opt-in
+(`--context os,shell,cwd,tools`, or the config's `context` list) because
+they leave the machine once a cloud provider is in the chain. Apple's
+on-device `fm` never sends anything off your Mac. Any cloud provider —
+Shortcuts' Apple Intelligence Pro / ChatGPT, or an `[[openai.endpoint]]` —
+receives your full prompt: the task or command you gave it, plus whatever
+context fields are enabled.
+
+## Caveats
+
+- Apple's `fm` license forbids "programmatic access... except as expressly
+  permitted," and Apple hasn't clarified whether third-party tools like
+  shelp fall under that permission. Use at your own risk.
+- Each `shortcuts:*` provider needs its `.shortcut` imported by hand: one
+  click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
+  and signs the shortcut and opens it for you, but can't click through
+  the import dialog itself — there's no API for that.
