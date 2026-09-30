@@ -238,7 +238,15 @@ func (p *agentcliProvider) Description() string {
 	if m == "" {
 		m = "default"
 	}
-	return p.spec.label + " CLI, model " + m + " (headless, no tools)"
+	// Most labels ("Claude Code") don't end in "CLI" and need it appended;
+	// a few ("Gemini CLI", "Codex CLI", "GitHub Copilot CLI") already do,
+	// and appending unconditionally used to read "Codex CLI CLI" /
+	// "GitHub Copilot CLI CLI".
+	label := p.spec.label
+	if !strings.HasSuffix(label, "CLI") {
+		label += " CLI"
+	}
+	return label + ", model " + m + " (headless, no tools)"
 }
 
 func (p *agentcliProvider) Detect(ctx context.Context) Status {
@@ -379,13 +387,22 @@ var geminiSpec = cliSpec{
 	parse:     geminiParse,
 }
 
+// geminiDeprecationNote is appended to geminiIdentify's failure Reason:
+// Google deprecated the standalone Gemini CLI in favor of the Antigravity
+// CLI (`agy`) and its own login flow now points users there (the Homebrew
+// gemini-cli formula is marked "unsupported"). This Mac had gemini
+// uninstalled entirely (Providers() filters it out via LookPath before
+// Detect ever runs), but the spec is kept as-is for anyone still running
+// the old CLI.
+const geminiDeprecationNote = " (Google deprecated the Gemini CLI in favor of the Antigravity CLI, `agy`)"
+
 func geminiIdentify(ctx context.Context) Status {
 	h, err := RunCmd(ctx, nil, nil, "gemini", "--help")
 	if err != nil {
-		return Status{Reason: err.Error()}
+		return Status{Reason: err.Error() + geminiDeprecationNote}
 	}
 	if h.ExitCode != 0 || !strings.Contains(h.Stdout, "Gemini CLI") {
-		return Status{Reason: "not Gemini CLI"}
+		return Status{Reason: "not Gemini CLI" + geminiDeprecationNote}
 	}
 	v, err := RunCmd(ctx, nil, nil, "gemini", "--version")
 	ver := ""

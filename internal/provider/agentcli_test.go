@@ -816,3 +816,42 @@ func TestDetect_WrongIdentity(t *testing.T) {
 		t.Error("gemini: Detect() available for an unrelated binary, want unavailable")
 	}
 }
+
+func TestDetect_Gemini_FailureReasonMentionsDeprecation(t *testing.T) {
+	// Google deprecated the standalone Gemini CLI in favor of the
+	// Antigravity CLI (agy); geminiIdentify's failure Reason should say so
+	// (the spec itself is otherwise untouched, for anyone still on the old
+	// CLI).
+	fakePATH(t)
+	t.Setenv("SHELP_FAKE_HELP", "Some Other Tool - not Gemini")
+	st := geminiSpec.identify(context.Background())
+	if st.Available {
+		t.Fatal("Detect() available for an unrelated binary, want unavailable")
+	}
+	if !strings.Contains(st.Reason, "Antigravity") {
+		t.Errorf("Reason = %q, want it to mention the Antigravity CLI deprecation note", st.Reason)
+	}
+}
+
+func TestDescription_NoDoubleCLI(t *testing.T) {
+	cases := []struct {
+		spec     cliSpec
+		cliModel string
+		want     string
+	}{
+		{claudeSpec, "haiku", "Claude Code CLI, model haiku (headless, no tools)"},
+		{geminiSpec, "", "Gemini CLI, model default (headless, no tools)"},
+		{codexSpec, "", "Codex CLI, model default (headless, no tools)"},
+		{copilotSpec, "auto", "GitHub Copilot CLI, model auto (headless, no tools)"},
+	}
+	for _, c := range cases {
+		p := newProvider(c.spec, c.cliModel)
+		got := p.Description()
+		if got != c.want {
+			t.Errorf("%s Description() = %q, want %q", c.spec.name, got, c.want)
+		}
+		if strings.Contains(got, "CLI CLI") {
+			t.Errorf("%s Description() = %q, contains doubled \"CLI CLI\"", c.spec.name, got)
+		}
+	}
+}
