@@ -23,12 +23,19 @@ type TrialResult struct {
 	Output       string        `json:"output"`
 	Error        string        `json:"error,omitempty"`
 	Unavailable  bool          `json:"unavailable"`
+	RateLimited  bool          `json:"rate_limited,omitempty"`
 	LatencyMS    int64         `json:"latency_ms"`
 	FirstChunkMS int64         `json:"first_chunk_ms"`
 	Cold         bool          `json:"cold"`
 	Checks       Checks        `json:"checks"`
 	GradeKey     string        `json:"grade_key"`
 	StartedAt    time.Time     `json:"started_at"`
+
+	// RateLimitReason is the *provider.RateLimitedError's Reason when
+	// RateLimited is true, for runner.go's circuit-breaker message. It is
+	// never persisted (results.jsonl only ever stores the general `error`
+	// string above).
+	RateLimitReason string `json:"-"`
 }
 
 // TrialKey reconstructs the Trial.Key() this result was produced from,
@@ -53,6 +60,10 @@ type Manifest struct {
 	EndedAt     time.Time          `json:"ended_at,omitempty"`
 	Trials      int                `json:"trials"`
 	Resumed     bool               `json:"resumed,omitempty"`
+	// BreakerTrips records every provider that tripped the rate-limit
+	// circuit breaker during this run (see runner.go); empty when none
+	// did.
+	BreakerTrips []BreakerTrip `json:"breaker_trips,omitempty"`
 }
 
 // ProviderManifest records one provider's identity and Detect result as of

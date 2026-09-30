@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/bench"
@@ -26,8 +27,17 @@ Flags:
   --samples N                  repeats per trial (default: 1)
   --context fields             os,shell,cwd,tools (default: os,shell)
   --concurrency N              per-provider concurrency limit (default: 1)
+  --min-interval duration      minimum time between consecutive calls to the
+                               SAME provider, e.g. "2s" (default: 0, no pacing)
   --out dir                    output dir (default: bench/runs/<UTC timestamp>)
   --resume dir                 resume an interrupted run: skip completed trials
+
+A provider that rate-limits (e.g. Apple Intelligence Pro's usage limit,
+an HTTP 429, an agent CLI's quota error) trips a circuit breaker for the
+rest of the run: its remaining trials are never dispatched or written to
+results.jsonl, so a later --resume fills them in. Which providers tripped,
+and when, is recorded in run.json's "breaker_trips". --min-interval helps
+a future run stay under a backend's rate limit in the first place.
 `
 
 func cmdRun(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -36,6 +46,7 @@ func cmdRun(ctx context.Context, args []string, stdout, stderr *os.File) error {
 	fs.Usage = func() { fmt.Fprint(stderr, runUsage) }
 	var providersFlag, templatesFlag, casesFlag, casesDir, contextFlag, outDir, resumeDir string
 	var samples, concurrency int
+	var minInterval time.Duration
 	fs.StringVar(&providersFlag, "providers", "available", "")
 	fs.StringVar(&templatesFlag, "templates", "", "")
 	fs.StringVar(&casesFlag, "cases", "", "")
@@ -43,6 +54,7 @@ func cmdRun(ctx context.Context, args []string, stdout, stderr *os.File) error {
 	fs.StringVar(&contextFlag, "context", "os,shell", "")
 	fs.IntVar(&samples, "samples", 1, "")
 	fs.IntVar(&concurrency, "concurrency", 1, "")
+	fs.DurationVar(&minInterval, "min-interval", 0, "")
 	fs.StringVar(&outDir, "out", "", "")
 	fs.StringVar(&resumeDir, "resume", "", "")
 	if err := fs.Parse(args); err != nil {
@@ -110,15 +122,28 @@ func cmdRun(ctx context.Context, args []string, stdout, stderr *os.File) error {
 	}
 
 	fmt.Fprintf(stderr, "shelp-bench: %d trials -> %s\n", len(trials), dir)
+	var tripMu sync.Mutex
+	var trips []bench.BreakerTrip
 	err = bench.Run(ctx, bench.RunConfig{
 		Trials: trials, ContextFields: contextFields, OutDir: dir,
 		Concurrency: concurrency, HostOSKey: hostOSKey(), Resume: resume,
+		MinInterval: minInterval,
 		OnProgress: func(p bench.Progress) {
 			bench.WriteProgress(stderr, p)
+		},
+		OnBreakerTrip: func(bt bench.BreakerTrip) {
+			tripMu.Lock()
+			trips = append(trips, bt)
+			tripMu.Unlock()
+			fmt.Fprintf(stderr, "\nshelp-bench: provider %s rate-limited after %d calls: %s; skipping its remaining %d trials (resume later with --resume %s)\n",
+				bt.Provider, bt.AfterN, bt.Reason, bt.Skipped, dir)
 		},
 	})
 	fmt.Fprintln(stderr)
 	manifest.EndedAt = time.Now().UTC()
+	tripMu.Lock()
+	manifest.BreakerTrips = trips
+	tripMu.Unlock()
 	if serr := bench.SaveManifest(dir, manifest); serr != nil && err == nil {
 		err = serr
 	}
