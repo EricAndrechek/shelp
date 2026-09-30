@@ -10,11 +10,13 @@ var (
 	fenceLine  = regexp.MustCompile("^\\s*```")
 	wrapTicks  = regexp.MustCompile("^`([^`].*)`$")
 	promptSign = regexp.MustCompile(`^(\$|%|❯|>)\s+`)
+	labelLine  = regexp.MustCompile(`^(?i:command|cmd)\s*:\s*`)
 )
 
 // Command turns a suggest-mode reply into the bare command: drops markdown
 // fence lines, leading/trailing blank lines, a single pair of wrapping
-// backticks and a leading prompt sign ("$ ", "% "). Multi-line commands are
+// backticks, a leading "Command:" label and a leading prompt sign
+// ("$ ", "% "). Multi-line commands are
 // kept as-is otherwise.
 func Command(s string) string {
 	var lines []string
@@ -32,6 +34,10 @@ func Command(s string) string {
 	}
 	if len(lines) == 1 {
 		l := strings.TrimSpace(lines[0])
+		if m := wrapTicks.FindStringSubmatch(l); m != nil {
+			l = m[1]
+		}
+		l = labelLine.ReplaceAllString(l, "")
 		if m := wrapTicks.FindStringSubmatch(l); m != nil {
 			l = m[1]
 		}

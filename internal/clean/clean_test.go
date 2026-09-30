@@ -13,6 +13,8 @@ func TestCommand(t *testing.T) {
 		{"% git status", "git status"},
 		{"for f in *.jpeg; do\n  mv \"$f\" x\ndone", "for f in *.jpeg; do\n  mv \"$f\" x\ndone"},
 		{"  lsof -i :8080  ", "lsof -i :8080"},
+		{"Command: ls -t | head -n 3", "ls -t | head -n 3"},
+		{"command: `git status`", "git status"},
 	}
 	for _, c := range cases {
 		if got := Command(c.in); got != c.want {
