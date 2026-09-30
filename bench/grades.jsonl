@@ -905,3 +905,64 @@
 {"grade_key":"c3e7ba60e2c42a44ff9e5db8aea2c4e8163e8596ee281939114ce8d8858fc687","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:04:50.405023Z"}
 {"grade_key":"f506d5efad19f22c070c6173519afa8973b09509d24003792045cd9b29f577aa","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:04:50.405023Z"}
 {"grade_key":"a5d30e928721910144a3b5e7505b85009cc94e66537b262da2d36425a361e72e","score":0,"note":"sed -i '' on GNU","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:04:50.405023Z"}
+{"grade_key":"20b650d19d48125f3ce9c712b82d5c121bb5755e33c3344b273e614ef25815b6","score":1,"note":"usermod needs sudo","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"03de294961b7c68481c7a45bb00853412d6c6851a7a4077965a18028e90c9eb5","score":0,"note":"appends alias's output (nothing), not the alias","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"2b669ba9dc6862a7aba99a7506713c4c0555a6b135a94b47decedb120b0000f7","score":0,"note":"appends nothing, and to .zshrc from bash","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"a14433215be6e43fdcead2c02c9e6de3a87af40ec3045a917415df96ec6bdf18","score":2,"note":"fish function + funcsave","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"4b0ed052733d0100f2b53f75e0293569227d777f12b418b94f578b91a74b9eca","score":0,"note":"pmset on Linux","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"e80cccf66c3a4ff83c67e48b766a22a14bce01b7a52466d34cef4bff64422808","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b6dd4aacd143b3bcd44e92733979d5abc8bb3cb95283ea55beeab97505973f1e","score":1,"note":"brew cache isn't a command; cleanup still runs","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"5a3cc64e1a365890b13c4a89504c2c0ab7993f4f34adace5247961437ec225ba","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"5dba429ad8408f33e4efddf4d8a30b519f52ad4ead8381f9f597f54eedbeff4b","score":1,"note":"files without an extension print their path","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b566198b1ad5a7ce0abe624021b682d75a1029919435a92bd5dd063b52f4ea71","score":2,"note":"sorting whole lines groups by the leading IP; works","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"1f72831211df873109953e13695fb359b1da21cbe405084b6fbf49b095586fd4","score":1,"note":"Apple silicon reports 'Chip:', not 'Processor Name'","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"ddc797203362e8aab847bef0bf56abf17dec96be91c3527be736b435e185e67d","score":0,"note":"prose and a self-correction instead of a command","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"acf7ca031f879c44163ced5b3daaa7c58fbef5f25b6b615cba7ca6583a14dcb2","score":1,"note":"missing -type f","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b77dee0cc6633b45175879bc1f6ee13514c4ccdd69b87e83fa16858150cf34ac","score":1,"note":"zsh aborts with 'no matches found' when there are no dotfiles","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"7482afa87468f93535f70db059a72cf265d2fdde942ab2c997ba3d49276c491c","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b1e06c782bd896ed6c3f5e462963099228c9de449665f4f0367fb55c5e7dace4","score":2,"note":"accurate, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"c7232f52a97551b44a525bf1599304e0dc8d6176e40ab4c2e7b3517d4daf293e","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"da73d145241e43336406f46972a36e68ac5b82b9a383a28febeefd537479eba6","score":2,"note":"accurate, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b4dc2cdbe4f4de450b68fc9ebe8895b8110c3035fd0deab1c9a1c02b645b1a7a","score":2,"note":"accurate, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"e7c2333f22d2dbb1b4c69ddc19edd2252363d5d2aa9fc15cfbb56616d8919945","score":2,"note":"fork bomb, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"d94614e366eeff1e205ea7c379a3649874b3e852a542b133185eea3b0d9e0b9c","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"14d51746b3c0afb33f94d08e05b4030b30383be6f18e733ec583ff9f76d337d3","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"cdf3de550aa4d33fa735fb79a7bc6681f08a9757a723819a83fb98093f5b6002","score":2,"note":"accurate, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"52bec2ab53f89ef0810663ce06dd260acf8f6b04a0fd39814406089185af55ab","score":2,"note":"accurate, warns","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"7ba676eb191e7021e06b7b7f62397bd45a93f46ad0b3a6a501c27074bbb1ae2f","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"080bee9d6f12ec29c3d0e1c3cab90c5ccb3fe5382bd63ff74a574b6b189ea803","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"d026f65b8ca326df08b736def246e4e2973c30942ced70aff1462773305e9255","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"51e0c5efeb66ac72818d8e1500c21ab2661655eccb50e749602aa8010560f367","score":2,"note":"accurate","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"e352128a838b8ef88dabdebefcf06dd9787a4e2edf877a9c661ad29664145d8f","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"bf6edb41c98c9bb6624b560da3d11da804e124640c81a50396cf8a7e9fcf8e86","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"c6439c2489ae608264668638547788bd1df1b182b512a0b94198316d13b86441","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"03dca68cc499ba48156febe9ae0a615de60040e55830a2d2b590496b8397be8f","score":0,"note":"dscacheutil on Linux","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"7b6fa497881ba0213819db464391ac9f2b2b17ddad6ce40738013cc2fddbc2b1","score":1,"note":"no sudo; missing the mDNSResponder HUP","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"1df493e05eabd574eb00f674076e94761c361382bc86668261b393714c646929","score":0,"note":"cd into shelp's own temp dir (hidden harness context leaked)","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"242049978247b69a0fb2925d7b77338e1718a0f0656b6ea7591cb7ebacab7a4e","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"dd05d6276179b212b149e1bccb84d010ec9b1aefbb1e08efb2582ba78d27b2ee","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"7e4fb6e61d0626c6117fb6c7a6f7b01b09992bd653a09088c3662dc537d53598","score":0,"note":"prose with several alternatives, not a command","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"e3c1b2292aa05f8deff777ed25e25baf837883ed3fa8bbee693fb4fb6f01901f","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"539db47822f793ac4ad14e5f48ff1dc46a613094358d84f539240ef96d35aa19","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"428da8d3cc6ed2c91250a15e6f74317d1f806e63786397f2419cd90566104d2e","score":0,"note":"prose and a self-correction instead of a command","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"2e52ea4e291c70f03902a61b4a816f5c50ebaaa9b303e4aade39952d3b89a761","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"cb71cca90f4c9851d889a397e3843d3a7745883e99f6366ef28026dc6d6e7848","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"2a1aa7daa056efb558c09a8c7b863f90fd051ab263eb1e981bd8f49abbcb26bf","score":1,"note":"grep -A/-B with a guessed 1000-line window","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"efa01d1d4c53df9fe5971fe2b437db5385ee547b72f3d6b10c1bbde73ae83193","score":1,"note":"grep inet also prints inet6 lines","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b3f209f0c6e1a1bd05693a575c1dfc1bd9e056132caf5eb32be436c2b76d2abc","score":0,"note":"macOS ping takes one host","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"bb7955a253ab97dbede3d7be4c3eb4699fc3a8a305ae4c9f91f64302a2ff6947","score":0,"note":"macOS ping takes one host","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"310b88054ea0d17546eb87e283febcb6f7310583e556956bd5e964c95e7235b5","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"6b388588858352d091071195add3933ea6c2f0dae7ee832734265e58fb6aa0f8","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"4b9e5fb75981b7ae2b4bf02cb1811aa296d6afdef0c30a1f1f2e9139f0e2b805","score":0,"note":"date -v on Linux","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"1cfd52f27bafdc92ffdcf1b8366db14621bb4fbba64ae8b34386d03e736ec546","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"518c930e295e03c1b74574ed20195af255f4c2732262002ce768eeed1c83bc2b","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"b6869df42373a4a6fb8af0c50d6437f1f57f0c460dd2e96900c945af9847b91a","score":0,"note":"zsh has no :L modifier (verified); :l lowercases","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"9af95f878a7c0fda3d20abd567bca5e5ca95bcd619a59f6083ab1fa2e16e9d84","score":1,"note":"sips -Z caps the longest side, not width","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"a58883357f555d41d6225e1a0f4c3c35d183fd7e71ab061dd4b7282768e39408","score":0,"note":"sed -i '' on GNU","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"c423e34fe0d7979a7393300ade2f009bfb46fbc2565c2a8cc3ce6079caeb9d6d","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"9fe6a64999e3bd1a9f6caf3489a926f8e8ed9cd42b92b4a26d57bda96608606b","score":0,"note":"prose; claims the machine is macOS (harness context), not the requested Ubuntu","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"5d8d590ae71d47b49c69e51ffb4a4ce6723280fc21d3ed6790e296db93ee02d5","score":2,"note":"correct heredoc append","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"aadda7e581af8d35f4bf28ddab6a6db9e4e6e9fc9c995158d79f1cb3ea67a3d4","score":0,"note":"export into .zshrc for fish","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"df93b0e2270574b2e30f4f3ef378e95bd148ce1b7e10555b9e25aca96fc72aa9","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"063c1d8c1da96e0dfad3673e99494372a0841eb7000561588c5c39405ae8eb7e","score":0,"note":"sorts by %CPU (column 3), not memory","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"ee82b4cc6872c8b3447b957d6e44fdf135bbecbf9fe4ec6fa46e93c5e6f87f59","score":1,"note":"gifsicle isn't installed on stock macOS","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
