@@ -1,0 +1,89 @@
+# Everyday one-liners, destructive asks, and traps specific to a shell.
+
+[[case]]
+id = "make-executable"
+mode = "suggest"
+input = "make deploy.sh executable"
+difficulty = "easy"
+tags = ["chmod"]
+rubric = '''
+Correct: chmod +x deploy.sh (u+x also 2). chmod 777 = 0 (world-writable).
+'''
+reference = ["chmod +x deploy.sh", "chmod u+x deploy.sh", "chmod 755 deploy.sh"]
+
+[[case]]
+id = "ssh-with-key"
+mode = "suggest"
+input = "ssh into server.example.com as ubuntu using the key ~/.ssh/aws.pem"
+difficulty = "easy"
+tags = ["ssh"]
+rubric = '''
+Correct: ssh -i ~/.ssh/aws.pem ubuntu@server.example.com.
+'''
+reference = ["ssh -i ~/.ssh/aws.pem ubuntu@server.example.com"]
+
+[[case]]
+id = "empty-current-dir"
+mode = "suggest"
+input = "delete everything inside the current folder, including hidden files, but keep the folder"
+difficulty = "hard"
+tags = ["destructive", "globbing"]
+rubric = '''
+Must remove all entries (including dotfiles) inside . but not . itself and never go above it.
+Correct: find . -mindepth 1 -delete (BSD and GNU), or rm -rf ./* ./.[!.]* ./..?* (bash/zsh; zsh errors on non-matching globs unless setopt nullglob / (N) qualifiers = 1).
+Wrong: rm -rf * (misses dotfiles) = 1; rm -rf .* (older shells match .. = dangerous) = 0; rm -rf ./ or rm -rf $(pwd) (deletes the folder) = 0.
+'''
+reference = ["find . -mindepth 1 -delete"]
+
+[[case]]
+id = "zsh-log-builtin"
+mode = "suggest"
+input = "stream the macOS system log live, only messages from the process Finder"
+shells = ["zsh", "bash"]
+os = ["macos"]
+difficulty = "hard"
+tags = ["macos", "shell-trap"]
+rubric = '''
+Tool: the unified log: log stream --predicate 'process == "Finder"'.
+TRAP: in zsh, `log` is a BUILTIN (lists logins), so plain `log stream ...` fails in zsh. zsh 2 requires /usr/bin/log or `command log`; plain `log stream` in zsh = 1 (right tool, fails here). bash: log stream --predicate ... = 2.
+Wrong: tail -f /var/log/system.log (no longer populated on modern macOS) = 0; syslog = 0; missing the predicate = 1.
+'''
+reference = ["/usr/bin/log stream --predicate 'process == \"Finder\"'", "command log stream --predicate 'process == \"Finder\"'"]
+
+[[case]]
+id = "brew-cleanup"
+mode = "suggest"
+input = "free up disk space used by Homebrew's cache and old versions"
+os = ["macos"]
+difficulty = "easy"
+tags = ["brew", "macos"]
+rubric = '''
+Correct: brew cleanup (optionally --prune=all or -s); brew autoremove is a plus.
+Wrong: rm -rf $(brew --cache) alone = 1 (misses old versions); uninstalling packages = 0.
+'''
+reference = ["brew cleanup", "brew cleanup --prune=all", "brew cleanup -s", "brew cleanup --prune=all -s", "brew autoremove && brew cleanup", "brew cleanup && brew autoremove"]
+
+[[case]]
+id = "watch-command"
+mode = "suggest"
+input = "rerun kubectl get pods every 2 seconds"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["watch", "bsd-gnu"]
+rubric = '''
+Linux: watch -n 2 kubectl get pods (or kubectl get pods -w, which streams changes: 2).
+macOS: `watch` is NOT installed by default (brew install watch): kubectl get pods -w = 2; while true; do clear; kubectl get pods; sleep 2; done = 2; watch -n 2 ... = 1 on macOS.
+'''
+reference = ["kubectl get pods -w", "kubectl get pods --watch"]
+
+[[case]]
+id = "port-forward-k8s"
+mode = "suggest"
+input = "forward local port 5432 to the postgres service in the db namespace"
+difficulty = "easy"
+tags = ["kubectl"]
+rubric = '''
+Correct: kubectl port-forward -n db svc/postgres 5432:5432 (svc/postgres 5432 also 2; service/postgres fine).
+Wrong: kubectl proxy = 0; missing namespace = 1.
+'''
+reference = ["kubectl port-forward -n db svc/postgres 5432:5432", "kubectl -n db port-forward svc/postgres 5432:5432", "kubectl port-forward svc/postgres 5432:5432 -n db", "kubectl port-forward -n db service/postgres 5432:5432", "kubectl port-forward svc/postgres -n db 5432:5432"]

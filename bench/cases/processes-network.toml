@@ -1,0 +1,147 @@
+# Processes, ports, networking.
+
+[[case]]
+id = "port-listener"
+mode = "suggest"
+input = "show which process is listening on port 8080"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["lsof", "ports"]
+rubric = '''
+Best: lsof -nP -iTCP:8080 -sTCP:LISTEN (both OSes; sudo may be needed for other users' processes).
+Acceptable (2): lsof -i :8080 / lsof -i tcp:8080 (shows clients too but answers the question).
+Linux also: ss -ltnp 'sport = :8080' or ss -ltnp | grep :8080 (2); netstat -tulpn | grep 8080 (1, deprecated).
+Wrong on macOS: ss, netstat -tulpn (BSD netstat has no -p for pids).
+'''
+reference = ["lsof -nP -iTCP:8080 -sTCP:LISTEN", "lsof -i :8080", "lsof -i tcp:8080", "lsof -iTCP:8080 -sTCP:LISTEN"]
+
+[[case]]
+id = "kill-port"
+mode = "suggest"
+input = "kill the process using port 3000"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["lsof", "kill"]
+rubric = '''
+Must pass PIDs to kill: kill $(lsof -ti :3000) / lsof -ti tcp:3000 | xargs kill (-9 acceptable).
+Linux also: fuser -k 3000/tcp (2).
+Wrong: kill -9 $(lsof -i :3000) (lsof without -t prints a table, not PIDs) = 0; killall node (guesses the process) = 0.
+Minor (1): xargs kill without handling "no process" is still 2; -t missing = 0.
+'''
+reference = ["kill $(lsof -ti :3000)", "kill $(lsof -ti:3000)", "lsof -ti :3000 | xargs kill", "lsof -ti:3000 | xargs kill", "kill -9 $(lsof -ti :3000)", "kill -9 $(lsof -ti:3000)", "lsof -ti:3000 | xargs kill -9", "lsof -ti :3000 | xargs kill -9", "kill $(lsof -t -i:3000)", "kill -9 $(lsof -t -i:3000)"]
+
+[[case]]
+id = "top-memory"
+mode = "suggest"
+input = "show the 5 processes using the most memory"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["ps"]
+rubric = '''
+macOS: ps -axo pid,rss,comm -m | head -n 6, or ps aux -m | head -n 6, or top -l 1 -o mem -n 5 (BSD ps has no --sort).
+Linux: ps aux --sort=-%mem | head -n 6 (or -rss).
+Wrong on macOS: ps --sort (GNU only) = 0. Off-by-one with header (head -5 shows 4) = 1.
+'''
+
+[[case]]
+id = "public-ip"
+mode = "suggest"
+input = "show my public IP address"
+difficulty = "easy"
+tags = ["curl", "network"]
+rubric = '''
+Correct: curl ifconfig.me / curl -s https://api.ipify.org / curl icanhazip.com / dig +short myip.opendns.com @resolver1.opendns.com.
+Wrong: ifconfig/ipconfig getifaddr (local IP, not public) = 0; invalid hostnames (e.g. ifconfig.com is not the service) = 0.
+'''
+reference = ["curl ifconfig.me", "curl -s ifconfig.me", "curl https://ifconfig.me", "curl -s https://ifconfig.me", "curl -s https://api.ipify.org", "curl https://api.ipify.org", "curl icanhazip.com", "curl -s icanhazip.com", "dig +short myip.opendns.com @resolver1.opendns.com"]
+
+[[case]]
+id = "local-ip-mac"
+mode = "suggest"
+input = "what's my local IP address on wifi"
+os = ["macos"]
+difficulty = "easy"
+tags = ["network", "macos"]
+rubric = '''
+macOS: ipconfig getifaddr en0 (Wi-Fi is usually en0 on laptops; en1 on some desktops: still 2).
+Acceptable (1): ifconfig en0 | grep 'inet ' (works, noisier).
+Wrong: hostname -I (Linux only), ip addr (not on macOS) = 0; public-IP services = 0.
+'''
+reference = ["ipconfig getifaddr en0"]
+
+[[case]]
+id = "tcp-port-open"
+mode = "suggest"
+input = "check whether port 5432 is open on db.internal"
+difficulty = "easy"
+tags = ["nc", "network"]
+rubric = '''
+Correct: nc -zv db.internal 5432 (BSD and most Linux nc), or nc -z -w 3 ...; pg_isready -h db.internal -p 5432 is fine too.
+Acceptable (1): telnet db.internal 5432 (interactive, may not be installed).
+Wrong: ping (ICMP, no port) = 0; nmap is fine only if installed (1).
+'''
+reference = ["nc -zv db.internal 5432", "nc -z db.internal 5432", "nc -vz db.internal 5432"]
+
+[[case]]
+id = "flush-dns"
+mode = "suggest"
+input = "flush the DNS cache"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["dns", "os-specific"]
+rubric = '''
+macOS: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder (both parts for 2; only one = 1).
+Linux (systemd-resolved): sudo resolvectl flush-caches (or systemd-resolve --flush-caches, older) = 2.
+Wrong: made-up commands (dnf flushcache is a package cache, not DNS) = 0; Windows ipconfig /flushdns = 0.
+'''
+reference = ["sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder", "sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder", "sudo resolvectl flush-caches"]
+
+[[case]]
+id = "http-headers"
+mode = "suggest"
+input = "show just the response headers from https://example.com"
+difficulty = "easy"
+tags = ["curl"]
+rubric = '''
+Correct: curl -I https://example.com (HEAD request) or curl -sD - -o /dev/null https://example.com.
+Minor (1): curl -i (includes body).
+'''
+reference = ["curl -I https://example.com", "curl -sI https://example.com", "curl -s -I https://example.com"]
+
+[[case]]
+id = "cert-expiry"
+mode = "suggest"
+input = "check when the TLS certificate for example.com expires"
+difficulty = "hard"
+tags = ["openssl"]
+rubric = '''
+Correct: echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null | openssl x509 -noout -enddate
+(-servername matters for SNI; `echo |` or </dev/null prevents it hanging). Missing -servername = 1 (usually works), missing the echo/</dev/null = 1 (hangs until timeout).
+Wrong: curl -v and eyeball (1 at best), invented flags = 0.
+'''
+
+[[case]]
+id = "keep-running-after-logout"
+mode = "suggest"
+input = "run ./train.sh in the background so it keeps running after I log out, logging to train.log"
+difficulty = "medium"
+tags = ["nohup", "jobs"]
+rubric = '''
+Correct: nohup ./train.sh > train.log 2>&1 & (order of redirects matters: 2>&1 after the file). tmux/screen detached sessions are also 2.
+Wrong: ./train.sh & alone (dies with SIGHUP) = 0; 2>&1 > train.log (stderr goes to terminal) = 1.
+zsh note: & plus disown also OK.
+'''
+reference = ["nohup ./train.sh > train.log 2>&1 &", "nohup ./train.sh >train.log 2>&1 &", "nohup ./train.sh &> train.log &"]
+
+[[case]]
+id = "download-resume"
+mode = "suggest"
+input = "download https://example.com/big.iso and resume if it was interrupted"
+difficulty = "easy"
+tags = ["curl", "wget"]
+rubric = '''
+macOS has curl, not wget: curl -C - -O https://example.com/big.iso (2). -L to follow redirects is a plus.
+wget -c URL is 2 on Linux; on macOS it is 1 (wget not installed by default).
+Wrong: plain curl without -C - (no resume) = 0; curl URL > file without -O/-o is 1.
+'''
+reference = ["curl -C - -O https://example.com/big.iso", "curl -L -C - -O https://example.com/big.iso", "curl -C - -LO https://example.com/big.iso", "curl -LO -C - https://example.com/big.iso", "curl -O -C - https://example.com/big.iso"]

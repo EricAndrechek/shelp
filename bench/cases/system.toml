@@ -1,0 +1,121 @@
+# OS-specific system tasks: the answer is completely different on macOS vs Linux.
+
+[[case]]
+id = "prevent-sleep"
+mode = "suggest"
+input = "keep my computer awake while this long build runs: make release"
+os = ["macos"]
+difficulty = "medium"
+tags = ["macos", "power"]
+rubric = '''
+Correct: caffeinate -i make release (or -dims; -s only applies on AC power, still fine).
+Minor (1): caffeinate alone in another terminal / caffeinate -t with a guessed duration.
+Wrong: pmset changes that permanently alter settings = 0; Linux systemd-inhibit on macOS = 0.
+'''
+reference = ["caffeinate -i make release", "caffeinate make release", "caffeinate -dims make release", "caffeinate -dim make release", "caffeinate -s make release"]
+
+[[case]]
+id = "battery-status"
+mode = "suggest"
+input = "show my battery percentage"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["power", "os-specific"]
+rubric = '''
+macOS: pmset -g batt (optionally | grep -Eo '[0-9]+%').
+Linux: cat /sys/class/power_supply/BAT0/capacity, upower -i $(upower -e | grep BAT) | grep percentage, acpi -b.
+Wrong: ioreg incantations that don't print percent = 1 at best; Linux paths on macOS = 0.
+'''
+reference = ["pmset -g batt", "cat /sys/class/power_supply/BAT0/capacity"]
+
+[[case]]
+id = "copy-file-to-clipboard"
+mode = "suggest"
+input = "copy the contents of ~/.ssh/id_ed25519.pub to the clipboard"
+os = ["macos"]
+difficulty = "easy"
+tags = ["macos", "clipboard"]
+rubric = '''
+Correct: pbcopy < ~/.ssh/id_ed25519.pub (or cat ... | pbcopy).
+Wrong: xclip/xsel/wl-copy on macOS = 0; copying the PRIVATE key (id_ed25519 without .pub) = 0.
+'''
+reference = ["pbcopy < ~/.ssh/id_ed25519.pub", "cat ~/.ssh/id_ed25519.pub | pbcopy"]
+
+[[case]]
+id = "show-hidden-finder"
+mode = "suggest"
+input = "make Finder show hidden files"
+os = ["macos"]
+difficulty = "medium"
+tags = ["macos", "defaults"]
+rubric = '''
+Correct: defaults write com.apple.finder AppleShowAllFiles -bool true && killall Finder (TRUE/YES also fine).
+Minor (1): missing the killall Finder (needs relaunch) or mentioning Cmd-Shift-. instead of a command.
+Wrong: chflags nohidden on files = 0.
+'''
+reference = ["defaults write com.apple.finder AppleShowAllFiles -bool true && killall Finder", "defaults write com.apple.finder AppleShowAllFiles -bool true; killall Finder", "defaults write com.apple.finder AppleShowAllFiles TRUE && killall Finder", "defaults write com.apple.finder AppleShowAllFiles YES && killall Finder", "defaults write com.apple.finder AppleShowAllFiles true && killall Finder"]
+
+[[case]]
+id = "cpu-model"
+mode = "suggest"
+input = "what CPU does this machine have"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["hardware", "os-specific"]
+rubric = '''
+macOS: sysctl -n machdep.cpu.brand_string (2); system_profiler SPHardwareDataType (2, more output).
+Linux: lscpu (2), grep 'model name' /proc/cpuinfo | head -1 (2).
+Wrong: /proc/cpuinfo on macOS = 0; lscpu on macOS = 0.
+'''
+reference = ["sysctl -n machdep.cpu.brand_string", "lscpu"]
+
+[[case]]
+id = "service-logs-last-hour"
+mode = "suggest"
+input = "show the nginx service logs from the last hour"
+os = ["linux"]
+difficulty = "medium"
+tags = ["systemd", "linux"]
+rubric = '''
+Correct: journalctl -u nginx --since "1 hour ago" (sudo optional).
+Acceptable (1): tail of /var/log/nginx/*.log (no time filter).
+Wrong: invented flags = 0.
+'''
+reference = ["journalctl -u nginx --since \"1 hour ago\"", "journalctl -u nginx --since '1 hour ago'", "sudo journalctl -u nginx --since \"1 hour ago\"", "sudo journalctl -u nginx --since '1 hour ago'"]
+
+[[case]]
+id = "add-user-to-group"
+mode = "suggest"
+input = "add the user deploy to the docker group"
+os = ["linux"]
+difficulty = "easy"
+tags = ["users", "linux"]
+rubric = '''
+Correct: sudo usermod -aG docker deploy (the -a is essential; without it the user's other groups are replaced = 0). sudo gpasswd -a deploy docker = 2.
+'''
+reference = ["sudo usermod -aG docker deploy", "sudo usermod -a -G docker deploy", "sudo gpasswd -a deploy docker"]
+
+[[case]]
+id = "open-dir-gui"
+mode = "suggest"
+input = "open the current folder in the file manager"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["os-specific"]
+rubric = '''
+macOS: open . ; Linux: xdg-open . (nautilus . is 1: desktop-specific).
+'''
+reference = ["open .", "xdg-open ."]
+
+[[case]]
+id = "convert-heic"
+mode = "suggest"
+input = "convert every .heic photo in this folder to jpg"
+os = ["macos"]
+difficulty = "hard"
+tags = ["images", "macos"]
+rubric = '''
+macOS built-in: for f in *.heic; do sips -s format jpeg "$f" --out "${f%.heic}.jpg"; done (2). Case: files are often .HEIC; handling both is a plus, not required.
+Acceptable (1): ImageMagick (magick mogrify -format jpg *.heic) since it may not be installed.
+Wrong: made-up sips flags; overwriting originals without converting format = 0.
+'''

@@ -1,0 +1,90 @@
+# Archives, media, parallelism.
+
+[[case]]
+id = "tar-exclude"
+mode = "suggest"
+input = "make a tar.gz of the project folder but leave out node_modules and .git"
+difficulty = "medium"
+tags = ["tar"]
+rubric = '''
+Correct: tar --exclude=node_modules --exclude=.git -czf project.tar.gz project (BSD and GNU tar both accept --exclude before the paths).
+Minor (1): exclude options after the path on GNU tar (works on BSD, warns/ignored on newer GNU), or only one of the two excluded.
+Wrong: zip instead of tar.gz = 0; missing -z = 0.
+'''
+reference = ["tar --exclude=node_modules --exclude=.git -czf project.tar.gz project", "tar -czf project.tar.gz --exclude=node_modules --exclude=.git project", "tar --exclude='node_modules' --exclude='.git' -czf project.tar.gz project", "tar -czvf project.tar.gz --exclude=node_modules --exclude=.git project"]
+
+[[case]]
+id = "unzip-to-dir"
+mode = "suggest"
+input = "extract archive.zip into a folder called out"
+difficulty = "easy"
+tags = ["zip"]
+rubric = '''
+Correct: unzip archive.zip -d out. macOS also: ditto -x -k archive.zip out (2).
+Wrong: tar -xzf on a zip = 0 (bsdtar on macOS can read zip: tar -xf archive.zip -C out works = 2 on macOS if out exists; -C out without mkdir = 1).
+'''
+reference = ["unzip archive.zip -d out", "unzip -d out archive.zip", "unzip -q archive.zip -d out"]
+
+[[case]]
+id = "mov-to-mp4"
+mode = "suggest"
+input = "convert video.mov to mp4 with ffmpeg"
+difficulty = "easy"
+tags = ["ffmpeg"]
+rubric = '''
+Correct: ffmpeg -i video.mov video.mp4 (defaults re-encode) or with -c:v libx264 -c:a aac, or -c copy (remux; fine when codecs are mp4-compatible, which iPhone/QuickTime H.264/HEVC+AAC usually are).
+Wrong: invented flags = 0.
+'''
+reference = ["ffmpeg -i video.mov video.mp4", "ffmpeg -i video.mov -c:v libx264 -c:a aac video.mp4", "ffmpeg -i video.mov -c copy video.mp4", "ffmpeg -i video.mov -vcodec h264 -acodec aac video.mp4", "ffmpeg -i video.mov -c:v copy -c:a copy video.mp4"]
+
+[[case]]
+id = "video-to-gif"
+mode = "suggest"
+input = "turn the first 5 seconds of clip.mp4 into a 480px wide gif"
+difficulty = "hard"
+tags = ["ffmpeg"]
+rubric = '''
+Must limit duration (-t 5), scale width 480 keeping aspect (scale=480:-1), output .gif.
+Good: ffmpeg -t 5 -i clip.mp4 -vf "fps=15,scale=480:-1:flags=lanczos" clip.gif (2). Palette-based (palettegen/paletteuse) is a bonus, not required.
+Minor (1): missing fps (huge gif) is still 2; wrong scale syntax (480x?) = 0; missing -t = 0.
+'''
+
+[[case]]
+id = "resize-images"
+mode = "suggest"
+input = "resize all png images in this folder to 800 pixels wide, in place"
+os = ["macos"]
+difficulty = "medium"
+tags = ["images", "macos"]
+rubric = '''
+macOS built-in: sips --resampleWidth 800 *.png (2) (-Z 800 limits the LONGEST side = 1).
+Acceptable (1): ImageMagick mogrify -resize 800 *.png (may not be installed on macOS).
+Wrong: made-up flags = 0.
+'''
+reference = ["sips --resampleWidth 800 *.png", "sips --resampleWidth 800 -- *.png"]
+
+[[case]]
+id = "parallel-downloads"
+mode = "suggest"
+input = "download every URL listed in urls.txt, 4 at a time"
+difficulty = "medium"
+tags = ["xargs", "curl"]
+rubric = '''
+Correct: xargs -n 1 -P 4 curl -O < urls.txt (or -L -O / -fsSLO; -I{} variants fine). wget on macOS = 1.
+Wrong: sequential loop = 1 (ignores "4 at a time"); GNU parallel = 1 if not installed (fine on Linux if present).
+'''
+reference = ["xargs -n 1 -P 4 curl -O < urls.txt", "xargs -P 4 -n 1 curl -O < urls.txt", "cat urls.txt | xargs -n 1 -P 4 curl -O", "xargs -n1 -P4 curl -O < urls.txt", "xargs -P4 -n1 curl -O < urls.txt", "xargs -n 1 -P 4 curl -LO < urls.txt"]
+
+[[case]]
+id = "sha256-verify"
+mode = "suggest"
+input = "compute the sha256 checksum of installer.dmg"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["checksum", "bsd-gnu"]
+rubric = '''
+macOS: shasum -a 256 installer.dmg (2); sha256sum also exists on macOS 14+ (2).
+Linux: sha256sum installer.dmg (2).
+Wrong: md5 / sha1 = 0; openssl dgst -sha256 = 2.
+'''
+reference = ["shasum -a 256 installer.dmg", "sha256sum installer.dmg", "openssl dgst -sha256 installer.dmg"]

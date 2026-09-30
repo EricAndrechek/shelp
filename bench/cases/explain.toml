@@ -1,0 +1,157 @@
+# Explain mode: input is a command; the answer is prose. Grade on accuracy of
+# every claim (a single wrong flag description caps the score at 1), whether
+# it flags danger when relevant, and brevity (a rambling but accurate answer
+# is 2; missing the main point is 0).
+
+[[case]]
+id = "explain-tar-extract"
+mode = "explain"
+input = "tar -xzvf backup.tar.gz -C /tmp/restore"
+difficulty = "easy"
+tags = ["tar"]
+rubric = '''
+Must say: extracts (-x) a gzip-compressed (-z) archive, verbosely listing files (-v), from file backup.tar.gz (-f), into /tmp/restore (-C, which must exist).
+'''
+
+[[case]]
+id = "explain-lsof-listen"
+mode = "explain"
+input = "lsof -nP -iTCP:8080 -sTCP:LISTEN"
+difficulty = "medium"
+tags = ["lsof"]
+rubric = '''
+Must say: lists processes with a TCP socket on port 8080 in LISTEN state (i.e. the server listening there);
+-n no hostname lookup, -P no port-name lookup (numeric). Common error: claiming -nP shows only process names or filters output = cap 1.
+'''
+
+[[case]]
+id = "explain-find-delete"
+mode = "explain"
+input = "find . -name '*.log' -mtime +7 -delete"
+difficulty = "easy"
+tags = ["find", "destructive"]
+rubric = '''
+Must say: recursively from the current dir, deletes files named *.log last modified more than 7 days ago. Noting that deletion is permanent is a plus.
+Error: saying "7 days or newer", or "within the last 7 days" = 0.
+'''
+
+[[case]]
+id = "explain-rsync-delete"
+mode = "explain"
+input = "rsync -avz --delete src/ user@host:/srv/app/"
+difficulty = "medium"
+tags = ["rsync", "destructive"]
+rubric = '''
+Must say: syncs the CONTENTS of src/ (trailing slash) to /srv/app/ on host over SSH; -a archive (recursive, preserve perms/times/links), -v verbose, -z compress in transit;
+--delete removes files on the destination that aren't in src (should be called out as destructive). Missing the --delete meaning = 0.
+'''
+
+[[case]]
+id = "explain-awk-pipeline"
+mode = "explain"
+input = "awk '{print $1}' access.log | sort | uniq -c | sort -rn | head"
+difficulty = "easy"
+tags = ["pipeline"]
+rubric = '''
+Must say: prints the first field (usually client IP) of each line, counts occurrences of each, sorts by count descending, shows the top 10.
+Error: saying head shows 5 or saying uniq works without sorting = cap 1.
+'''
+
+[[case]]
+id = "explain-fork-bomb"
+mode = "explain"
+input = ":(){ :|:& };:"
+difficulty = "hard"
+tags = ["dangerous"]
+rubric = '''
+Must identify it as a fork bomb: defines a function named ':' that pipes itself into itself in the background, then calls it, spawning processes exponentially until the system is exhausted. Must warn not to run it.
+Refusing to explain = 0 (it's a legitimate question). Describing it as harmless = 0.
+'''
+
+[[case]]
+id = "explain-curl-pipe-sh"
+mode = "explain"
+input = "curl -fsSL https://example.com/install.sh | sh"
+difficulty = "easy"
+tags = ["dangerous", "curl"]
+rubric = '''
+Must say: downloads a script (-f fail on HTTP errors, -s silent, -S show errors, -L follow redirects) and runs it with sh immediately.
+Should note the risk of executing remote code without inspection = required for 2 (1 without it).
+'''
+
+[[case]]
+id = "explain-reset-hard"
+mode = "explain"
+input = "git reset --hard HEAD~1"
+difficulty = "easy"
+tags = ["git", "destructive"]
+rubric = '''
+Must say: moves the current branch back one commit and discards the last commit plus ALL uncommitted changes in the index and working tree (untracked files stay).
+Must convey that it's destructive/irreversible-ish (reflog can recover the commit) for 2.
+'''
+
+[[case]]
+id = "explain-ssh-tunnel"
+mode = "explain"
+input = "ssh -N -L 8080:localhost:80 user@bastion"
+difficulty = "medium"
+tags = ["ssh", "network"]
+rubric = '''
+Must say: local port forward: connections to localhost:8080 on THIS machine are tunneled through the SSH connection and delivered to localhost:80 as seen from bastion (i.e. bastion's own port 80); -N means don't run a remote command (just forward).
+Error: reversing direction (remote forward) = 0.
+'''
+
+[[case]]
+id = "explain-set-euo"
+mode = "explain"
+input = "set -euo pipefail"
+difficulty = "medium"
+tags = ["bash"]
+rubric = '''
+Must say: -e exit on a command failing, -u error on unset variables, -o pipefail makes a pipeline fail if any command in it fails (not just the last). Common in scripts.
+One wrong flag = cap 1.
+'''
+
+[[case]]
+id = "explain-redirect-order"
+mode = "explain"
+input = "./build.sh > build.log 2>&1"
+difficulty = "easy"
+tags = ["redirection"]
+rubric = '''
+Must say: runs build.sh sending stdout to build.log (overwriting) and stderr to the same place (2>&1 duplicates stderr onto stdout AFTER stdout was redirected).
+Error: saying stderr goes to the terminal = 0.
+'''
+
+[[case]]
+id = "explain-find-xargs0"
+mode = "explain"
+input = "find . -type f -name '*.tmp' -print0 | xargs -0 rm -f"
+difficulty = "medium"
+tags = ["find", "xargs", "destructive"]
+rubric = '''
+Must say: finds regular files named *.tmp under the current dir and deletes them; -print0/-0 use NUL separators so names with spaces/newlines are handled safely; -f suppresses errors/prompts.
+'''
+
+[[case]]
+id = "explain-sed-bsd"
+mode = "explain"
+input = "sed -i '' 's/http:/https:/g' *.html"
+shells = ["zsh"]
+os = ["macos"]
+difficulty = "medium"
+tags = ["sed", "bsd-gnu"]
+rubric = '''
+Must say: edits every .html file in the current dir in place, replacing all http: with https:; the '' is the (empty) backup suffix required by BSD/macOS sed so no backup file is kept.
+Error: saying '' is the pattern or an empty replacement = cap 1.
+'''
+
+[[case]]
+id = "explain-docker-run"
+mode = "explain"
+input = "docker run --rm -it -v \"$PWD\":/app -w /app node:22 npm test"
+difficulty = "medium"
+tags = ["docker"]
+rubric = '''
+Must say: runs a throwaway container (--rm removes it after exit) from the node:22 image, interactive with a TTY (-it), mounting the current directory at /app (-v), working directory /app (-w), and runs npm test inside it.
+'''

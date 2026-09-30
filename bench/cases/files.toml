@@ -1,0 +1,141 @@
+# Files and find. Many of these separate BSD (macOS) from GNU (Linux) userland.
+
+[[case]]
+id = "files-over-100mb"
+mode = "suggest"
+input = "find all files over 100MB in my home dir"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["find"]
+rubric = '''
+Must search the home directory (~ or $HOME) recursively for regular files larger than 100MB.
+Correct: find ~ -type f -size +100M (optionally with -exec ls -lh {} + / du -h, 2>/dev/null).
+Wrong: -size +100MB (invalid unit), -size 100M (exact size), searching / or . instead of ~.
+Minor (1): omitting -type f.
+'''
+reference = ["find ~ -type f -size +100M", "find $HOME -type f -size +100M", "find ~ -type f -size +100M 2>/dev/null"]
+
+[[case]]
+id = "modified-last-24h"
+mode = "suggest"
+input = "list files in this directory tree modified in the last 24 hours"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["find"]
+rubric = '''
+Correct: find . -type f -mtime -1 (or -mmin -1440, or -newermt '24 hours ago' on GNU only).
+Wrong: -mtime +1 or -mtime 1; GNU-only -newermt with a relative date on macOS (BSD find -newermt needs an absolute date).
+Minor (1): missing -type f.
+'''
+reference = ["find . -type f -mtime -1", "find . -type f -mmin -1440"]
+
+[[case]]
+id = "delete-old-logs"
+mode = "suggest"
+input = "delete .log files older than 7 days under /var/tmp/myapp"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["find", "destructive"]
+rubric = '''
+Correct: find /var/tmp/myapp -type f -name '*.log' -mtime +7 -delete (or -exec rm {} +).
+Wrong: unquoted *.log (shell expands it), -mtime -7 (newer than 7 days), rm with a glob that ignores age, wrong path.
+Minor (1): missing -type f; -exec rm {} \; is fine.
+'''
+reference = ["find /var/tmp/myapp -type f -name '*.log' -mtime +7 -delete", "find /var/tmp/myapp -name '*.log' -type f -mtime +7 -delete"]
+
+[[case]]
+id = "count-by-extension"
+mode = "suggest"
+input = "count how many files of each extension are in this directory recursively"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["find", "pipeline"]
+rubric = '''
+Must produce per-extension counts. Typical: find . -type f | sed -n 's/.*\.//p' | sort | uniq -c | sort -rn
+(or awk -F. with NF>1, or grep -o '\.[^./]*$').
+Wrong: counting total files only; ls-based non-recursive; extension parsing that treats directories with dots as extensions badly is minor (1).
+On macOS, GNU-only find -printf '%f' is wrong.
+'''
+
+[[case]]
+id = "empty-dirs"
+mode = "suggest"
+input = "remove all empty directories under the current folder"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["find", "destructive"]
+rubric = '''
+Correct: find . -type d -empty -delete (works on BSD and GNU find).
+Acceptable: find . -depth -type d -empty -exec rmdir {} \; or rmdir with -p variants that only remove empty dirs.
+Wrong: rm -rf on directories (removes non-empty ones), anything that deletes files.
+'''
+reference = ["find . -type d -empty -delete"]
+
+[[case]]
+id = "find-exclude-node-modules"
+mode = "suggest"
+input = "find all .js files but skip node_modules folders"
+os = ["macos"]
+difficulty = "medium"
+tags = ["find"]
+rubric = '''
+Correct: find . -path '*/node_modules' -prune -o -type f -name '*.js' -print (the -print matters, otherwise pruned dirs print too),
+or find . -name '*.js' -not -path '*/node_modules/*' (slower but correct), or fd -e js (fd skips gitignored, not strictly node_modules - accept as 1 unless tools context says fd is installed).
+Wrong: -prune without -o ... -print so node_modules paths are printed; unquoted patterns.
+'''
+
+[[case]]
+id = "largest-10-here"
+mode = "suggest"
+input = "show the 10 largest files under the current directory with human readable sizes"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["find", "du", "sort"]
+rubric = '''
+Must list files (not directories) with human-readable sizes, largest first, top 10.
+Correct: find . -type f -exec du -h {} + | sort -rh | head -n 10 (sort -h exists on macOS 13+ and GNU).
+Acceptable: du -ah . | sort -rh | head -n 10 (includes directories: 1).
+Wrong on macOS: find -printf, ls --sort=size, du --max-depth.
+'''
+
+[[case]]
+id = "files-containing-text"
+mode = "suggest"
+input = "list the files under src that contain the text TODO"
+os = ["macos"]
+difficulty = "easy"
+tags = ["grep"]
+rubric = '''
+Must list filenames only. Correct: grep -rl 'TODO' src (or grep -rl TODO src/, rg -l TODO src).
+Minor (1): printing matching lines instead of names (grep -rn).
+Wrong: missing -r; searching . instead of src.
+'''
+reference = ["grep -rl TODO src", "grep -rl 'TODO' src", "grep -rl \"TODO\" src", "grep -rl TODO src/", "grep -rl 'TODO' src/"]
+
+[[case]]
+id = "rename-lowercase"
+mode = "suggest"
+input = "rename every file in this folder to lowercase"
+os = ["macos"]
+difficulty = "hard"
+tags = ["loop", "rename"]
+rubric = '''
+macOS APFS is case-insensitive by default, so mv File file can fail or be a no-op; a two-step mv via a temp name is fully correct (2).
+A simple loop is acceptable (1) if otherwise right: for f in *; do mv -- "$f" "$(echo "$f" | tr '[:upper:]' '[:lower:]')"; done.
+zsh-specific: zmv/autoload or ${f:l} is fine for zsh.
+Wrong: `rename` (not on macOS by default), unquoted "$f" breaking on spaces is 1 at best, recursing into subdirectories unasked is minor.
+'''
+
+[[case]]
+id = "disk-usage-folders"
+mode = "suggest"
+input = "show disk usage of each folder here sorted by size"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["du", "sort"]
+rubric = '''
+Correct: du -sh */ | sort -h (or du -sh * | sort -h, du -h -d 1 | sort -h; GNU also --max-depth=1).
+On macOS, du --max-depth is wrong (BSD du uses -d). Sorting must be size-aware (sort -h), not plain sort.
+Minor (1): sorted descending is fine; including files as well as folders is fine.
+'''
+reference = ["du -sh * | sort -h", "du -sh */ | sort -h", "du -sh -- * | sort -h", "du -h -d 1 | sort -h"]

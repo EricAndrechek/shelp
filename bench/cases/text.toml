@@ -1,0 +1,105 @@
+# Text processing. sed -i is the classic BSD/GNU trap.
+
+[[case]]
+id = "sed-replace-recursive"
+mode = "suggest"
+input = "replace foo with bar in all .txt files recursively"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["sed", "find", "bsd-gnu"]
+rubric = '''
+Must edit in place, recursively, only .txt files.
+macOS (BSD sed): sed -i '' 's/foo/bar/g' (the empty suffix arg is REQUIRED; `sed -i 's/...'` fails or creates backup files named ...s/foo/bar/g).
+Linux (GNU sed): sed -i 's/foo/bar/g' ('' as a separate arg is wrong on GNU: it's treated as the script).
+Correct shapes: find . -type f -name '*.txt' -exec sed -i '' 's/foo/bar/g' {} +  (macOS)
+Wrong: non-recursive *.txt; missing /g is 1 (replaces first per line only); perl -pi -e is acceptable (2).
+'''
+
+[[case]]
+id = "count-unique-ips"
+mode = "suggest"
+input = "count requests per IP in access.log, most frequent first"
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["awk", "sort", "pipeline"]
+rubric = '''
+Assumes common/combined log format (IP is field 1).
+Correct: awk '{print $1}' access.log | sort | uniq -c | sort -rn (optionally | head).
+Wrong: uniq without sorting first; sort -r without -n (lexical); counting lines only.
+'''
+reference = ["awk '{print $1}' access.log | sort | uniq -c | sort -rn", "awk '{print $1}' access.log | sort | uniq -c | sort -nr", "cut -d' ' -f1 access.log | sort | uniq -c | sort -rn"]
+
+[[case]]
+id = "jq-extract-names"
+mode = "suggest"
+input = "print the name field of every object in the items array of data.json"
+difficulty = "easy"
+tags = ["jq", "json"]
+rubric = '''
+Correct: jq -r '.items[].name' data.json (-r optional: 1 without it only if the user clearly wanted raw text; accept both as 2).
+Wrong: .items.name (errors on arrays), grep/sed hacks (0-1), python one-liners acceptable only if correct (1).
+'''
+reference = ["jq -r '.items[].name' data.json", "jq '.items[].name' data.json", "jq -r '.items[] | .name' data.json"]
+
+[[case]]
+id = "sum-csv-column"
+mode = "suggest"
+input = "sum the third column of sales.csv, skipping the header row"
+difficulty = "medium"
+tags = ["awk", "csv"]
+rubric = '''
+Correct: awk -F, 'NR>1 {s+=$3} END {print s}' sales.csv (or tail -n +2 | cut -d, -f3 | paste -sd+ - | bc).
+Wrong: not skipping the header (NR>1), wrong separator (default whitespace), summing column 2.
+Minor (1): works but ignores quoted commas (acceptable for this task, still 2 if otherwise right).
+'''
+reference = ["awk -F, 'NR>1 {s+=$3} END {print s}' sales.csv", "awk -F',' 'NR>1 {sum+=$3} END {print sum}' sales.csv", "awk -F, 'NR>1{s+=$3}END{print s}' sales.csv"]
+
+[[case]]
+id = "lines-between-markers"
+mode = "suggest"
+input = "print the lines between BEGIN and END in notes.txt, not including the marker lines"
+difficulty = "medium"
+tags = ["sed", "awk"]
+rubric = '''
+Correct: awk '/BEGIN/{f=1;next} /END/{f=0} f' notes.txt, or sed -n '/BEGIN/,/END/{//!p;}' notes.txt (BSD sed needs the ; before }), or sed -n '/BEGIN/,/END/p' | sed '1d;$d' for a single block.
+Minor (1): includes the marker lines.
+Wrong: grep -A with a guessed count; GNU-only sed syntax that fails on macOS (e.g. missing ; before } in BSD sed) is 1 on macOS.
+'''
+
+[[case]]
+id = "dedupe-keep-order"
+mode = "suggest"
+input = "remove duplicate lines from list.txt but keep the original order"
+difficulty = "medium"
+tags = ["awk"]
+rubric = '''
+Correct: awk '!seen[$0]++' list.txt (optionally > new file).
+Wrong: sort -u / sort | uniq (loses order) = 0 because order was explicitly required; uniq alone (only adjacent) = 0.
+'''
+reference = ["awk '!seen[$0]++' list.txt", "awk '!a[$0]++' list.txt", "awk '!x[$0]++' list.txt"]
+
+[[case]]
+id = "trailing-whitespace"
+mode = "suggest"
+input = "strip trailing whitespace from every line of main.py in place"
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["sed", "bsd-gnu"]
+rubric = '''
+macOS: sed -i '' 's/[[:space:]]*$//' main.py ([[:space:]] or [ \t] are portable).
+Linux: sed -i 's/[[:space:]]*$//' main.py (\s also fine on GNU).
+Wrong on macOS: sed -i 's/...//' main.py without the '' argument: BSD sed takes the script as the backup suffix and fails = 0.
+Using \s with BSD sed is not portable = 1. Using '' on Linux = 0.
+'''
+
+[[case]]
+id = "extract-emails"
+mode = "suggest"
+input = "extract all unique email addresses from contacts.txt"
+difficulty = "medium"
+tags = ["grep", "regex"]
+rubric = '''
+Correct: grep -Eo '[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}' contacts.txt | sort -u (any reasonable email regex with -o and -E).
+macOS: grep -P is not supported by BSD grep (0).
+Minor (1): missing uniqueness (sort -u) or a regex that is too loose/strict for common emails.
+'''

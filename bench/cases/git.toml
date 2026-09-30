@@ -1,0 +1,109 @@
+# git. Mostly OS-independent; tests knowledge and safety.
+
+[[case]]
+id = "git-undo-last-commit"
+mode = "suggest"
+input = "undo my last git commit but keep the changes"
+difficulty = "easy"
+tags = ["git"]
+rubric = '''
+Correct: git reset --soft HEAD~1 (keeps changes staged) or git reset HEAD~1 / --mixed (keeps them unstaged). Both 2.
+Wrong: git reset --hard (destroys changes) = 0; git revert (makes a new commit; does not "undo" locally) = 1.
+'''
+reference = ["git reset --soft HEAD~1", "git reset --soft HEAD^", "git reset HEAD~1", "git reset HEAD^", "git reset --mixed HEAD~1"]
+
+[[case]]
+id = "git-delete-merged"
+mode = "suggest"
+input = "delete local git branches that are already merged into main"
+difficulty = "medium"
+tags = ["git", "pipeline"]
+rubric = '''
+Must list merged branches, exclude main (and the current branch, marked *), then delete with -d:
+git branch --merged main | grep -vE '^\*|^\s*main$' | xargs git branch -d (variants with grep -v main are 2 if they don't delete main/current).
+Wrong: -D (force) = 1; not excluding main/current = 0 (tries to delete main; git refuses current but -d main would succeed if on another branch); `git branch -d --merged` (invalid combo) = 0; nonsense like git branch -d main/* = 0.
+'''
+
+[[case]]
+id = "git-last-commit-files"
+mode = "suggest"
+input = "list the files changed in the last commit"
+difficulty = "easy"
+tags = ["git"]
+rubric = '''
+Correct: git show --name-only --pretty=format: HEAD, git diff --name-only HEAD~1 HEAD, git diff-tree --no-commit-id --name-only -r HEAD, git show --stat HEAD (1: extra info but answers).
+Wrong: git status (working tree), git log -1 without --name-only = 0.
+'''
+reference = ["git diff --name-only HEAD~1 HEAD", "git diff --name-only HEAD~1", "git show --name-only --pretty=format: HEAD", "git show --pretty= --name-only HEAD", "git diff-tree --no-commit-id --name-only -r HEAD", "git show --name-only --oneline HEAD"]
+
+[[case]]
+id = "git-find-deleted-file"
+mode = "suggest"
+input = "find the commit that deleted the file config/settings.yml"
+difficulty = "hard"
+tags = ["git"]
+rubric = '''
+Correct: git log --diff-filter=D -- config/settings.yml (optionally --oneline / -1), or git log --all -- config/settings.yml showing the last commit touching it.
+Wrong: git blame (file doesn't exist) = 0; grep through git log -p (1 if it works).
+'''
+reference = ["git log --diff-filter=D -- config/settings.yml", "git log --diff-filter=D --oneline -- config/settings.yml", "git log --diff-filter=D -1 -- config/settings.yml"]
+
+[[case]]
+id = "git-branches-by-recent"
+mode = "suggest"
+input = "list my git branches sorted by most recent commit"
+difficulty = "medium"
+tags = ["git"]
+rubric = '''
+Correct: git branch --sort=-committerdate (or git for-each-ref --sort=-committerdate refs/heads/ with a format).
+Minor (1): ascending order (--sort=committerdate).
+Wrong: git log --all shows commits not branches = 0.
+'''
+reference = ["git branch --sort=-committerdate", "git for-each-ref --sort=-committerdate refs/heads/"]
+
+[[case]]
+id = "git-stash-untracked"
+mode = "suggest"
+input = "stash all my changes including untracked files"
+difficulty = "easy"
+tags = ["git"]
+rubric = '''
+Correct: git stash -u / git stash push -u / --include-untracked. git stash -a (includes ignored too) = 1.
+Wrong: plain git stash = 0 (leaves untracked files).
+'''
+reference = ["git stash -u", "git stash push -u", "git stash --include-untracked", "git stash push --include-untracked"]
+
+[[case]]
+id = "git-squash-last-3"
+mode = "suggest"
+input = "squash my last 3 commits into one without an interactive editor"
+difficulty = "hard"
+tags = ["git"]
+rubric = '''
+Correct: git reset --soft HEAD~3 && git commit (with -m "..." or --edit / -C ORIG_HEAD). Must be non-interactive in spirit; opening the commit message editor is acceptable.
+Wrong: git rebase -i HEAD~3 (explicitly interactive) = 0; git merge --squash on the same branch = 0; reset --hard = 0.
+'''
+
+[[case]]
+id = "git-who-changed-line"
+mode = "suggest"
+input = "who last changed line 42 of src/app.ts"
+difficulty = "medium"
+tags = ["git"]
+rubric = '''
+Correct: git blame -L 42,42 src/app.ts (or -L 42,+1).
+Minor (1): git blame src/app.ts | sed -n 42p (works). Wrong: git log -p without line filter = 0.
+'''
+reference = ["git blame -L 42,42 src/app.ts", "git blame -L 42,+1 src/app.ts", "git blame -L42,42 src/app.ts"]
+
+[[case]]
+id = "git-biggest-history-objects"
+mode = "suggest"
+input = "find the 10 largest files ever committed to this git repo's history"
+difficulty = "hard"
+tags = ["git", "pipeline"]
+rubric = '''
+Correct shape: git rev-list --objects --all | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)' | awk '$1=="blob"' | sort -k3 -nr | head -n 10 (variants with sed/cut fine).
+Minor (1): git ls-tree -r -l HEAD | sort (only the current commit, not history).
+Wrong: du/find on the working tree (a different question) = 0; invented git subcommands = 0.
+'''

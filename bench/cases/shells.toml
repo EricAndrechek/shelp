@@ -1,0 +1,81 @@
+# Shell-syntax cases: the right answer differs between zsh/bash/fish/sh.
+
+[[case]]
+id = "rename-extension-loop"
+mode = "suggest"
+input = "rename every .jpeg file in this folder to .jpg"
+shells = ["zsh", "bash", "fish"]
+difficulty = "medium"
+tags = ["loop", "shell-syntax"]
+rubric = '''
+zsh/bash: for f in *.jpeg; do mv -- "$f" "${f%.jpeg}.jpg"; done (quotes matter; -- is a plus). zsh: zmv '(*).jpeg' '$1.jpg' only if autoload zmv included (1 otherwise).
+fish: for f in *.jpeg; mv -- $f (string replace -r '\.jpeg$' .jpg -- $f); end  (fish has no ${var%...}; bash syntax in fish = 0).
+Wrong: `rename` (not on macOS by default) = 1 at best; unquoted $f in bash/zsh = 1.
+'''
+
+[[case]]
+id = "set-env-persist"
+mode = "suggest"
+input = "set the environment variable EDITOR to nvim permanently for my shell"
+shells = ["zsh", "bash", "fish"]
+difficulty = "medium"
+tags = ["env", "shell-syntax"]
+rubric = '''
+zsh: echo 'export EDITOR=nvim' >> ~/.zshrc (or ~/.zshenv) = 2.
+bash (macOS): >> ~/.bash_profile or ~/.bashrc = 2.
+fish: set -Ux EDITOR nvim = 2 (universal, persistent); echo into config.fish with set -gx = 2.
+Wrong: export alone (not persistent) = 0; export syntax in fish = 0; writing to the wrong shell's rc (e.g. .bashrc for zsh) = 0.
+'''
+
+[[case]]
+id = "loop-lines-of-file"
+mode = "suggest"
+input = "ping each hostname listed in hosts.txt once"
+shells = ["zsh", "bash", "fish"]
+difficulty = "medium"
+tags = ["loop", "shell-syntax"]
+rubric = '''
+bash/zsh: while IFS= read -r h; do ping -c 1 "$h"; done < hosts.txt (xargs -n1 ping -c1 < hosts.txt also 2).
+fish: for h in (cat hosts.txt); ping -c 1 $h; end  (or while read -l h; ...; end < hosts.txt).
+Wrong: ping without -c (runs forever on macOS/Linux) = 0; bash syntax in fish = 0; for h in $(cat ...) in bash = 1.
+'''
+
+[[case]]
+id = "last-command-exit"
+mode = "suggest"
+input = "print the exit status of the previous command"
+shells = ["zsh", "bash", "fish"]
+difficulty = "easy"
+tags = ["shell-syntax"]
+rubric = '''
+bash/zsh: echo $?  ; fish: echo $status  ($? in fish is invalid = 0).
+'''
+reference = ["echo $?", "echo $status"]
+
+[[case]]
+id = "alias-persist"
+mode = "suggest"
+input = "make an alias gs for git status that persists"
+shells = ["zsh", "bash", "fish"]
+difficulty = "easy"
+tags = ["alias", "shell-syntax"]
+rubric = '''
+zsh: echo "alias gs='git status'" >> ~/.zshrc ; bash: >> ~/.bashrc (or .bash_profile on macOS) ;
+fish: abbr/alias saved: alias --save gs 'git status' or abbr -a gs git status in config.fish, or funcsave.
+Wrong: alias alone (not persistent) = 1; wrong rc file = 0.
+'''
+
+[[case]]
+id = "posix-portable-date"
+mode = "suggest"
+input = "print yesterday's date as YYYY-MM-DD"
+shells = ["zsh"]
+os = ["macos", "linux"]
+difficulty = "medium"
+tags = ["date", "bsd-gnu"]
+rubric = '''
+macOS (BSD date): date -v-1d +%Y-%m-%d = 2.
+Linux (GNU date): date -d yesterday +%F (or -d '1 day ago' +%Y-%m-%d) = 2.
+Wrong: date -d on macOS = 0; date -v on Linux = 0.
+'''
+reference = ["date -v-1d +%Y-%m-%d", "date -v-1d +%F", "date -d yesterday +%F", "date -d yesterday +%Y-%m-%d", "date -d '1 day ago' +%Y-%m-%d", "date -d \"1 day ago\" +%Y-%m-%d", "date -d '1 day ago' +%F"]
