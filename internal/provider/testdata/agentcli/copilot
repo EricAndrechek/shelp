@@ -2,27 +2,33 @@
 # Fake agent CLI for internal/provider/agentcli_test.go.
 #
 # Behavior is entirely controlled by env vars so the same script body works
-# for claude/gemini/codex/copilot fakes (see the sibling files, which are
-# byte-identical copies of this one):
+# for both claude/copilot fakes (see the sibling file, a byte-identical copy
+# of this one). Historically this same script also stood in for gemini/
+# codex/agy fakes (hence the now-unused "-o <path>" / codex-banner support
+# below), before those providers were dropped for not being reducible to a
+# plain completion (see agentcli.go's PURITY note); left in place since it's
+# harmless and this stays one script for both remaining fakes:
 #
 #   SHELP_FAKE_VERSION / SHELP_FAKE_VERSION_EXIT  - reply to a "--version" arg
 #   SHELP_FAKE_HELP                               - reply to a "--help" arg
 #   SHELP_FAKE_AUTH_JSON / SHELP_FAKE_AUTH_EXIT    - reply to "auth status"
 #   SHELP_FAKE_LOGIN_STATUS / SHELP_FAKE_LOGIN_EXIT - reply to "login status"
-#   SHELP_FAKE_RECORD    - path to dump cwd/stdin-byte-count/-C-dir-check/argv
-#                           to, for the main (non-identity) call. Args are
-#                           written NUL-separated after an "ARGS:\n" marker
-#                           since they may contain literal newlines
-#                           (system+prompt is joined with "\n\n").
+#   SHELP_FAKE_RECORD    - path to dump cwd/stdin-byte-count/-C-dir-check/
+#                           MAX_THINKING_TOKENS-env/argv to, for the main
+#                           (non-identity) call. Args are written
+#                           NUL-separated after an "ARGS:\n" marker since
+#                           they may contain literal newlines (system+prompt
+#                           is joined with "\n\n").
 #   SHELP_FAKE_SLEEP     - seconds to sleep (via exec, so this process IS the
 #                           sleep, no orphaned child) before doing anything
 #                           else, to simulate a hung/interactive CLI
 #   SHELP_FAKE_STDOUT    - stdout text for the main call (or, when argv has
 #                           a "-o <path>" pair, the content written to that
-#                           file instead, mimicking `codex exec -o`)
+#                           file instead -- unused by claude/copilot, kept
+#                           for the shared script body)
 #   SHELP_FAKE_STDOUT_NOISE - extra stdout text always printed to stdout,
 #                           even when "-o" redirects the "real" reply to a
-#                           file (mimics codex's banners/warnings)
+#                           file (unused by claude/copilot; see above)
 #   SHELP_FAKE_STDERR    - stderr text for the main call
 #   SHELP_FAKE_EXIT      - exit code for the main call (default 0)
 #   SHELP_FAKE_ECHO_CWD  - when set, print this process's cwd (`pwd -P`) as
@@ -90,10 +96,13 @@ if [ -n "$SHELP_FAKE_RECORD" ]; then
   if [ -n "$cdir" ]; then
     if [ -d "$cdir" ]; then cdirexists="yes"; else cdirexists="no"; fi
   fi
+  envmaxthinking="$MAX_THINKING_TOKENS"
+  if [ -z "$envmaxthinking" ]; then envmaxthinking='<unset>'; fi
   {
     echo "CWD:$(pwd -P)"
     echo "STDINBYTES:${stdinbytes:-0}"
     echo "CDIREXISTS:$cdirexists"
+    echo "ENVMAXTHINKING:$envmaxthinking"
     printf 'ARGS:\n'
     for a in "$@"; do
       printf '%s\0' "$a"

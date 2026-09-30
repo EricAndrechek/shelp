@@ -63,11 +63,14 @@ currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
 | `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI | `shelp setup shortcuts` generates and opens each `.shortcut`; click "Add Shortcut" once per shortcut (no import API exists) |
 | `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
 | `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
-| `claude:haiku`, `claude:sonnet`, `gemini:default`, `codex:default`, `copilot:default` | agent-cli | the CLI installed and logged in (`claude`, `gemini`, `codex`, `copilot`) | log in with each CLI's own command (`claude /login`, `gemini` once interactively, `codex login`, `copilot login`) |
-| `antigravity:<model>`, e.g. `antigravity:gemini-3.8-flash-low` | agent-cli | `agy` (Antigravity CLI, Google's free-tier replacement for the deprecated Gemini CLI) installed and logged in | run `agy` once interactively to sign in; available models are listed by `agy models` and cached to `~/.cache/shelp/antigravity-models.json` after a `shelp providers` |
+| `claude:haiku`, `claude:sonnet`, `copilot:default` | agent-cli | the CLI installed and logged in (`claude`, `copilot`) | log in with each CLI's own command (`claude /login`, `copilot login`) |
 
 `shelp providers` probes every registered provider and prints which are
 `ok` vs `unavailable` (and why) on this machine right now.
+
+Only `claude` and `copilot` are shipped among the AI-agent-CLI backends;
+gemini, codex, and Antigravity were evaluated and dropped -- see "Dropped
+backends" below.
 
 ## Configuration
 
@@ -131,9 +134,6 @@ models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
 
 [agentcli.copilot]
 disabled = true   # e.g. to keep it out of the default fallback chain
-
-[agentcli.antigravity]
-models = ["gemini-3.8-flash-low", "claude-sonnet-4-6"]   # pick from `agy models`
 ```
 
 ## Benchmark
@@ -167,9 +167,8 @@ _Results pending._
 
 Any provider can be rate-limited or out of quota, not just missing or
 offline -- Apple's Shortcuts "Use Model" backends, OpenAI-compatible
-endpoints (HTTP 429), and the agent CLIs (`claude`, `gemini`, `codex`,
-`copilot`, `antigravity`) all report this distinctly from a plain
-failure. When shelp
+endpoints (HTTP 429), and the agent CLIs (`claude`, `copilot`) all report
+this distinctly from a plain failure. When shelp
 sees one, it remembers: the provider ID goes into a small cooldown store
 (`$XDG_CACHE_HOME/shelp/cooldown.json`, `~/.cache/shelp/` by default) for
 30 minutes by default (the `cooldown` config key, or the backend's own
@@ -200,13 +199,69 @@ By default shelp tells the model only your OS and shell (`context =
 they leave the machine once a cloud provider is in the chain. Apple's
 on-device `fm` never sends anything off your Mac. Any cloud provider —
 Shortcuts' Apple Intelligence Pro / ChatGPT, an `[[openai.endpoint]]`, or
-one of the agent CLIs (`claude`, `gemini`, `codex`, `copilot`,
-`antigravity`, each talking to its own cloud account) — receives your
-full prompt: the task or command you gave it, plus whatever context
-fields are enabled. `agy` (the antigravity provider) additionally stores
-every conversation under `~/.gemini/antigravity-cli/` on disk regardless
-of any flags shelp passes it, so calls made through `antigravity:*` leave
-a local history there too, independent of shelp's own behavior.
+one of the agent CLIs (`claude`, `copilot`, each talking to its own cloud
+account) — receives your full prompt: the task or command you gave it,
+plus whatever context fields are enabled.
+
+## Provider purity
+
+Every provider shelp ships must behave as a single plain chat completion:
+shelp's system prompt plus one user message in, one text answer out. No
+tools, no file/project access, no memory or instructions loaded from the
+user's own config, no multi-turn agent loop, and no hidden "thinking"
+unless the user opts in (nothing does, today). `fm`, the Shortcuts
+backends, and every OpenAI-compatible endpoint are pure completions by
+construction — there's no agent harness in the way. The two agent-CLI
+backends shelp ships (`claude`, `copilot`) are full coding agents by
+default, so each one only stays in the fallback chain because there's a
+verified, flag-only way to strip every optional capability back down to
+that same one-completion shape:
+
+| provider | tools possible? | hidden input tokens (measured) | thinking/reasoning | turns |
+|---|---|---|---|---|
+| `fm`, `shortcuts:*`, `openai:*`/local servers | no (no agent harness at all) | none | none | 1 |
+| `claude:*` | no (`--tools ""`, `--strict-mcp-config`) | ~392-463 input tokens (haiku/sonnet, `--setting-sources ""`; no CLAUDE.md/memory) | none (`MAX_THINKING_TOKENS=0`; haiku otherwise burns ~318 output tokens/3.3s on hidden thinking for a trivial prompt) | 1 (`--output-format json`: `num_turns: 1`, `permission_denials: []`) |
+| `copilot:*` | best-effort only — see caveat below | not measured (no `--output-format json` input-token field) | none (`--reasoning-effort none`, verified accepted) | 1 in every run observed with the full hardened flag set |
+
+Measured live 2026-09-30 (`claude -p --model haiku/sonnet --output-format
+json` with `MAX_THINKING_TOKENS=0` and shelp's other claude flags):
+haiku — 15 output tokens, 0 thinking tokens, 392 input tokens, 520ms API
+time, `num_turns: 1`; sonnet — 13 output tokens, 0 thinking tokens, 463
+input tokens, 1038ms API time, `num_turns: 1` (sonnet doesn't think by
+default regardless, so the env var is just harmless insurance there).
+
+**Copilot caveat**: `copilot help permissions` documents `--available-tools`
+(no value) as disabling every tool, but this was verified live to be
+FALSE — the model still ran its built-in `bash` tool. shelp passes an
+explicit `--available-tools=` (one empty-string element, verified live to
+actually zero out `toolRequests`) plus `--disable-builtin-mcps` (stop it
+connecting to its built-in GitHub MCP server) plus `--deny-tool shell`
+(the actual fix for the built-in bash tool, which `--available-tools`
+doesn't gate at all — verified live: a prompt that previously triggered a
+real shell command instead gets a single clean text answer with this flag
+set). This is the most hardening currently possible through documented
+flags; it is best-effort, not a structural guarantee the way claude's
+`--tools ""` is, since a future copilot release could reintroduce a
+built-in capability not covered by any of `--available-tools`/
+`--disable-builtin-mcps`/`--deny-tool`.
+
+## Dropped backends
+
+Three agent CLIs were evaluated and deliberately left unwired, rather than
+hardened, because none of them can be reduced to a single plain completion
+through documented flags:
+
+- **Codex CLI** (`codex`) — its own agent system prompt is baked in and
+  can't be replaced (unlike claude's `--system-prompt`), and even in the
+  most restrictive sandbox it can still run read-only shell commands.
+  Reconsider if a future release adds a genuine plain-completion mode.
+- **Antigravity CLI** (`agy`) — an agent by design: it tries to run tools
+  even in `--mode plan` for anything except a trivial prompt (the
+  "auto-denied" no-output failure mode this repo used to work around), and
+  it stores every conversation under `~/.gemini/antigravity-cli/` on disk
+  regardless of what flags are passed.
+- **Gemini CLI** (`gemini`) — deprecated by Google in favor of Antigravity;
+  not worth hardening a tool its own vendor is retiring.
 
 ## Caveats
 
@@ -217,9 +272,9 @@ a local history there too, independent of shelp's own behavior.
   click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
   and signs the shortcut and opens it for you, but can't click through
   the import dialog itself — there's no API for that.
-- The `claude`/`gemini`/`codex`/`copilot`/`antigravity` agent-cli providers
-  spend your account's usage quota on every call, same as using that CLI
-  directly (a paid subscription for claude/codex/copilot, a free-tier
-  daily quota for gemini/antigravity), and are noticeably slower than the
-  other backends: about 2-8s per call (they're full coding agents starting
-  up in headless mode, not a lightweight API request).
+- The `claude`/`copilot` agent-cli providers spend your account's usage
+  quota on every call, same as using that CLI directly (a paid
+  subscription for both), and are noticeably slower than the other
+  backends: about 1-3s per call even hardened down to a plain completion
+  (they're full coding agents starting up in headless mode, not a
+  lightweight API request).
