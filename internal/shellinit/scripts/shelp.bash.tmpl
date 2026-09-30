@@ -1,0 +1,100 @@
+# shelp shell integration for bash. Load with:  eval "$(shelp init bash)"
+# `shelp <task>` shows an editable "run>" prompt prefilled with the
+# suggested command: Enter runs it, Ctrl-C abandons. It is also pushed to
+# history so up-arrow recalls it. Non-interactive: just prints the command.
+_shelp_suggest_flow() {
+  local cmd
+  cmd=$(SHELP_SHELL=bash command shelp suggest "$@") || return
+  [ -n "$cmd" ] || return 1
+  if [ -t 0 ]; then
+    history -s "$cmd" 2>/dev/null
+    if read -r -e -p "run> " -i "$cmd" cmd && [ -n "$cmd" ]; then
+      history -s "$cmd" 2>/dev/null
+      eval "$cmd"
+    fi
+  else
+    printf '%s\n' "$cmd"
+  fi
+}
+
+shelp() {
+  case "${1-}" in
+    ''|-h|--help|help|explain|-e|init|setup|providers|version|--version)
+      SHELP_SHELL=bash command shelp "$@" ;;
+    suggest)
+      # Reached by raw line mode below, which rewrites the typed line to
+      # `shelp suggest -- <task>`: same editable "run>" flow as the
+      # classic `shelp <task>` (unquoted) path, just with "suggest"
+      # already consumed.
+      shift
+      _shelp_suggest_flow "$@" ;;
+    *)
+      _shelp_suggest_flow "$@" ;;
+  esac
+}
+
+# Widget: turn the text on the command line into a command in place.
+# Bind it yourself, e.g.:  bind -x '"\C-g": shelp-widget'
+shelp-widget() {
+  [ -n "$READLINE_LINE" ] || return
+  local cmd
+  cmd=$(SHELP_SHELL=bash command shelp suggest -- "$READLINE_LINE" 2>/dev/null) || return
+  [ -n "$cmd" ] && READLINE_LINE=$cmd && READLINE_POINT=${#cmd}
+}
+
+{{if .LineMode}}
+# `bind` warns ("line editing not enabled") and is a no-op in a
+# non-interactive shell, so every binding below is guarded.
+case $- in
+  *i*)
+    # Raw line mode: pressing Enter or Ctrl-J on a line whose first word
+    # is `shelp` rewrites the line to `shelp suggest -- <task>` / `shelp
+    # explain -- <cmd>`, quoting the rest with `printf %q` so it reaches
+    # shelp byte-for-byte -- no word-splitting, glob expansion, or quote
+    # trouble. `shelp providers`, `shelp -p ... task`, and every other
+    # subcommand/flag form still runs normally. Opt out with `shelp init
+    # bash --no-line-mode` or config `[shell] line_mode = false`.
+    #
+    # `bind -x` can edit the line but can't submit it, so this uses an
+    # unused key sequence, \C-x\C-_, to run the rewrite (__shelp_preaccept
+    # below) and a private alias, \C-x\C-], bound directly to the real
+    # `accept-line` readline function, to submit it; \C-m (Enter) and
+    # \C-j are bound to a macro that replays both in order. bash's own
+    # history never records the line that's actually submitted this way
+    # (only an explicit `history -s` does), so __shelp_preaccept pushes
+    # the line as typed before rewriting READLINE_LINE.
+    __shelp_preaccept() {
+      local line=$READLINE_LINE
+      case $line in
+        shelp[[:space:]]*) ;;
+        *) return 0 ;;
+      esac
+      local rest=${line#shelp}
+      rest=${rest#"${rest%%[^[:space:]]*}"}
+      local word1=${rest%%[[:space:]]*}
+      case $word1 in
+        '') return 0 ;;
+        explain | -e)
+          local tail=${rest#"$word1"}
+          tail=${tail#"${tail%%[^[:space:]]*}"}
+          [ -n "$tail" ] || return 0
+          history -s -- "$line" 2>/dev/null
+          READLINE_LINE="shelp explain -- $(printf '%q' "$tail")"
+          READLINE_POINT=${#READLINE_LINE}
+          ;;
+        -* | providers | setup | init | version | help)
+          return 0 ;;
+        *)
+          history -s -- "$line" 2>/dev/null
+          READLINE_LINE="shelp suggest -- $(printf '%q' "$rest")"
+          READLINE_POINT=${#READLINE_LINE}
+          ;;
+      esac
+    }
+    bind -x '"\C-x\C-_": __shelp_preaccept'
+    bind '"\C-x\C-]": accept-line'
+    bind '"\C-m": "\C-x\C-_\C-x\C-]"'
+    bind '"\C-j": "\C-x\C-_\C-x\C-]"'
+    ;;
+esac
+{{end}}

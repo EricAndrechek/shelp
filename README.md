@@ -10,8 +10,8 @@ one backend is offline, unlicensed, or rate-limited. It's the successor to
 the `ghcs`/`ghce` shell functions some of us grew up with.
 
 ```console
-$ shelp find all files over 100MB in my home dir
-find ~ -type f -size +100M
+$ shelp what's my ip and is it behind a NAT
+dig +short myip.opendns.com @resolver1.opendns.com
 
 $ shelp explain 'lsof -nP -iTCP:8080 -sTCP:LISTEN'
 Lists processes with a listening TCP socket on port 8080; -n and -P skip
@@ -60,10 +60,27 @@ $ shelp providers --reset-cooldowns                     # clear recorded rate-li
 $ shelp setup shortcuts                                 # install the Apple Shortcuts this needs
 ```
 
-In zsh the integration runs `shelp` under `noglob`, so `shelp delete all
-*.log files` reaches the model as typed. bash and fish expand globs before
-any function sees them: quote tasks there that contain `*`, `?` or `[`, and
-in any shell quote tasks containing an apostrophe (`shelp "what's my ip"`).
+**Raw line mode (default on).** Once hooked into your shell, pressing
+Enter on a line that starts with `shelp ` (a task, or a `shelp
+explain`/`shelp -e` target — not a flag or one of `providers setup init
+version help`) sends the REST OF THE LINE to shelp byte-for-byte: no
+shell parsing, so an apostrophe (`shelp what's my ip`), a `*.log` glob, a
+literal `$HOME`, spaces, quotes, and backslashes all reach the model
+exactly as typed — the line is never left dangling on an open quote. The
+suggested command replaces the line in place (cursor at the end, not
+executed — press Enter again to run it) and the line you actually typed
+is added to history; explaining streams the answer below the prompt and
+returns you to an empty line. Everything else — `shelp providers`, `shelp
+-p fm task`, and running `shelp task` from a script or `zsh -c` — behaves
+exactly as before.
+
+Turn raw line mode off with `shelp init <shell> --no-line-mode` or config
+`[shell] line_mode = false`. With it off (or when it doesn't apply), the
+task goes through normal shell parsing: in zsh the integration still runs
+`shelp` under `noglob`, so `shelp delete all *.log files` reaches the
+model as typed; bash and fish expand globs before any function sees them,
+so quote tasks there that contain `*`, `?` or `[`, and in any shell quote
+tasks containing an apostrophe (`shelp "what's my ip"`).
 
 Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
 config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
@@ -151,6 +168,11 @@ install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` creates
 # it's installed.
 [agentcli.claude]
 models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
+
+# Shell integration `shelp init` renders. Read at every shell start, so
+# keep it fast -- it's just a config read.
+[shell]
+line_mode = true      # raw-line Enter interception; default true
 ```
 
 ## Benchmark

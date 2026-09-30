@@ -2,7 +2,11 @@
 //
 // A binary cannot put text on its parent shell's command line, so the
 // integration wraps `shelp` in a shell function that does (zsh: print -z,
-// bash: read -e -i, fish: a widget), in the style of zoxide/starship.
+// bash: read -e -i, fish: commandline -r), in the style of zoxide/
+// starship. It also, by default, rebinds Enter itself so a line starting
+// with `shelp ` reaches shelp byte-for-byte instead of being parsed by
+// the shell first (see Options.LineMode and each scripts/*.tmpl file for
+// the per-shell mechanism).
 package shellinit
 
 import (
@@ -10,18 +14,49 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"text/template"
 )
 
-//go:embed scripts/*
+//go:embed scripts/*.tmpl
 var scripts embed.FS
 
-// Script returns the integration for shell ("zsh", "bash", "fish").
-func Script(shell string) (string, error) {
-	b, err := scripts.ReadFile("scripts/shelp." + shell)
+// Options controls what `shelp init` renders.
+type Options struct {
+	// LineMode turns on the raw-line Enter interception. Callers default
+	// this to true themselves (see cmd/shelp/main.go's runInit) so that
+	// Script, used by tests and the Homebrew formula, can default it too.
+	LineMode bool
+}
+
+// view is what each template sees.
+type view struct {
+	LineMode bool
+}
+
+// Render renders shell's integration script under opts.
+func Render(shell string, opts Options) (string, error) {
+	shell = strings.ToLower(strings.TrimSpace(shell))
+	data, err := scripts.ReadFile("scripts/shelp." + shell + ".tmpl")
 	if err != nil {
 		return "", fmt.Errorf("no shell integration for %q (have: %s)", shell, strings.Join(Shells(), ", "))
 	}
-	return string(b), nil
+	t, err := template.New(shell).Parse(string(data))
+	if err != nil {
+		return "", fmt.Errorf("shellinit: parse %s template: %w", shell, err)
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, view{LineMode: opts.LineMode}); err != nil {
+		return "", fmt.Errorf("shellinit: render %s template: %w", shell, err)
+	}
+	return buf.String(), nil
+}
+
+// Script renders shell's integration with the defaults: raw line mode on.
+// Equivalent to Render(shell, Options{LineMode: true}). Kept for callers
+// (tests, the Homebrew formula's `brew test`) that just want the default
+// script.
+func Script(shell string) (string, error) {
+	return Render(shell, Options{LineMode: true})
 }
 
 // Shells lists supported shells.
@@ -29,7 +64,8 @@ func Shells() []string {
 	ents, _ := scripts.ReadDir("scripts")
 	var out []string
 	for _, e := range ents {
-		out = append(out, strings.TrimPrefix(e.Name(), "shelp."))
+		name := strings.TrimSuffix(e.Name(), ".tmpl")
+		out = append(out, strings.TrimPrefix(name, "shelp."))
 	}
 	sort.Strings(out)
 	return out

@@ -1,0 +1,131 @@
+# shelp shell integration for zsh. Load with:  eval "$(shelp init zsh)"
+# `shelp <task>` puts the suggested command on your next prompt line
+# (print -z), ready to edit or run. Other subcommands pass straight through.
+shelp() {
+  case "${1-}" in
+    ''|-h|--help|help|explain|-e|init|setup|providers|version|--version)
+      SHELP_SHELL=zsh command shelp "$@" ;;
+    *)
+      local cmd
+      cmd=$(SHELP_SHELL=zsh command shelp suggest "$@") || return
+      [[ -n $cmd ]] && print -z -- "$cmd" ;;
+  esac
+}
+
+# Don't glob the task: `shelp find all *.log files` should reach shelp as
+# typed, not fail with "no matches found" (or expand to filenames) first.
+# (Raw line mode below bypasses this path entirely for a bare `shelp
+# <task>` at the prompt; noglob still matters for `shelp task` run from a
+# script, a keybinding, or `zsh -c`.)
+alias shelp='noglob shelp'
+
+# Widget: turn the text on the command line into a command in place.
+# Bind it yourself, e.g.:  bindkey '^G' shelp-widget
+shelp-widget() {
+  [[ -z $BUFFER ]] && return
+  local cmd
+  zle -I
+  print -rn -- $'\e[2m…\e[0m' >&2
+  cmd=$(SHELP_SHELL=zsh command shelp suggest -- "$BUFFER" 2>/dev/null)
+  print -rn -- $'\r\e[K' >&2
+  [[ -n $cmd ]] && BUFFER=$cmd && CURSOR=${#BUFFER}
+  zle reset-prompt
+}
+zle -N shelp-widget
+
+{{if .LineMode}}
+# Raw line mode: pressing Enter on a line whose first word is `shelp`
+# sends the REST OF THE LINE to shelp byte-for-byte -- no shell parsing,
+# so apostrophes, spaces, `$vars` and globs all reach the model exactly as
+# typed. `shelp providers`, `shelp -p ... task`, and every other
+# subcommand/flag form still runs normally. Opt out with `shelp init zsh
+# --no-line-mode` or config `[shell] line_mode = false`.
+_shelp_raw_dispatch() {
+  # $1: mode (suggest|explain); $2: original typed line (for history);
+  # $3: raw payload, byte-for-byte.
+  emulate -L zsh
+  local kind=$1 orig=$2 body=$3 cmd rc errfile
+  if [[ $kind == explain ]]; then
+    zle -I
+    command shelp explain --shell zsh -- "$body"
+    rc=$?
+    print
+    if (( rc == 0 )); then
+      print -s -- "$orig"
+      BUFFER=''
+      CURSOR=0
+    else
+      BUFFER=$orig
+      CURSOR=${#BUFFER}
+    fi
+    zle reset-prompt
+    return
+  fi
+  errfile=$(mktemp "${TMPDIR:-/tmp}/shelp-line.XXXXXX" 2>/dev/null) || errfile=/dev/null
+  zle -M $'\e[2mshelp: thinking…\e[0m'
+  cmd=$(command shelp suggest --shell zsh -- "$body" 2>"$errfile")
+  rc=$?
+  if (( rc == 0 )) && [[ -n $cmd ]]; then
+    print -s -- "$orig"
+    BUFFER=$cmd
+    CURSOR=${#BUFFER}
+    zle -M ''
+  else
+    BUFFER=$orig
+    CURSOR=${#BUFFER}
+    if [[ -s $errfile ]]; then
+      zle -M "shelp: $(<$errfile)"
+    else
+      zle -M ''
+    fi
+  fi
+  command rm -f "$errfile" 2>/dev/null
+  zle reset-prompt
+}
+
+shelp-accept-line() {
+  emulate -L zsh
+  local raw=$BUFFER
+  # Trim leading whitespace before checking the first word, so an
+  # indented/pasted line is still recognized.
+  local trimmed=${raw#"${raw%%[^[:space:]]*}"}
+  case $trimmed in
+    (shelp[[:space:]]*)
+      local rest=${trimmed#shelp}
+      rest=${rest#"${rest%%[^[:space:]]*}"}
+      local word1=${rest%%[[:space:]]*}
+      case $word1 in
+        '')
+          zle accept-line ;;
+        explain|-e)
+          local tail=${rest#"$word1"}
+          tail=${tail#"${tail%%[^[:space:]]*}"}
+          if [[ -z $tail ]]; then
+            zle accept-line
+          else
+            _shelp_raw_dispatch explain "$raw" "$tail"
+          fi ;;
+        -*|providers|setup|init|version|help)
+          zle accept-line ;;
+        *)
+          _shelp_raw_dispatch suggest "$raw" "$rest" ;;
+      esac
+      ;;
+    (*)
+      zle accept-line
+      ;;
+  esac
+}
+zle -N shelp-accept-line
+# Bind on top of accept-line for every keymap shelp might be used from;
+# non-shelp lines fall through to `zle accept-line`, so a wrapped
+# accept-line from another plugin (zsh-autosuggestions,
+# zsh-syntax-highlighting, powerlevel10k, ...) keeps working -- load this
+# after such plugins for best results.
+bindkey -M emacs '^M' shelp-accept-line
+bindkey -M emacs '^J' shelp-accept-line
+bindkey -M viins '^M' shelp-accept-line
+bindkey -M viins '^J' shelp-accept-line
+bindkey -M vicmd '^M' shelp-accept-line
+bindkey -M vicmd '^J' shelp-accept-line
+{{end}}

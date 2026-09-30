@@ -1,0 +1,112 @@
+# shelp shell integration for fish. Load with:  shelp init fish | source
+# fish cannot pre-fill the next prompt from a function, so `shelp <task>`
+# prints the command; the widget replaces the command line in place.
+function shelp
+    switch "$argv[1]"
+        case '' -h --help help explain -e init setup providers version --version
+            SHELP_SHELL=fish command shelp $argv
+        case '*'
+            SHELP_SHELL=fish command shelp suggest $argv
+    end
+end
+
+# Widget: turn the text on the command line into a command in place.
+# Bind it yourself, e.g.:  bind \cg shelp-widget
+function shelp-widget
+    set -l line (commandline)
+    test -n "$line"; or return
+    set -l cmd (SHELP_SHELL=fish command shelp suggest -- "$line" 2>/dev/null | string collect)
+    test -n "$cmd"; and commandline -r -- $cmd
+    commandline -f repaint
+end
+
+{{if .LineMode}}
+# Raw line mode: pressing Enter on a line whose first word is `shelp`
+# sends the REST OF THE LINE to shelp byte-for-byte -- no shell parsing,
+# so apostrophes, spaces, `$vars` and globs all reach the model exactly as
+# typed. `shelp providers`, `shelp -p ... task`, and every other
+# subcommand/flag form still runs normally. Opt out with `shelp init fish
+# --no-line-mode` or config `[shell] line_mode = false`.
+function _shelp_history_add
+    # fish has no `history add`: search/delete/merge/save/clear are the
+    # only sub-commands. The documented way to inject an entry without
+    # running it is to append to fish's own history file in its (simple
+    # YAML) format and `history merge` it into the live session -- see
+    # MERGE NOTES for how this was verified against fish 3.6/3.7.
+    set -l line $argv[1]
+    set -l dir (set -q XDG_DATA_HOME[1]; and echo $XDG_DATA_HOME/fish; or echo $HOME/.local/share/fish)
+    command mkdir -p $dir 2>/dev/null
+    set -l esc (string replace -a '\\' '\\\\' -- $line)
+    printf '%s\n' "- cmd: $esc" "  when: "(command date +%s) >>$dir/fish_history 2>/dev/null
+    builtin history merge
+end
+
+function _shelp_raw_dispatch
+    # $argv[1]: mode (suggest|explain); $argv[2]: original typed line (for
+    # history); $argv[3]: raw payload, byte-for-byte.
+    set -l kind $argv[1]
+    set -l orig $argv[2]
+    set -l body $argv[3]
+
+    if test "$kind" = explain
+        echo
+        command shelp explain --shell fish -- $body
+        set -l rc $status
+        echo
+        if test $rc -eq 0
+            _shelp_history_add $orig
+            commandline -r -- ''
+        else
+            commandline -r -- $orig
+        end
+        commandline -f repaint
+        return
+    end
+
+    printf '\e[2m…\e[0m' >&2
+    set -l errfile (mktemp 2>/dev/null; or echo /tmp/shelp-fish-err.$fish_pid)
+    set -l cmd (command shelp suggest --shell fish -- $body 2>$errfile)
+    set -l rc $status
+    printf '\r\e[K' >&2
+    if test $rc -eq 0 -a -n "$cmd"
+        _shelp_history_add $orig
+        commandline -r -- $cmd
+    else
+        commandline -r -- $orig
+        if test -s $errfile
+            cat $errfile >&2
+        end
+    end
+    command rm -f $errfile
+    commandline -f repaint
+end
+
+function _shelp_on_enter
+    set -l line (commandline)
+    if not string match -rq '^shelp\s' -- $line
+        commandline -f execute
+        return
+    end
+    set -l rest (string replace -r '^shelp\s+' '' -- $line)
+    set -l word1 (string replace -r '^(\S*).*' '$1' -- $rest)
+    switch $word1
+        case ''
+            commandline -f execute
+        case explain -e
+            set -l tail (string replace -r '^'"$word1"'\s+' '' -- $rest)
+            if test -z "$tail"
+                commandline -f execute
+            else
+                _shelp_raw_dispatch explain "$line" "$tail"
+            end
+        case '-*' providers setup init version help
+            commandline -f execute
+        case '*'
+            _shelp_raw_dispatch suggest "$line" "$rest"
+    end
+end
+bind \r _shelp_on_enter
+bind \n _shelp_on_enter
+bind -M insert \r _shelp_on_enter
+bind -M insert \n _shelp_on_enter
+{{end}}

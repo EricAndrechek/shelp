@@ -35,7 +35,8 @@ Usage:
   shelp providers [--json] [--all]     list model providers and whether they work
   shelp providers --reset-cooldowns    clear all recorded rate-limit cooldowns
   shelp setup [shortcuts]              install optional pieces (Apple Shortcuts)
-  shelp init <zsh|bash|fish>           print shell integration; add to your rc:
+  shelp init <zsh|bash|fish> [--no-line-mode]
+                                        print shell integration; add to your rc:
                                          eval "$(shelp init zsh)"
   shelp version
 
@@ -48,6 +49,10 @@ Flags (suggest/explain):
   --json               print {"text","provider","latency_ms"} instead of text
   -v, --verbose        report provider and latency on stderr
   --force              call a provider even if it's in a rate-limit cooldown
+
+Flags (init):
+  --no-line-mode       disable raw-line Enter interception (default: on);
+                       also config "[shell] line_mode = false"
 `
 
 func main() {
@@ -78,15 +83,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, "shelp", version)
 		return nil
 	case "init":
-		if len(args) != 2 {
-			return usageError{fmt.Errorf("usage: shelp init <%s>", strings.Join(shellinit.Shells(), "|"))}
-		}
-		s, err := shellinit.Script(args[1])
-		if err != nil {
-			return err
-		}
-		fmt.Fprint(stdout, s)
-		return nil
+		return runInit(args[1:], stdout, stderr)
 	case "providers":
 		return runProviders(ctx, args[1:], stdout)
 	case "setup":
@@ -101,6 +98,47 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 }
 
 func loadConfig() (*config.Config, error) { return config.Load(config.Path()) }
+
+// runInit handles `shelp init <shell> [--no-line-mode]`. It runs at every
+// shell start (via `eval "$(shelp init zsh)"`), so it stays cheap: a
+// config read (file I/O only, no probing) and a template render.
+func runInit(args []string, stdout, stderr io.Writer) error {
+	usage := fmt.Sprintf("usage: shelp init <%s> [--no-line-mode]", strings.Join(shellinit.Shells(), "|"))
+	var shellName string
+	var noLineMode bool
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--no-line-mode":
+			noLineMode = true
+		case a == "-h" || a == "--help":
+			fmt.Fprintln(stdout, usage)
+			return nil
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) != 1 {
+		return usageError{errors.New(usage)}
+	}
+	shellName = pos[0]
+
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	var shCfg shellinit.Config
+	_ = cfg.Section("shell", &shCfg) // malformed config: fall back to defaults
+
+	opts := shellinit.Options{LineMode: shCfg.LineModeEnabled(noLineMode)}
+	s, err := shellinit.Render(shellName, opts)
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(stdout, s)
+	return nil
+}
 
 func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(string(mode), flag.ContinueOnError)
