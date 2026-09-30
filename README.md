@@ -415,6 +415,18 @@ through documented flags:
   click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
   and signs the shortcut and opens it for you, but can't click through
   the import dialog itself — there's no API for that.
+- **Updating an installed shortcut**: when shelp changes the shortcut it
+  generates (a new `ShortcutFormatVersion`), an already-installed one
+  doesn't update itself. shelp notices on its own — `shelp providers`
+  shows an outdated shortcut as available but with a note (`outdated
+  shortcut (format v1, current v2): run \`shelp setup shortcuts\` to
+  update`), and a normal `shelp` call prints a one-line stderr hint the
+  first time it runs after a new shelp version if any shortcut it'd use
+  is outdated — so just re-run `shelp setup shortcuts`: it regenerates
+  and reopens each outdated shortcut for you, same as a fresh install,
+  except this time click **"Replace"** instead of "Add Shortcut" when
+  Shortcuts asks. (After a `brew upgrade shelp`, this is the same command
+  to reach for — see the Formula's caveats.)
 - The `claude` agent-cli provider spends your account's usage quota on
   every call, same as using the CLI directly (a paid subscription), and is
   noticeably slower than the other backends: about 1-2s per call even

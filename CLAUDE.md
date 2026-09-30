@@ -161,6 +161,97 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
 - PCC has an unpublished daily cap (higher with iCloud+).
 
+#### Shortcut format versions, update detection, and the update flow
+
+- `ShortcutFormatVersion` (Go const in `shortcutgen.go`) is the current
+  generated shortcut's plist format: **1** was the original, marker-less,
+  2-action (Use Model + Stop and Output) shape above; **2** (current) adds
+  a leading version-marker `If` block ahead of it: "If Shortcut Input is
+  `__shelp_shortcut_version__`, Stop and Output the text `shelp-shortcut
+  2` (no model call); Otherwise, `<the v1 pair above>`; End If" -- 6
+  actions total (`currentShortcutActionCount()` computes this from the
+  real generator rather than hardcoding it). This lets shelp ask an
+  already-installed shortcut what format it is without ever risking a
+  real model call to find out.
+- The `is.workflow.actions.conditional` action (`If`/`Otherwise`/`End If`)
+  repeats the same action identifier three times, sharing one
+  `GroupingIdentifier` (a fresh UUID) and varying only
+  `WFControlFlowMode`: `0` = If (opens the group), `1` = Otherwise (branch
+  boundary), `2` = End If (closes it, and is the only one of the three
+  that also carries its own `UUID`). Only the `If` entry sets
+  `WFCondition`/`WFConditionalActionString`/`WFInput`. `WFCondition: 4` is
+  "Is" (equals) on text; `WFConditionalActionString` holds the literal
+  comparison value; `WFInput` references Shortcut Input the same way
+  `WFFile`/`WFURLActionURL` reference a value elsewhere in Shortcuts --
+  `{"WFSerializationType":"WFTextTokenAttachment","Value":{"Type":"ExtensionInput"}}`
+  -- distinct from `WFLLMPrompt`/`WFOutput`'s `WFTextTokenString` shape
+  (a string with a U+FFFC placeholder + `attachmentsByRange`), since
+  `WFInput` references the value directly rather than interpolating it
+  into text.
+  **No macOS 27 `Gallery.bundle/*.wflow` contains a conditional action**
+  (`Haiku`/`ActionItems`/`SummarizePDF`/`MorningReport`/
+  `GetStartedWithModels`/`LeftoverRecipes`/`DocumentReview` -- none of
+  them use `is.workflow.actions.conditional`), so this shape was verified
+  two other ways instead: (1) `DocumentReview.wflow`'s real, on-disk
+  `is.workflow.actions.repeat.count`/`.choosefrommenu` actions confirm the
+  general `WFControlFlowMode` 0/1/2 + shared `GroupingIdentifier` +
+  UUID-only-on-the-closing-action scaffold every control-flow action
+  uses; (2) `github.com/electrikmilk/cherri`, a real, actively maintained
+  Shortcuts compiler, whose `shortcutgen.go` (`makeConditionalAction`)
+  builds exactly this shape for `is.workflow.actions.conditional`, and
+  whose `shortcut.go` `conditions` map gives `WFCondition` code `4` for
+  `Is`. The direct system-binary route (extracting `WorkflowKit` from the
+  dyld shared cache, as CLAUDE.md's askllm enum values above were gotten)
+  was not available in the environment this was written in.
+- **Detection** (`shortcuts.go`): Shortcuts Events' AppleScript dictionary
+  exposes each shortcut's action count -- read-only, never runs the
+  shortcut:
+  ```
+  osascript -e 'tell application "Shortcuts Events" to get action count of shortcut "Ask AI"'
+  ```
+  verified live (~150-170ms; a nonexistent name exits 1 with "Can't get
+  shortcut ... (-1728)" on stderr). A v1 shortcut has exactly 2 actions;
+  `Detect` compares an installed shortcut's count against
+  `currentShortcutActionCount()` (6) and, on a mismatch, still reports the
+  provider `Available: true` (it still works) with a `Reason` like
+  `outdated shortcut (format v1, current v2): run \`shelp setup
+  shortcuts\` to update`, which `shelp providers` now shows appended to
+  an "ok" row's description (it previously only ever printed
+  `Description` for an available provider, dropping `Detect`'s `Reason`
+  entirely). An action-count check that itself fails (Shortcuts Events
+  unavailable, transient) is never treated as outdated.
+- **Update flow** (`shelp setup shortcuts`): each variant in the install
+  list -- now also including any `shortcutVariants` entry that's already
+  installed even if not named in `[shortcuts].install`/
+  `$SHELP_SHORTCUTS`, so an upgrade run covers everything the user
+  already has -- is one of three states: *missing* (generate, sign, open,
+  user clicks "Add Shortcut", poll `shortcuts list` for the name, as
+  before); *outdated* (regenerate, sign, open -- user clicks **"Replace"**
+  this time, since a shortcut of that name already exists; then poll the
+  *action count* via the same AppleScript query until it matches the
+  current generator's, with a timeout, since the name doesn't change so
+  presence alone can't tell an accepted replace from a declined one);
+  *current* (skip with a message). **The "Replace" button/dialog behavior
+  is unverified without a human actually doing it** -- see the shortcut-
+  update branch's MERGE NOTES.
+- **Runtime hint**: a normal `shelp suggest`/`explain` call whose resolved
+  provider chain names a `shortcuts:*` provider runs a best-effort,
+  once-per-shelp-binary-version check (`provider.CheckShortcutsFreshness`,
+  wired into `cmd/shelp/main.go` via `defer` right after the real
+  `provider.Chain` call succeeds, so it only ever runs after the answer
+  is already printed and never delays or fails the real command) and
+  prints one line to stderr if any installed shelp shortcut turns out to
+  be outdated:
+  ```
+  shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them
+  ```
+  Recorded in `$XDG_CACHE_HOME/shelp/shortcut-check.json`
+  (`~/.cache/shelp/...` by default, alongside `cooldown.json`) so it only
+  ever runs once per binary version. This is what a `brew upgrade shelp`
+  caveat points at (see `Formula/shelp.rb`) -- it's the mechanism that
+  actually tells a user their Shortcuts wrapper needs updating, since
+  Homebrew itself has no way to.
+
 ### agentcli (claude headless CLI)
 
 **PURITY.** Every provider shelp ships must behave as a single plain chat

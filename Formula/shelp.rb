@@ -34,6 +34,11 @@ class Shelp < Formula
       Optional one-time setup:
         shelp setup shortcuts   # Apple Intelligence Pro via Shortcuts (click "Add Shortcut")
         sudo fm license         # Apple's on-device model (macOS 27+)
+
+      After `brew upgrade shelp`, an already-installed Shortcuts wrapper
+      can be outdated (shelp will hint at this itself on its next normal
+      run) -- re-run `shelp setup shortcuts` to update it (click "Replace"
+      when Shortcuts asks).
     EOS
   end
 
