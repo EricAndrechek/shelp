@@ -338,9 +338,21 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 	return p.spec.parse(p.id, res, outFile)
 }
 
-// unavailableMsg picks the short reason to report: stderr's first line,
-// falling back to stdout's, both ANSI-stripped.
+// unavailableMsg picks the short reason to report: the last line starting
+// with "ERROR:" (any case) in stderr, then stdout; else stderr's first line,
+// falling back to stdout's, all ANSI-stripped. The ERROR: preference matters
+// for codex, whose first stderr line is "Reading additional input from
+// stdin..." while the real reason ("ERROR: You've hit your usage limit...")
+// comes later; the rate-limit check only sees what this returns.
 func unavailableMsg(res CmdResult) string {
+	for _, out := range []string{res.Stderr, res.Stdout} {
+		lines := strings.Split(stripANSI(out), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if l := strings.TrimSpace(lines[i]); strings.HasPrefix(strings.ToUpper(l), "ERROR:") {
+				return l
+			}
+		}
+	}
 	msg := FirstLine(stripANSI(res.Stderr))
 	if msg == "" {
 		msg = FirstLine(stripANSI(res.Stdout))

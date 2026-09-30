@@ -1244,3 +1244,22 @@ func TestDescription_NoDoubleCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestUnavailableMsg_PrefersErrorLine(t *testing.T) {
+	// Real codex output after its ChatGPT-plan usage limit (2026-09-30).
+	res := CmdResult{ExitCode: 1, Stderr: "Reading additional input from stdin...\n" +
+		"2026-09-30T13:28:42Z ERROR rmcp::transport::worker: worker quit with fatal\n" +
+		"ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex, or try again at Oct 30th, 2026 8:27 AM.\n"}
+	got := unavailableMsg(res)
+	if !strings.HasPrefix(got, "ERROR: You've hit your usage limit") {
+		t.Fatalf("unavailableMsg = %q", got)
+	}
+	_, err := codexParse("codex:default", res, "/nonexistent")
+	var rl *RateLimitedError
+	if !errors.As(err, &rl) {
+		t.Fatalf("codexParse err = %v, want *RateLimitedError", err)
+	}
+	if m := unavailableMsg(CmdResult{Stderr: "plain failure\nmore"}); m != "plain failure" {
+		t.Fatalf("fallback = %q", m)
+	}
+}
