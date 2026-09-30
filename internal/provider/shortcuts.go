@@ -211,8 +211,9 @@ func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, 
 	// itself "succeeds" and its output IS the error text (observed
 	// verbatim: "Error: You have reached the usage limit for this model.
 	// Please try again later."), not a non-zero exit -- so this check runs
-	// unconditionally, before and independent of ExitCode.
-	if reason, ok := shortcutsRateLimitReason(res.Stdout, res.Stderr); ok {
+	// before and independent of the ExitCode != 0 branch below, but is
+	// itself narrower on exit 0 (see shortcutsRateLimitReason).
+	if reason, ok := shortcutsRateLimitReason(res.ExitCode, res.Stdout, res.Stderr); ok {
 		return "", RateLimited(p.ID(), 0, "%s", reason)
 	}
 	if res.ExitCode != 0 {
@@ -244,19 +245,35 @@ func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, 
 // every subsequent trial/call. Matching is case-insensitive.
 var shortcutsRateLimitPhrases = []string{"usage limit", "try again later"}
 
-// shortcutsRateLimitReason reports whether stdout/stderr contain a known
-// rate-limit phrase (see shortcutsRateLimitPhrases) and, if so, a short
-// human-readable reason for it: the first non-empty line of whichever
-// stream matched, falling back to a generic "usage limit" if somehow both
-// are blank.
-func shortcutsRateLimitReason(stdout, stderr string) (string, bool) {
-	low := strings.ToLower(stdout + "\n" + stderr)
+// shortcutsRateLimitReason reports whether a completed "shortcuts run"
+// call was rejected for being over its usage limit, and if so, a short
+// human-readable reason for it. A rate-limited run typically still exits
+// 0 (see Generate), so this checks two distinct shapes rather than a
+// blanket substring search over stdout+stderr regardless of exit code --
+// a plain substring match on exit 0 would misfire on a perfectly good
+// suggest/explain answer that happens to legitimately contain the phrase
+// "try again later" (e.g. explaining a retry loop):
+//
+//   - exitCode != 0 and stdout or stderr contains any shortcutsRateLimitPhrases
+//     entry ("usage limit" or "try again later").
+//   - exitCode == 0 and the trimmed stdout starts with "Error:" and
+//     contains "usage limit" -- narrower than (a): "try again later" alone
+//     is not enough on a successful exit, only the specific, observed
+//     "Error: ... usage limit ..." shape is.
+func shortcutsRateLimitReason(exitCode int, stdout, stderr string) (string, bool) {
+	trimmedStdout := strings.TrimSpace(stdout)
 	matched := false
-	for _, phrase := range shortcutsRateLimitPhrases {
-		if strings.Contains(low, phrase) {
-			matched = true
-			break
+	switch {
+	case exitCode != 0:
+		low := strings.ToLower(stdout + "\n" + stderr)
+		for _, phrase := range shortcutsRateLimitPhrases {
+			if strings.Contains(low, phrase) {
+				matched = true
+				break
+			}
 		}
+	case strings.HasPrefix(trimmedStdout, "Error:") && strings.Contains(strings.ToLower(trimmedStdout), "usage limit"):
+		matched = true
 	}
 	if !matched {
 		return "", false

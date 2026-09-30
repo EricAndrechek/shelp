@@ -144,26 +144,48 @@ func TestVerifyBackendArgsNeverUsesBareLog(t *testing.T) {
 // --- Rate-limit classification (pure function, no `shortcuts` calls) ---
 
 func TestShortcutsRateLimitReason(t *testing.T) {
+	const realFailureText = "Error: You have reached the usage limit for this model. Please try again later."
 	cases := []struct {
 		name           string
+		exitCode       int
 		stdout, stderr string
 		wantOK         bool
 		wantReason     string
 	}{
 		{
-			"usage limit in stdout (observed verbatim on Apple Intelligence Pro)",
-			"Error: You have reached the usage limit for this model. Please try again later.", "",
-			true, "Error: You have reached the usage limit for this model. Please try again later.",
+			"real failure text, exit 0 (observed verbatim on Apple Intelligence Pro: the shortcut itself succeeds, its output IS the error)",
+			0, realFailureText, "",
+			true, realFailureText,
 		},
-		{"case insensitive", "USAGE LIMIT reached", "", true, "USAGE LIMIT reached"},
-		{"try again later alone", "please try again later", "", true, "please try again later"},
-		{"in stderr instead of stdout", "", "usage limit exceeded", true, "usage limit exceeded"},
-		{"not a rate limit", "find ~ -type f -size +100M", "", false, ""},
-		{"empty", "", "", false, ""},
+		{
+			"real failure text, exit 1 (rule a: non-zero exit + known phrase)",
+			1, realFailureText, "",
+			true, realFailureText,
+		},
+		{
+			"successful exit-0 answer that happens to contain \"try again later\" must NOT be classified as rate-limited",
+			0, "The command failed because of a network blip; the script will try again later on its own.", "",
+			false, "",
+		},
+		{"case insensitive, exit 1", 1, "USAGE LIMIT reached", "", true, "USAGE LIMIT reached"},
+		{"\"try again later\" alone, exit 1", 1, "please try again later", "", true, "please try again later"},
+		{"in stderr instead of stdout, exit 1", 1, "", "usage limit exceeded", true, "usage limit exceeded"},
+		{
+			"exit 0, starts with \"Error:\" but no usage-limit phrase -- must NOT match rule b on \"Error:\" alone",
+			0, "Error: something else entirely went wrong", "",
+			false, "",
+		},
+		{
+			"exit 0, contains \"usage limit\" but does not start with \"Error:\" -- must NOT match rule b without the prefix",
+			0, "You have reached the usage limit today, see you tomorrow.", "",
+			false, "",
+		},
+		{"not a rate limit, exit 0", 0, "find ~ -type f -size +100M", "", false, ""},
+		{"empty, exit 0", 0, "", "", false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			reason, ok := shortcutsRateLimitReason(c.stdout, c.stderr)
+			reason, ok := shortcutsRateLimitReason(c.exitCode, c.stdout, c.stderr)
 			if ok != c.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
 			}
@@ -207,6 +229,58 @@ func TestShortcutsProviderGenerateRateLimitedEvenOnExitZero(t *testing.T) {
 	var ue *UnavailableError
 	if !errors.As(err, &ue) {
 		t.Fatalf("error = %v, want also *UnavailableError via errors.As", err)
+	}
+}
+
+// TestShortcutsProviderGenerateRateLimitedOnNonZeroExit covers rule (a):
+// the real failure text on a non-zero exit (e.g. a different Shortcuts
+// failure mode than the exit-0 one above) must still be classified as
+// *RateLimitedError.
+func TestShortcutsProviderGenerateRateLimitedOnNonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "shortcuts")
+	script := "#!/bin/sh\nprintf '%s' 'Error: You have reached the usage limit for this model. Please try again later.'\nexit 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := &shortcutsProvider{
+		variant: shortcutVariant{id: "shortcuts:apple-pro", model: "Apple Intelligence Pro"},
+		name:    "shelp · Apple Intelligence Pro",
+	}
+	_, err := p.Generate(context.Background(), Request{Prompt: "hi"})
+	var rle *RateLimitedError
+	if !errors.As(err, &rle) {
+		t.Fatalf("error = %v (%T), want *RateLimitedError", err, err)
+	}
+}
+
+// TestShortcutsProviderGenerateNotRateLimitedForLegitimateAnswer is the
+// regression test for the false-positive this rule (b) narrowing fixes: a
+// SUCCESSFUL (exit 0) suggest/explain answer that happens to contain the
+// phrase "try again later" (e.g. explaining a retry loop) must be returned
+// as a normal answer, not misclassified as a rate limit.
+func TestShortcutsProviderGenerateNotRateLimitedForLegitimateAnswer(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "shortcuts")
+	answer := "This retries the request on failure and will try again later if the server is busy."
+	script := "#!/bin/sh\nprintf '%s' '" + answer + "'\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := &shortcutsProvider{
+		variant: shortcutVariant{id: "shortcuts:apple-pro", model: "Apple Intelligence Pro"},
+		name:    "shelp · Apple Intelligence Pro",
+	}
+	got, err := p.Generate(context.Background(), Request{Prompt: "explain the retry logic"})
+	if err != nil {
+		t.Fatalf("Generate: unexpected error %v (%T), want the answer returned normally", err, err)
+	}
+	if got != answer {
+		t.Errorf("Generate() = %q, want %q", got, answer)
 	}
 }
 
