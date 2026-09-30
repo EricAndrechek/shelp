@@ -19,6 +19,7 @@ import (
 
 	"github.com/ericandrechek/shelp/internal/clean"
 	"github.com/ericandrechek/shelp/internal/config"
+	"github.com/ericandrechek/shelp/internal/cooldown"
 	"github.com/ericandrechek/shelp/internal/prompt"
 	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
@@ -32,6 +33,7 @@ Usage:
   shelp [flags] <task...>              suggest a command (same as: shelp suggest)
   shelp explain [flags] <command...>   explain a command (alias: -e)
   shelp providers [--json] [--all]     list model providers and whether they work
+  shelp providers --reset-cooldowns    clear all recorded rate-limit cooldowns
   shelp setup [shortcuts]              install optional pieces (Apple Shortcuts)
   shelp init <zsh|bash|fish>           print shell integration; add to your rc:
                                          eval "$(shelp init zsh)"
@@ -45,6 +47,7 @@ Flags (suggest/explain):
   --context fields     what to tell the model: os,shell,cwd,tools (default: os,shell)
   --json               print {"text","provider","latency_ms"} instead of text
   -v, --verbose        report provider and latency on stderr
+  --force              call a provider even if it's in a rate-limit cooldown
 `
 
 func main() {
@@ -104,7 +107,7 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage) }
 	var provFlag, shell, tmpl, ctxFields string
-	var asJSON, verbose bool
+	var asJSON, verbose, force bool
 	fs.StringVar(&provFlag, "p", "", "")
 	fs.StringVar(&provFlag, "provider", "", "")
 	fs.StringVar(&shell, "shell", "", "")
@@ -113,6 +116,7 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	fs.BoolVar(&asJSON, "json", false, "")
 	fs.BoolVar(&verbose, "v", false, "")
 	fs.BoolVar(&verbose, "verbose", false, "")
+	fs.BoolVar(&force, "force", false, "")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
@@ -147,10 +151,19 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	if mode == provider.Explain && !asJSON {
 		req.OnChunk = func(s string) { streamed = true; fmt.Fprint(stdout, s) }
 	}
-	res, err := provider.Chain(ctx, cfg, chain, req, func(id string, err error) {
-		if verbose {
-			fmt.Fprintf(stderr, "shelp: %v; trying next provider\n", err)
+	res, err := provider.Chain(ctx, cfg, chain, req, force, func(id string, err error) {
+		if !verbose {
+			return
 		}
+		var cse *provider.CooldownSkippedError
+		if errors.As(err, &cse) {
+			// The error text already ends in "; skipping" -- no need for
+			// the generic "; trying next provider" suffix below, and the
+			// provider was never actually called.
+			fmt.Fprintf(stderr, "shelp: %v\n", err)
+			return
+		}
+		fmt.Fprintf(stderr, "shelp: %v; trying next provider\n", err)
 	})
 	if err != nil {
 		return err
@@ -205,47 +218,77 @@ func splitList(s string) []string {
 func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("providers", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
+	resetCooldowns := fs.Bool("reset-cooldowns", false, "")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
+	if *resetCooldowns {
+		if err := cooldown.Reset(); err != nil {
+			return fmt.Errorf("reset cooldowns: %w", err)
+		}
+		fmt.Fprintln(stdout, "shelp: cooldowns reset")
+		return nil
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	cds := cooldown.Load()
 	ps := provider.All(cfg)
 	sts := make([]provider.Status, len(ps))
 	var wg sync.WaitGroup
 	for i, p := range ps {
+		// A cooled-down provider is reported as such without probing it --
+		// same reasoning as the CLI itself never calling Detect: don't
+		// touch a backend that just told us it's rate-limited.
+		if _, ok := cooldown.Active(cds, p.ID()); ok {
+			continue
+		}
 		wg.Add(1)
-		go func() {
+		go func(i int, p provider.Provider) {
 			defer wg.Done()
 			c, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			sts[i] = p.Detect(c)
-		}()
+		}(i, p)
 	}
 	wg.Wait()
+
+	type row struct {
+		ID, Kind, Description, Status, Reason, Version string
+		Available                                      bool
+	}
+	rows := make([]row, len(ps))
+	for i, p := range ps {
+		if e, ok := cooldown.Active(cds, p.ID()); ok {
+			rows[i] = row{
+				ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
+				Status: "cooldown",
+				Reason: fmt.Sprintf("until %s: %s", e.Until.Local().Format("15:04"), e.Reason),
+			}
+			continue
+		}
+		st := "ok"
+		reason := p.Description()
+		if !sts[i].Available {
+			st, reason = "unavailable", sts[i].Reason
+		}
+		rows[i] = row{
+			ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
+			Status: st, Reason: reason, Version: sts[i].Version, Available: sts[i].Available,
+		}
+	}
+
 	if *asJSON {
-		type row struct {
-			ID, Kind, Description, Reason, Version string
-			Available                              bool
-		}
-		var rows []row
-		for i, p := range ps {
-			rows = append(rows, row{p.ID(), string(p.Kind()), p.Description(), sts[i].Reason, sts[i].Version, sts[i].Available})
-		}
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "PROVIDER\tKIND\tSTATUS\tDETAILS")
-	for i, p := range ps {
-		st, detail := "ok", p.Description()
-		if !sts[i].Available {
-			st, detail = "unavailable", sts[i].Reason
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID(), p.Kind(), st, detail)
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.ID, r.Kind, r.Status, r.Reason)
 	}
 	return tw.Flush()
 }
