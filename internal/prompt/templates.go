@@ -8,7 +8,7 @@ import (
 
 // Default is the template the CLI uses. Change it only on benchmark
 // evidence; the README table records why.
-const Default = "v1"
+const Default = "v2"
 
 func init() {
 	// v1: the prompt ghcs/ghce shipped with, tuned on Apple's on-device
