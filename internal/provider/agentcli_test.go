@@ -125,6 +125,7 @@ func TestProviders_NoneOnPath(t *testing.T) {
 
 func TestProviders_Defaults(t *testing.T) {
 	fakePATH(t)
+	setCacheHome(t) // cold antigravity-models.json cache -> hardcoded fallback ids
 	cfg, err := config.Parse("")
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestProviders_Defaults(t *testing.T) {
 			t.Errorf("%s: Kind() = %q, want %q", p.ID(), p.Kind(), AgentCLI)
 		}
 	}
-	want := []string{"claude:haiku", "claude:sonnet", "gemini:default", "codex:default", "copilot:default"}
+	want := []string{"claude:haiku", "claude:sonnet", "gemini:default", "codex:default", "copilot:default", "antigravity:gemini-3.8-flash-low", "antigravity:gemini-3.1-pro-low"}
 	for _, id := range want {
 		if !got[id] {
 			t.Errorf("Providers() missing %q; got %v", id, got)
@@ -192,6 +193,109 @@ func TestProviders_ModelsOverride(t *testing.T) {
 	}
 	if ap.cliModel != "opus" {
 		t.Errorf("claude:opus cliModel = %q, want %q", ap.cliModel, "opus")
+	}
+}
+
+func TestProviders_Antigravity_UsesModelCache(t *testing.T) {
+	fakePATH(t)
+	setCacheHome(t)
+	if err := writeAntigravityModelCache([]string{"gemini-3.8-flash-high", "claude-sonnet-4-6", "gpt-oss-120b-medium"}); err != nil {
+		t.Fatalf("writeAntigravityModelCache: %v", err)
+	}
+	cfg, err := config.Parse("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := agentCLIFamily{}.Providers(cfg)
+	var got []string
+	for _, p := range ps {
+		if strings.HasPrefix(p.ID(), "antigravity:") {
+			got = append(got, p.ID())
+		}
+	}
+	want := []string{"antigravity:gemini-3.8-flash-high", "antigravity:claude-sonnet-4-6", "antigravity:gpt-oss-120b-medium"}
+	if len(got) != len(want) {
+		t.Fatalf("agy providers = %v, want %v", got, want)
+	}
+	for i, id := range want {
+		if got[i] != id {
+			t.Errorf("agy providers[%d] = %q, want %q", i, got[i], id)
+		}
+	}
+}
+
+func TestProviders_Antigravity_ConfigOverridesCache(t *testing.T) {
+	fakePATH(t)
+	setCacheHome(t)
+	if err := writeAntigravityModelCache([]string{"gemini-3.8-flash-high"}); err != nil {
+		t.Fatalf("writeAntigravityModelCache: %v", err)
+	}
+	cfg, err := config.Parse("[agentcli.antigravity]\nmodels = [\"claude-opus-4-6-thinking\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := agentCLIFamily{}.Providers(cfg)
+	var got []string
+	for _, p := range ps {
+		if strings.HasPrefix(p.ID(), "antigravity:") {
+			got = append(got, p.ID())
+		}
+	}
+	want := []string{"antigravity:claude-opus-4-6-thinking"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("agy providers = %v, want %v (config override must win over the cache)", got, want)
+	}
+}
+
+func TestProviders_Antigravity_Disabled(t *testing.T) {
+	fakePATH(t)
+	setCacheHome(t)
+	cfg, err := config.Parse("[agentcli.antigravity]\ndisabled = true\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := agentCLIFamily{}.Providers(cfg)
+	for _, p := range ps {
+		if strings.HasPrefix(p.ID(), "antigravity:") {
+			t.Errorf("Providers() with [agentcli.antigravity] disabled still returned %s", p.ID())
+		}
+	}
+}
+
+// TestProviders_Antigravity_NoProcessExecution proves Providers() never
+// executes agy, even with a warm models cache in play: a fake `agy` that
+// merely touches a sentinel file if run at all must never be run just by
+// calling Providers() (only Detect may spawn processes; see the Family
+// interface doc comment in provider.go).
+func TestProviders_Antigravity_NoProcessExecution(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "executed")
+	script := "#!/bin/sh\ntouch " + sentinel + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "agy"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	setCacheHome(t)
+	if err := writeAntigravityModelCache([]string{"gemini-3.8-flash-low"}); err != nil {
+		t.Fatalf("writeAntigravityModelCache: %v", err)
+	}
+
+	cfg, err := config.Parse("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := agentCLIFamily{}.Providers(cfg)
+	found := false
+	for _, p := range ps {
+		if strings.HasPrefix(p.ID(), "antigravity:") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Providers() found no agy: candidates with a warm cache present")
+	}
+	if _, err := os.Stat(sentinel); err == nil {
+		t.Error("Providers() executed the agy binary; it must only LookPath + read the cache file")
 	}
 }
 
@@ -667,6 +771,113 @@ func TestGenerate_Copilot_ArgvAndCwd(t *testing.T) {
 	}
 }
 
+func TestGenerate_Antigravity_ArgvAndCwd(t *testing.T) {
+	fakePATH(t)
+	rec := filepath.Join(t.TempDir(), "record.txt")
+	t.Setenv("SHELP_FAKE_RECORD", rec)
+	t.Setenv("SHELP_FAKE_STDOUT", "git log -n 5")
+
+	p := newProvider(antigravitySpec, "gemini-3.8-flash-low")
+	req := agentTestReq()
+	startCwd, _ := os.Getwd()
+
+	got, err := p.Generate(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got != "git log -n 5" {
+		t.Errorf("Generate() = %q", got)
+	}
+	r := readRecord(t, rec)
+	if r.stdinBytes != 0 {
+		t.Errorf("stdin bytes = %d, want 0 (nil/dev-null stdin)", r.stdinBytes)
+	}
+	if r.cwd == startCwd {
+		t.Errorf("cwd was not changed to a scratch dir: still %s", r.cwd)
+	}
+	if !strings.Contains(r.cwd, os.TempDir()) && !strings.HasPrefix(r.cwd, "/tmp") && !strings.HasPrefix(r.cwd, "/private/tmp") && !strings.HasPrefix(r.cwd, "/var") {
+		t.Errorf("cwd %q doesn't look like a temp dir", r.cwd)
+	}
+	want := req.System + "\n\n" + req.Prompt
+	if v, ok := argAfter(r.args, "-p"); !ok || v != want {
+		t.Errorf("-p = %q, %v; want %q (no separate system flag)", v, ok, want)
+	}
+	if v, ok := argAfter(r.args, "--output-format"); !ok || v != "text" {
+		t.Errorf("--output-format = %q, %v; want text", v, ok)
+	}
+	if !contains(r.args, "--sandbox") {
+		t.Error("missing --sandbox")
+	}
+	if v, ok := argAfter(r.args, "--mode"); !ok || v != "plan" {
+		t.Errorf("--mode = %q, %v; want plan", v, ok)
+	}
+	if v, ok := argAfter(r.args, "--model"); !ok || v != "gemini-3.8-flash-low" {
+		t.Errorf("--model = %q, %v; want gemini-3.8-flash-low", v, ok)
+	}
+	if contains(r.args, "--disable-slash-commands") {
+		t.Error("--disable-slash-commands must be omitted: it makes --mode plan a no-op (see agentcli.go)")
+	}
+	if contains(r.args, "--dangerously-skip-permissions") {
+		t.Error("--dangerously-skip-permissions must never be used")
+	}
+}
+
+func TestGenerate_Antigravity_DefaultOmitsModelFlag(t *testing.T) {
+	fakePATH(t)
+	rec := filepath.Join(t.TempDir(), "record.txt")
+	t.Setenv("SHELP_FAKE_RECORD", rec)
+	t.Setenv("SHELP_FAKE_STDOUT", "ok")
+
+	p := newProvider(antigravitySpec, "")
+	if _, err := p.Generate(context.Background(), agentTestReq()); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	r := readRecord(t, rec)
+	if contains(r.args, "--model") {
+		t.Errorf("args should omit --model when cliModel is empty, got %v", r.args)
+	}
+}
+
+func TestGenerate_Antigravity_Streams(t *testing.T) {
+	fakePATH(t)
+	t.Setenv("SHELP_FAKE_STDOUT", "the reply")
+
+	var chunks []string
+	req := agentTestReq()
+	req.OnChunk = func(s string) { chunks = append(chunks, s) }
+
+	p := newProvider(antigravitySpec, "gemini-3.8-flash-low")
+	if _, err := p.Generate(context.Background(), req); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if len(chunks) == 0 {
+		t.Error("OnChunk was never called for antigravity, want at least one chunk")
+	}
+}
+
+// TestGenerate_Antigravity_EmptyOutputSurfacesStderr covers the headless
+// permission-auto-deny shape observed live 2026-09-30: exit 0, empty
+// stdout, an explanatory stderr line ("jetski: no output produced -- a
+// tool required the \"write_file\" permission that headless mode cannot
+// prompt for, so it was auto-denied. ..."). antigravityParse must surface
+// that stderr line rather than just saying "returned no output".
+func TestGenerate_Antigravity_EmptyOutputSurfacesStderr(t *testing.T) {
+	fakePATH(t)
+	t.Setenv("SHELP_FAKE_STDOUT", "")
+	t.Setenv("SHELP_FAKE_STDERR", `jetski: no output produced — a tool required the "write_file" permission that headless mode cannot prompt for, so it was auto-denied.`)
+	t.Setenv("SHELP_FAKE_EXIT", "0")
+
+	p := newProvider(antigravitySpec, "gemini-3.8-flash-low")
+	_, err := p.Generate(context.Background(), agentTestReq())
+	var ue *UnavailableError
+	if !errors.As(err, &ue) {
+		t.Fatalf("error is %T, want *UnavailableError: %v", err, err)
+	}
+	if !strings.Contains(ue.Reason, "auto-denied") {
+		t.Errorf("Reason = %q, want the jetski auto-deny stderr surfaced", ue.Reason)
+	}
+}
+
 // ---------------- error mapping ----------------
 
 func TestGenerate_ErrorMapping(t *testing.T) {
@@ -683,6 +894,11 @@ func TestGenerate_ErrorMapping(t *testing.T) {
 		{"gemini untrusted", geminiSpec, "", "Gemini CLI is not running in a trusted directory.", "trust"},
 		{"codex generic error", codexSpec, "", "some codex failure", "codex exited"},
 		{"copilot model unavailable", copilotSpec, "gpt-5.4", "Error: Model \"gpt-5.4\" from --model flag is not available.", "not available"},
+		{"antigravity not logged in", antigravitySpec, "gemini-3.8-flash-low", "Print mode: not logged in and no controlling terminal; cannot complete interactive login", "not logged in"},
+		{"antigravity overloaded", antigravitySpec, "gemini-3.8-flash-low", "The model API is currently overloaded and may experience intermittent errors.", "overloaded"},
+		{"antigravity high traffic", antigravitySpec, "gemini-3.8-flash-low", "Our servers are experiencing high traffic right now, please try again in a minute.", "overloaded"},
+		{"antigravity invalid model", antigravitySpec, "totally-bogus-model-xyz", "error: invalid model selection (--model \"totally-bogus-model-xyz\" --effort \"\"): model totally-bogus-model-xyz is not recognized as a known model or custom model in settings", "agy exited"},
+		{"antigravity generic error", antigravitySpec, "gemini-3.8-flash-low", "boom", "boom"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -803,9 +1019,10 @@ func TestDetect_WrongIdentity(t *testing.T) {
 	// "goose"/"q" collision this codebase already guards against for other
 	// families) must not be reported as available.
 	fakePATH(t)
+	setCacheHome(t)
 	t.Setenv("SHELP_FAKE_VERSION", "totally-unrelated-tool 1.0.0")
 
-	for _, spec := range []cliSpec{claudeSpec, codexSpec, copilotSpec} {
+	for _, spec := range []cliSpec{claudeSpec, codexSpec, copilotSpec, antigravitySpec} {
 		st := spec.identify(context.Background())
 		if st.Available {
 			t.Errorf("%s: Detect() available for an unrelated binary, want unavailable", spec.name)
@@ -817,21 +1034,148 @@ func TestDetect_WrongIdentity(t *testing.T) {
 	}
 }
 
-func TestDetect_Gemini_FailureReasonMentionsDeprecation(t *testing.T) {
-	// Google deprecated the standalone Gemini CLI in favor of the
-	// Antigravity CLI (agy); geminiIdentify's failure Reason should say so
-	// (the spec itself is otherwise untouched, for anyone still on the old
-	// CLI).
+func TestDetect_Antigravity(t *testing.T) {
 	fakePATH(t)
-	t.Setenv("SHELP_FAKE_HELP", "Some Other Tool - not Gemini")
-	st := geminiSpec.identify(context.Background())
-	if st.Available {
-		t.Fatal("Detect() available for an unrelated binary, want unavailable")
+	setCacheHome(t)
+	t.Setenv("SHELP_FAKE_VERSION", "1.2.14")
+	t.Setenv("SHELP_FAKE_HELP", "Usage of agy:\n  --print  Run a single prompt non-interactively and print the response")
+	// The fake CLI has no dedicated "models" subcommand branch; a plain
+	// `agy models` call (no "--version"/"--help"/"auth status"/"login
+	// status" flags/args present) falls through to its generic stdout
+	// branch, so SHELP_FAKE_STDOUT doubles as `agy models`'s reply here.
+	t.Setenv("SHELP_FAKE_STDOUT", "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n")
+
+	st := antigravitySpec.identify(context.Background())
+	if !st.Available {
+		t.Fatalf("Detect() not available: %q", st.Reason)
 	}
-	if !strings.Contains(st.Reason, "Antigravity") {
-		t.Errorf("Reason = %q, want it to mention the Antigravity CLI deprecation note", st.Reason)
+	if !strings.Contains(st.Version, "1.2.14") {
+		t.Errorf("Version = %q, want to mention 1.2.14", st.Version)
+	}
+
+	got := readAntigravityModelCache()
+	want := []string{"gemini-3.8-flash-high", "gemini-3.8-flash-low", "claude-sonnet-4-6"}
+	if len(got) != len(want) {
+		t.Fatalf("cached models = %v, want %v", got, want)
+	}
+	for i, id := range want {
+		if got[i] != id {
+			t.Errorf("cached models[%d] = %q, want %q", i, got[i], id)
+		}
 	}
 }
+
+func TestDetect_Antigravity_VersionExitNonZero(t *testing.T) {
+	fakePATH(t)
+	setCacheHome(t)
+	t.Setenv("SHELP_FAKE_VERSION", "1.2.14")
+	t.Setenv("SHELP_FAKE_VERSION_EXIT", "1")
+
+	st := antigravitySpec.identify(context.Background())
+	if st.Available {
+		t.Error("Detect() available despite --version exiting non-zero, want unavailable")
+	}
+}
+
+// ---------------- looksLikeVersion / model list parsing / cache ----------------
+
+func TestLooksLikeVersion(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"1.2.14", true},
+		{"0.46.0", true},
+		{"totally-unrelated-tool 1.0.0", false},
+		{"not Gemini CLI", false},
+		{"", false},
+		{"1", false},       // no "."
+		{"v1.2.14", false}, // leading non-digit
+		{"1.", false},      // nothing after the dot
+	}
+	for _, c := range cases {
+		if got := looksLikeVersion(c.in); got != c.want {
+			t.Errorf("looksLikeVersion(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseAntigravityModels(t *testing.T) {
+	in := "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"
+	got := parseAntigravityModels(in)
+	want := []string{"gemini-3.8-flash-high", "gemini-3.8-flash-low", "claude-sonnet-4-6"}
+	if len(got) != len(want) {
+		t.Fatalf("parseAntigravityModels() = %v, want %v", got, want)
+	}
+	for i, id := range want {
+		if got[i] != id {
+			t.Errorf("parseAntigravityModels()[%d] = %q, want %q", i, got[i], id)
+		}
+	}
+}
+
+func TestParseAntigravityModels_Empty(t *testing.T) {
+	if got := parseAntigravityModels(""); got != nil {
+		t.Errorf("parseAntigravityModels(\"\") = %v, want nil", got)
+	}
+	if got := parseAntigravityModels("\n\n  \n"); got != nil {
+		t.Errorf("parseAntigravityModels(blank lines) = %v, want nil", got)
+	}
+}
+
+func TestAntigravityModelCache_ReadWriteRoundTrip(t *testing.T) {
+	setCacheHome(t)
+	if got := readAntigravityModelCache(); got != nil {
+		t.Fatalf("cold cache = %v, want nil", got)
+	}
+	if err := writeAntigravityModelCache([]string{"gemini-3.8-flash-low", "gemini-3.1-pro-low"}); err != nil {
+		t.Fatalf("writeAntigravityModelCache: %v", err)
+	}
+	got := readAntigravityModelCache()
+	want := []string{"gemini-3.8-flash-low", "gemini-3.1-pro-low"}
+	if len(got) != len(want) {
+		t.Fatalf("readAntigravityModelCache() = %v, want %v", got, want)
+	}
+	for i, id := range want {
+		if got[i] != id {
+			t.Errorf("readAntigravityModelCache()[%d] = %q, want %q", i, got[i], id)
+		}
+	}
+
+	// A second write overwrites, it doesn't append.
+	if err := writeAntigravityModelCache([]string{"claude-opus-4-6-thinking"}); err != nil {
+		t.Fatalf("writeAntigravityModelCache (second write): %v", err)
+	}
+	got = readAntigravityModelCache()
+	if len(got) != 1 || got[0] != "claude-opus-4-6-thinking" {
+		t.Errorf("readAntigravityModelCache() after second write = %v, want [claude-opus-4-6-thinking]", got)
+	}
+}
+
+func TestAntigravityModelCache_CorruptFileYieldsNil(t *testing.T) {
+	dir := setCacheHome(t)
+	path := filepath.Join(dir, "shelp", "antigravity-models.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readAntigravityModelCache(); got != nil {
+		t.Errorf("readAntigravityModelCache() with corrupt file = %v, want nil", got)
+	}
+}
+
+func TestAntigravityDefaultModels_FallsBackWithoutCache(t *testing.T) {
+	setCacheHome(t)
+	got := antigravityDefaultModels()
+	want := []agentModel{{id: "gemini-3.8-flash-low", cli: "gemini-3.8-flash-low"}, {id: "gemini-3.1-pro-low", cli: "gemini-3.1-pro-low"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("antigravityDefaultModels() (cold cache) = %+v, want %+v", got, want)
+	}
+}
+
+// ---------------- Description() ----------------
 
 func TestDescription_NoDoubleCLI(t *testing.T) {
 	cases := []struct {
@@ -843,6 +1187,7 @@ func TestDescription_NoDoubleCLI(t *testing.T) {
 		{geminiSpec, "", "Gemini CLI, model default (headless, no tools)"},
 		{codexSpec, "", "Codex CLI, model default (headless, no tools)"},
 		{copilotSpec, "auto", "GitHub Copilot CLI, model auto (headless, no tools)"},
+		{antigravitySpec, "gemini-3.8-flash-low", "Antigravity CLI, model gemini-3.8-flash-low (headless, no tools)"},
 	}
 	for _, c := range cases {
 		p := newProvider(c.spec, c.cliModel)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +15,8 @@ import (
 )
 
 // agentcli: providers that shell out to installed AI coding-agent CLIs
-// (claude, gemini, codex, copilot) in single-shot, non-interactive mode and
-// return their raw text reply. These tools are full coding agents by
+// (claude, gemini, codex, copilot, agy) in single-shot, non-interactive mode
+// and return their raw text reply. These tools are full coding agents by
 // default (they read project files, edit files, run shell commands); every
 // spec below configures the closest thing each CLI has to "just answer in
 // text", and Generate always runs in a fresh empty temp directory so none
@@ -23,8 +24,8 @@ import (
 //
 // Notes from tuning on this Mac, macOS 27.0, verified 2026-09-30 against
 // claude 2.1.285, gemini 0.46.0, codex-cli 0.144.0, GitHub Copilot CLI
-// 1.0.x (see MERGE NOTES in the PR/commit description for the full
-// investigation):
+// 1.0.x, Antigravity CLI (agy) 1.2.14 (see MERGE NOTES in the PR/commit
+// description for the full investigation):
 //
 //   - claude authenticates via claude.ai (a subscription, not an API key).
 //     --bare cannot be used: it forces ANTHROPIC_API_KEY/apiKeyHelper only
@@ -74,6 +75,32 @@ import (
 //     passes; the --help example model "gpt-5.4" is NOT available on this
 //     account ("Model \"gpt-5.4\" from --model flag is not available"), so
 //     it is deliberately not shipped as a second default variant.
+//   - Google deprecated the standalone Gemini CLI in favor of the
+//     Antigravity CLI (`agy`); it was uninstalled from this Mac, so
+//     geminiIdentify's failure Reason says so, but the gemini spec itself
+//     is left as-is for anyone still running the old CLI. agy's --help
+//     documents no system-prompt flag, so antigravityArgs prepends
+//     system+"\n\n"+prompt exactly like gemini/copilot. `--mode plan`
+//     makes agy describe/propose actions in text instead of running them
+//     (verified live: asked to create a file, it wrote a plan description
+//     and touched nothing); `--sandbox` layers on terminal restrictions.
+//     `--disable-slash-commands` is deliberately NOT passed even though the
+//     other specs favor "disable everything optional": agy prints "warning:
+//     --mode plan has no effect while slash command expansion is disabled"
+//     when both are given, which would fall back to headless mode's
+//     default behavior -- any tool call silently auto-denied (exit 0,
+//     empty stdout, an explanatory stderr line) since headless mode has no
+//     controlling terminal to prompt on. Slash-command expansion only
+//     fires on a message that itself starts with "/", and the combined
+//     prompt always starts with req.System (shelp's own fixed template
+//     text, never "/"), so leaving expansion enabled is safe regardless of
+//     what the user's free-text req.Prompt contains. `agy models`'s list is
+//     account/tier-dependent (free tier, observed 2026-09-30: three Gemini
+//     3.x flash families x 3 effort levels, Gemini 3.1 Pro x 2 effort
+//     levels, claude-sonnet-4-6, claude-opus-4-6-thinking,
+//     gpt-oss-120b-medium) and can change, so antigravityIdentify (Detect)
+//     refreshes a small on-disk cache instead of hardcoding the list; see
+//     the "antigravity model cache" section below.
 //
 // Every call sets execx.go's RunCmdOpts.Dir to the scratch temp dir, for
 // every CLI, whether or not it also has its own -C/--cd flag (codex and
@@ -109,10 +136,23 @@ type agentModel struct {
 // cliSpec is one agent-CLI family member: everything needed to build,
 // run and parse a call to one installed binary.
 type cliSpec struct {
-	name          string // binary name on PATH, and the shelp family prefix
+	name string // binary name on PATH, and (usually) the shelp ID prefix
+	// idPrefix, when non-empty, is the shelp ID prefix used in place of
+	// name ("<idPrefix>:<model>" rather than "<name>:<model>"). Every spec
+	// but antigravity leaves this "" (name doubles as both, e.g. "claude");
+	// antigravity's binary is "agy" but its IDs are "antigravity:<model>"
+	// (task requirement -- the CLI itself is still invoked as "agy").
+	idPrefix      string
 	label         string // human label for Description()
 	defaultModels []agentModel
-	identify      func(ctx context.Context) Status
+	// defaultModelsFn, when non-nil, computes the default model list instead
+	// of using the static defaultModels field above (antigravity: the ids
+	// cached by the last successful `agy models`, falling back to two
+	// hardcoded ids on a cold cache -- see antigravityDefaultModels). Must
+	// stay cheap like the rest of Providers(): a small file read, never a
+	// process execution.
+	defaultModelsFn func() []agentModel
+	identify        func(ctx context.Context) Status
 	// buildArgs returns the argv (excluding the binary name itself). dir is
 	// a fresh, empty, just-created temp directory; outFile is a path inside
 	// dir that spec.needsOutFile specs must have the CLI write its final
@@ -140,11 +180,15 @@ type cliSpec struct {
 // flag value, so `models = ["gemini-2.5-flash"]` works once a user knows a
 // real model name for their account.
 func (s cliSpec) resolveModels(names []string) []agentModel {
-	if len(names) == 0 {
-		return s.defaultModels
+	defaults := s.defaultModels
+	if s.defaultModelsFn != nil {
+		defaults = s.defaultModelsFn()
 	}
-	byID := make(map[string]agentModel, len(s.defaultModels))
-	for _, m := range s.defaultModels {
+	if len(names) == 0 {
+		return defaults
+	}
+	byID := make(map[string]agentModel, len(defaults))
+	for _, m := range defaults {
 		byID[m.id] = m
 	}
 	out := make([]agentModel, 0, len(names))
@@ -162,7 +206,7 @@ func (s cliSpec) resolveModels(names []string) []agentModel {
 	return out
 }
 
-var agentCLISpecs = []cliSpec{claudeSpec, geminiSpec, codexSpec, copilotSpec}
+var agentCLISpecs = []cliSpec{claudeSpec, geminiSpec, codexSpec, copilotSpec, antigravitySpec}
 
 // agentcliCLIConfig is one CLI's [agentcli.<name>] table.
 type agentcliCLIConfig struct {
@@ -170,12 +214,16 @@ type agentcliCLIConfig struct {
 	Disabled bool     `toml:"disabled"`
 }
 
-// agentcliConfig is the [agentcli] section: one sub-table per CLI.
+// agentcliConfig is the [agentcli] section: one sub-table per CLI. The
+// antigravity table is keyed "antigravity" (matching its shelp ID prefix,
+// antigravity:<model>), even though the binary invoked is "agy" -- forName
+// below still switches on the binary name ("agy"), like every other CLI.
 type agentcliConfig struct {
-	Claude  agentcliCLIConfig `toml:"claude"`
-	Gemini  agentcliCLIConfig `toml:"gemini"`
-	Codex   agentcliCLIConfig `toml:"codex"`
-	Copilot agentcliCLIConfig `toml:"copilot"`
+	Claude      agentcliCLIConfig `toml:"claude"`
+	Gemini      agentcliCLIConfig `toml:"gemini"`
+	Codex       agentcliCLIConfig `toml:"codex"`
+	Copilot     agentcliCLIConfig `toml:"copilot"`
+	Antigravity agentcliCLIConfig `toml:"antigravity"`
 }
 
 func (c agentcliConfig) forName(name string) agentcliCLIConfig {
@@ -188,6 +236,8 @@ func (c agentcliConfig) forName(name string) agentcliCLIConfig {
 		return c.Codex
 	case "copilot":
 		return c.Copilot
+	case "agy":
+		return c.Antigravity
 	default:
 		return agentcliCLIConfig{}
 	}
@@ -213,11 +263,15 @@ func (agentCLIFamily) Providers(cfg *config.Config) []Provider {
 		if sub.Disabled {
 			continue
 		}
+		prefix := spec.name
+		if spec.idPrefix != "" {
+			prefix = spec.idPrefix
+		}
 		for _, m := range spec.resolveModels(sub.Models) {
 			out = append(out, &agentcliProvider{
 				spec:     spec,
 				cliModel: m.cli,
-				id:       spec.name + ":" + m.id,
+				id:       prefix + ":" + m.id,
 			})
 		}
 	}
@@ -239,9 +293,9 @@ func (p *agentcliProvider) Description() string {
 		m = "default"
 	}
 	// Most labels ("Claude Code") don't end in "CLI" and need it appended;
-	// a few ("Gemini CLI", "Codex CLI", "GitHub Copilot CLI") already do,
-	// and appending unconditionally used to read "Codex CLI CLI" /
-	// "GitHub Copilot CLI CLI".
+	// a few ("Gemini CLI", "Codex CLI", "GitHub Copilot CLI", "Antigravity
+	// CLI") already do, and appending unconditionally used to read "Codex
+	// CLI CLI" / "GitHub Copilot CLI CLI".
 	label := p.spec.label
 	if !strings.HasSuffix(label, "CLI") {
 		label += " CLI"
@@ -389,12 +443,11 @@ var geminiSpec = cliSpec{
 
 // geminiDeprecationNote is appended to geminiIdentify's failure Reason:
 // Google deprecated the standalone Gemini CLI in favor of the Antigravity
-// CLI (`agy`) and its own login flow now points users there (the Homebrew
-// gemini-cli formula is marked "unsupported"). This Mac had gemini
-// uninstalled entirely (Providers() filters it out via LookPath before
-// Detect ever runs), but the spec is kept as-is for anyone still running
-// the old CLI.
-const geminiDeprecationNote = " (Google deprecated the Gemini CLI in favor of the Antigravity CLI, `agy`)"
+// CLI (`agy`, the antigravity:* providers in this same file) and login now
+// points users there; this Mac had gemini uninstalled entirely (Providers()
+// filters it out via LookPath before Detect ever runs), but the spec is
+// kept as-is for anyone still running the old CLI.
+const geminiDeprecationNote = " (Google deprecated the Gemini CLI in favor of the Antigravity CLI, `agy`; see antigravity:* providers)"
 
 func geminiIdentify(ctx context.Context) Status {
 	h, err := RunCmd(ctx, nil, nil, "gemini", "--help")
@@ -640,4 +693,265 @@ func copilotParse(id string, res CmdResult, outFile string) (string, error) {
 		return "", Unavailable(id, "copilot returned no output")
 	}
 	return res.Stdout, nil
+}
+
+// ==================== antigravity (agy) ====================
+//
+// Google deprecated the standalone Gemini CLI in favor of the Antigravity
+// CLI (Homebrew's gemini-cli formula is marked "unsupported" and its own
+// login flow now points users at Antigravity); `agy` is its replacement.
+// Verified live against agy 1.2.14, 2026-09-30, on a free-tier account.
+
+var antigravitySpec = cliSpec{
+	name:            "agy", // the binary invoked; IDs use idPrefix below instead
+	idPrefix:        "antigravity",
+	label:           "Antigravity CLI",
+	defaultModelsFn: antigravityDefaultModels,
+	stream:          true, // --output-format text is exactly the reply
+	identify:        antigravityIdentify,
+	buildArgs:       antigravityArgs,
+	parse:           antigravityParse,
+}
+
+// antigravityDefaultModels resolves antigravity:*'s built-in candidate list
+// when no [agentcli.antigravity] models override is configured: the ids
+// cached by the last successful `agy models` (see antigravityIdentify),
+// falling back to two conservative built-in ids on a completely cold
+// cache. Only a small file read, never a process execution, per
+// Providers()'s cheapness contract.
+func antigravityDefaultModels() []agentModel {
+	ids := readAntigravityModelCache()
+	if len(ids) == 0 {
+		ids = []string{"gemini-3.8-flash-low", "gemini-3.1-pro-low"}
+	}
+	out := make([]agentModel, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, agentModel{id: id, cli: id})
+	}
+	return out
+}
+
+// looksLikeVersion reports whether s starts with a bare dotted version
+// number ("1.2.14"). agy --version prints ONLY the version, no CLI name
+// anywhere in it (unlike claude/codex/copilot's "<name> <version>"-shaped
+// output), so identity is confirmed by combining this with the --help
+// check in antigravityIdentify below (which does mention "agy") rather
+// than matching a name inside --version's own output.
+func looksLikeVersion(s string) bool {
+	if s == "" {
+		return false
+	}
+	major, rest, ok := strings.Cut(s, ".")
+	if !ok || major == "" || rest == "" {
+		return false
+	}
+	for _, c := range major {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func antigravityIdentify(ctx context.Context) Status {
+	v, err := RunCmd(ctx, nil, nil, "agy", "--version")
+	if err != nil {
+		return Status{Reason: err.Error()}
+	}
+	line := FirstLine(v.Stdout)
+	if v.ExitCode != 0 || !looksLikeVersion(line) {
+		return Status{Reason: "not the Antigravity CLI: " + line}
+	}
+	// agy --help writes its usage text to STDERR, not stdout (verified
+	// live 2026-09-30: "Usage of agy: ..." on fd 2, empty stdout, exit 0)
+	// -- unlike claude/gemini/codex/copilot, whose --help this file already
+	// reads from Stdout. Check both so a future fix on Google's side
+	// (moving it to stdout) still works.
+	h, err := RunCmd(ctx, nil, nil, "agy", "--help")
+	if err != nil || h.ExitCode != 0 || !strings.Contains(h.Stdout+h.Stderr, "agy") {
+		return Status{Reason: "not the Antigravity CLI: --help did not mention agy"}
+	}
+	// Best-effort: refresh the model cache so Providers() (called again by
+	// a second `shelp providers`) can offer every model the account
+	// actually has, not just the two hardcoded fallback ids. A failure here
+	// never fails Detect itself -- the cache (or its absence) is exactly as
+	// good as it was before this call.
+	if ids, mErr := listAntigravityModels(ctx); mErr == nil && len(ids) > 0 {
+		_ = writeAntigravityModelCache(ids)
+	}
+	return Status{Available: true, Version: "Antigravity CLI " + line}
+}
+
+func antigravityArgs(dir, model, outFile string, req Request) []string {
+	// agy has no system-prompt flag (checked `agy --help` / `agy help
+	// <subcommand>` for every subcommand listed, 2026-09-30): prepend
+	// system+"\n\n"+prompt exactly like gemini/copilot.
+	//
+	// --mode plan makes agy describe/propose actions in text instead of
+	// running them -- verified live: asked to create a file, it wrote a
+	// plan description ("I have created the implementation plan: ...
+	// Please review... click Proceed") and created nothing. --sandbox
+	// layers on terminal restrictions on top.
+	//
+	// --disable-slash-commands is deliberately NOT passed, even though
+	// every other spec in this file favors "disable everything optional":
+	// agy prints "warning: --mode plan has no effect while slash command
+	// expansion is disabled" when both are given together, and headless
+	// mode's default behavior (no --mode plan in effect) is to silently
+	// auto-deny any tool call that would need a permission prompt --
+	// exit 0, EMPTY stdout, only an explanatory stderr line (see
+	// antigravityParse) -- for any prompt the model decides to act on
+	// rather than just answer. Slash-command expansion only fires on a
+	// message that itself starts with "/", and the combined prompt here
+	// always starts with req.System (shelp's own fixed template text,
+	// never "/"), so leaving expansion enabled is safe regardless of what
+	// the user's free-text req.Prompt contains.
+	//
+	// --dangerously-skip-permissions is never used (would auto-approve
+	// every tool, including file writes and shell commands).
+	args := []string{
+		"-p", req.System + "\n\n" + req.Prompt,
+		"--output-format", "text",
+		"--sandbox",
+		"--mode", "plan",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return args
+}
+
+func antigravityParse(id string, res CmdResult, outFile string) (string, error) {
+	if res.ExitCode != 0 {
+		msg := unavailableMsg(res)
+		low := strings.ToLower(msg)
+		switch {
+		case strings.Contains(low, "not logged in"):
+			// Inferred from the CLI binary's own embedded strings ("Print
+			// mode: not logged in and no controlling terminal; cannot
+			// complete interactive login") -- not observed live, since
+			// forcing this account to log out would have disrupted the
+			// user's active agy session.
+			return "", Unavailable(id, "antigravity not logged in: run `agy` once interactively to sign in")
+		case strings.Contains(low, "overloaded") || strings.Contains(low, "high traffic") || strings.Contains(low, "quota") || strings.Contains(low, "rate limit"):
+			// Also inferred from embedded strings ("The model API is
+			// currently overloaded and may experience intermittent
+			// errors.", "Our servers are experiencing high traffic right
+			// now, please try again in a minute.") rather than observed
+			// live, to avoid deliberately exhausting this free-tier
+			// account's daily quota.
+			return "", Unavailable(id, "antigravity rate limited or overloaded: %s", msg)
+		default:
+			return "", Unavailable(id, "agy exited %d: %s", res.ExitCode, msg)
+		}
+	}
+	if strings.TrimSpace(res.Stdout) == "" {
+		if msg := unavailableMsg(res); msg != "" {
+			// Headless mode auto-denies any tool call needing a permission
+			// prompt it cannot show: exit 0, empty stdout, an explanatory
+			// stderr line. Verified live 2026-09-30 (asked to create a
+			// file, with --mode plan omitted): "jetski: no output produced
+			// -- a tool required the \"write_file\" permission that
+			// headless mode cannot prompt for, so it was auto-denied. Add
+			// an allow-rule under permissions.allow in settings.json (e.g.
+			// write_file(<target>)). Alternatively, re-run with
+			// --dangerously-skip-permissions to auto-approve all tools."
+			return "", Unavailable(id, "agy returned no output: %s", msg)
+		}
+		return "", Unavailable(id, "agy returned no output")
+	}
+	return res.Stdout, nil
+}
+
+// --- antigravity model cache ---------------------------------------------
+//
+// $XDG_CACHE_HOME/shelp/antigravity-models.json (default ~/.cache/shelp/),
+// written by antigravityIdentify (Detect) after a successful `agy models`;
+// read by antigravityDefaultModels (Providers(), via cliSpec.
+// defaultModelsFn) so listing providers stays config-plus-a-small-file-read
+// with no process execution of its own -- mirrors the openai family's
+// local-models.json (see readLocalModelCache/writeLocalModelCache above).
+// The account's actual model list is free-tier/account-dependent and can
+// change over time, hence caching it instead of hardcoding it; only the
+// two-model fallback in antigravityDefaultModels is hardcoded, for a
+// completely cold cache (first run on a machine, or a failed `agy models`).
+
+type antigravityModelCache struct {
+	Models  []string  `json:"models"`
+	Updated time.Time `json:"updated"`
+}
+
+func antigravityCachePath() string {
+	dir := os.Getenv("XDG_CACHE_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(dir, "shelp", "antigravity-models.json")
+}
+
+func readAntigravityModelCache() []string {
+	b, err := os.ReadFile(antigravityCachePath())
+	if err != nil {
+		return nil
+	}
+	var c antigravityModelCache
+	if json.Unmarshal(b, &c) != nil {
+		return nil
+	}
+	return c.Models
+}
+
+func writeAntigravityModelCache(models []string) error {
+	path := antigravityCachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(antigravityModelCache{Models: models, Updated: time.Now().UTC()}, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// listAntigravityModels runs `agy models` in a fresh, empty, just-created
+// temp directory (never this repo's own, matching every other call in this
+// file) and parses its tab-separated "<id>\t<label>" lines (e.g.
+// "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)", verified live
+// 2026-09-30; the "Fetching available models..." progress line goes to
+// stderr, not stdout) into bare model ids.
+func listAntigravityModels(ctx context.Context) ([]string, error) {
+	dir, err := os.MkdirTemp("", "shelp-agentcli-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	res, err := RunCmdOpts(ctx, CmdOpts{Dir: dir}, "agy", "models")
+	if err != nil {
+		return nil, err
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("agy models exited %d", res.ExitCode)
+	}
+	return parseAntigravityModels(res.Stdout), nil
+}
+
+func parseAntigravityModels(stdout string) []string {
+	var ids []string
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		id, _, _ := strings.Cut(line, "\t")
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
