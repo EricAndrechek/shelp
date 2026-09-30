@@ -60,6 +60,11 @@ $ shelp providers --reset-cooldowns                     # clear recorded rate-li
 $ shelp setup shortcuts                                 # install the Apple Shortcuts this needs
 ```
 
+In zsh the integration runs `shelp` under `noglob`, so `shelp delete all
+*.log files` reaches the model as typed. bash and fish expand globs before
+any function sees them: quote tasks there that contain `*`, `?` or `[`, and
+in any shell quote tasks containing an apostrophe (`shelp "what's my ip"`).
+
 Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
 config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
 `--json`, `-v`/`--verbose`, `--force` (call a provider even if it's

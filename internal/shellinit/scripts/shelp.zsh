@@ -12,6 +12,10 @@ shelp() {
   esac
 }
 
+# Don't glob the task: `shelp find all *.log files` should reach shelp as
+# typed, not fail with "no matches found" (or expand to filenames) first.
+alias shelp='noglob shelp'
+
 # Widget: turn the text on the command line into a command in place.
 # Bind it yourself, e.g.:  bindkey '^G' shelp-widget
 shelp-widget() {
