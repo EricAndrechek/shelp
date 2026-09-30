@@ -25,6 +25,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -185,7 +186,89 @@ func (p *shortcutsProvider) Detect(ctx context.Context) Status {
 		}
 		return Status{Reason: reason}
 	}
-	return Status{Available: true, Version: p.variant.model}
+	// Installed and still callable either way, so Available stays true even
+	// when outdated -- see outdatedShortcutNote's doc comment for why this
+	// is only a Reason note, not an Unavailable.
+	st := Status{Available: true, Version: p.variant.model}
+	if note := outdatedShortcutNote(ctx, p.name); note != "" {
+		st.Reason = note
+	}
+	return st
+}
+
+// shortcutV1ActionCount is how many WFWorkflowActions entries the original,
+// marker-less shortcut format has (just Use Model + Stop and Output -- see
+// shortcutgen.go's ShortcutFormatVersion doc comment). A shortcut at this
+// count predates the version-marker If block entirely, so its single
+// action IS Use Model: shortcutVersionMarker must never be sent to it, it
+// would go straight to the model as the prompt.
+const shortcutV1ActionCount = 2
+
+// appleScriptQuote escapes s for embedding inside a double-quoted
+// AppleScript string literal (backslash and double-quote).
+func appleScriptQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
+// shortcutActionCountCmd runs a read-only AppleScript query for name's
+// installed action count via the Shortcuts Events app's scripting
+// dictionary. Verified live on macOS 27.0 against the real, installed
+// "Ask AI" shortcut (a v1, 2-action shortcut):
+//
+//	osascript -e 'tell application "Shortcuts Events" to get action count of shortcut "Ask AI"'
+//	-> 2, ~150-170ms
+//
+// and against a nonexistent name (exit 1, "Can't get shortcut ... (-1728)"
+// on stderr). This never runs the shortcut and never touches the model --
+// it only asks the app a property of the shortcut object -- so it's the
+// cheap, safe check the outdated-version detection is built on: it's safe
+// to call on a shortcut of unknown format, unlike shortcutVersionMarker,
+// which callers must only send once this check has confirmed the count
+// already matches the current generator.
+//
+// It's a package var, like shortcutsListCmd/openCmd, so tests can fake it
+// without ever touching the real Shortcuts app, and so production code can
+// wrap/time it.
+var shortcutActionCountCmd = func(ctx context.Context, name string) (int, error) {
+	script := fmt.Sprintf(`tell application "Shortcuts Events" to get action count of shortcut "%s"`, appleScriptQuote(name))
+	res, err := RunCmd(ctx, nil, nil, "osascript", "-e", script)
+	if err != nil {
+		return 0, err
+	}
+	if res.ExitCode != 0 {
+		return 0, fmt.Errorf("osascript exited %d: %s", res.ExitCode, FirstLine(res.Stderr))
+	}
+	n, perr := strconv.Atoi(strings.TrimSpace(res.Stdout))
+	if perr != nil {
+		return 0, fmt.Errorf("parse action count %q: %w", res.Stdout, perr)
+	}
+	return n, nil
+}
+
+// outdatedShortcutNote reports whether the installed shortcut named name is
+// outdated relative to the current generator (shortcutgen.go's
+// currentShortcutActionCount), by comparing action counts -- never by
+// running the marker (see shortcutActionCountCmd's doc comment: never sent
+// to a shortcut whose count says v1). It returns "" when the count matches
+// the current format, or when the check itself failed: an osascript error
+// (Shortcuts Events unavailable, a transient failure, ...) must never make
+// an otherwise-working, installed shortcut look unavailable or wrongly
+// "outdated" -- this is a best-effort note, not a hard gate.
+func outdatedShortcutNote(ctx context.Context, name string) string {
+	count, err := shortcutActionCountCmd(ctx, name)
+	if err != nil {
+		return ""
+	}
+	current := currentShortcutActionCount()
+	if count == current {
+		return ""
+	}
+	if count == shortcutV1ActionCount {
+		return fmt.Sprintf("outdated shortcut (format v1, current v%d): run `shelp setup shortcuts` to update", ShortcutFormatVersion)
+	}
+	return fmt.Sprintf("outdated shortcut (%d actions, current format v%d expects %d): run `shelp setup shortcuts` to update", count, ShortcutFormatVersion, current)
 }
 
 func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, error) {

@@ -141,6 +141,100 @@ func TestVerifyBackendArgsNeverUsesBareLog(t *testing.T) {
 	}
 }
 
+// --- Outdated-version detection (action count; shortcutActionCountCmd faked) ---
+
+func TestAppleScriptQuote(t *testing.T) {
+	cases := map[string]string{
+		`Ask AI`:              `Ask AI`,
+		`shelp · "Pro" + Web`: `shelp · \"Pro\" + Web`,
+		`back\slash`:          `back\\slash`,
+	}
+	for in, want := range cases {
+		if got := appleScriptQuote(in); got != want {
+			t.Errorf("appleScriptQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func installFakeActionCount(t *testing.T, fn func(ctx context.Context, name string) (int, error)) {
+	t.Helper()
+	orig := shortcutActionCountCmd
+	t.Cleanup(func() { shortcutActionCountCmd = orig })
+	shortcutActionCountCmd = fn
+}
+
+func TestOutdatedShortcutNoteCurrent(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return currentShortcutActionCount(), nil
+	})
+	if got := outdatedShortcutNote(context.Background(), "Ask AI"); got != "" {
+		t.Errorf("outdatedShortcutNote() = %q, want empty for a current shortcut", got)
+	}
+}
+
+func TestOutdatedShortcutNoteV1(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return shortcutV1ActionCount, nil
+	})
+	got := outdatedShortcutNote(context.Background(), "Ask AI")
+	for _, want := range []string{"outdated", "format v1", "shelp setup shortcuts"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("outdatedShortcutNote() = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+func TestOutdatedShortcutNoteUnexpectedCount(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return 99, nil // neither v1 nor the current format
+	})
+	got := outdatedShortcutNote(context.Background(), "Ask AI")
+	for _, want := range []string{"outdated", "99", "shelp setup shortcuts"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("outdatedShortcutNote() = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+func TestOutdatedShortcutNoteErrorIsNeverOutdated(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return 0, errors.New("osascript exited 1: Can't get shortcut")
+	})
+	if got := outdatedShortcutNote(context.Background(), "Ask AI"); got != "" {
+		t.Errorf("outdatedShortcutNote() = %q, want empty when the check itself fails (never treated as outdated)", got)
+	}
+}
+
+// TestShortcutsProviderDetectReportsOutdated exercises Detect end to end
+// (installedShortcuts + outdatedShortcutNote together): an installed but
+// outdated shortcut must still report Available true (it works) with a
+// Reason mentioning the update. installedShortcuts caches for the life of
+// the process (see its doc comment), so this is deliberately the only test
+// in this package that calls Detect -- a second one would just read back
+// this one's cached `shortcuts list` fake.
+func TestShortcutsProviderDetectReportsOutdated(t *testing.T) {
+	origList := shortcutsListCmd
+	t.Cleanup(func() { shortcutsListCmd = origList })
+	shortcutsListCmd = func(ctx context.Context) (string, error) {
+		return "Ask AI", nil
+	}
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return shortcutV1ActionCount, nil
+	})
+
+	p := &shortcutsProvider{
+		variant: shortcutVariant{id: "shortcuts:apple-pro", model: "Apple Intelligence Pro"},
+		name:    "Ask AI",
+	}
+	st := p.Detect(context.Background())
+	if !st.Available {
+		t.Fatalf("Detect() Available = false, want true (an outdated shortcut still works): %+v", st)
+	}
+	if !strings.Contains(st.Reason, "outdated") || !strings.Contains(st.Reason, "shelp setup shortcuts") {
+		t.Errorf("Detect() Reason = %q, want it to mention the shortcut is outdated and how to update", st.Reason)
+	}
+}
+
 // --- Rate-limit classification (pure function, no `shortcuts` calls) ---
 
 func TestShortcutsRateLimitReason(t *testing.T) {
