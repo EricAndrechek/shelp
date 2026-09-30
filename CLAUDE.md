@@ -20,10 +20,12 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `shortcuts.go` (the `shortcuts:*` providers, +`shortcuts_test.go`),
   `shortcutgen.go` (builds/signs the "Use Model" `.shortcut` plist,
   +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`), and
-  `agentcli.go` (the `claude`/`gemini`/`codex`/`copilot` headless-CLI
-  providers, +`agentcli_test.go`, `testdata/agentcli/{claude,gemini,codex,
-  copilot}` — byte-identical fake CLI scripts driven entirely by
-  `SHELP_FAKE_*` env vars, see the doc comment in `testdata/agentcli/claude`).
+  `agentcli.go` (the `claude`/`gemini`/`codex`/`copilot`/`antigravity`
+  headless-CLI providers, +`agentcli_test.go`, `testdata/agentcli/{claude,
+  gemini,codex,copilot,agy}` — byte-identical fake CLI scripts driven
+  entirely by `SHELP_FAKE_*` env vars, see the doc comment in
+  `testdata/agentcli/claude`; the file is named `agy` since that's the
+  antigravity provider's binary name, not `antigravity`).
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
@@ -103,14 +105,17 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   default), refreshed by `Detect`, not read live on every `Providers()`
   call.
 - **agentcli**: `[agentcli]` has one sub-table per CLI — `[agentcli.claude]`,
-  `[agentcli.gemini]`, `[agentcli.codex]`, `[agentcli.copilot]` — each with
-  `models` (a list overriding that CLI's built-in variant ids/flag values;
-  a name matching a built-in id like `"haiku"` reuses its flag value, any
-  other string is passed through verbatim as both id and `-m`/`--model`
-  value) and `disabled` (drop this CLI's providers even when the binary is
-  on PATH). Every CLI also always runs in a fresh empty temp directory
-  (`Generate`'s scratch dir, not the config file's directory) so none of
-  them pick up this repo's own CLAUDE.md/AGENTS.md/GEMINI.md.
+  `[agentcli.gemini]`, `[agentcli.codex]`, `[agentcli.copilot]`,
+  `[agentcli.antigravity]` — each with `models` (a list overriding that
+  CLI's built-in variant ids/flag values; a name matching a built-in id
+  like `"haiku"` reuses its flag value, any other string is passed through
+  verbatim as both id and `-m`/`--model` value) and `disabled` (drop this
+  CLI's providers even when the binary is on PATH). The antigravity table
+  is keyed `antigravity` (matching its shelp ID prefix, `antigravity:
+  <model>`) even though the binary it invokes is `agy`. Every CLI also
+  always runs in a fresh empty temp directory (`Generate`'s scratch dir,
+  not the config file's directory) so none of them pick up this repo's
+  own CLAUDE.md/AGENTS.md/GEMINI.md.
 
 ## Backend notes (verified on macOS 27.0, M4 Pro)
 
@@ -153,7 +158,7 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
 - PCC has an unpublished daily cap (higher with iCloud+).
 
-### agentcli (claude / gemini / codex / copilot headless CLIs)
+### agentcli (claude / gemini / codex / copilot / antigravity headless CLIs)
 - **claude** authenticates via claude.ai (a subscription, not an API key).
   `--bare` cannot be used with subscription auth: it forces
   `ANTHROPIC_API_KEY`/`apiKeyHelper` only ("OAuth and keychain are never
@@ -165,8 +170,10 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   claude has to "just answer in text". `--model` takes the `haiku`/`sonnet`
   aliases directly; `--system-prompt` is a separate flag (no
   system+prompt concatenation needed, unlike gemini/codex/copilot).
-- **gemini** refuses to run non-interactively in an untrusted folder (a
-  fresh temp dir always is) unless `--skip-trust` is passed. Separately, a
+- **gemini** — kept for anyone still on the old CLI; Google's replacement
+  is Antigravity (`agy`, see the antigravity bullet below). It refuses to
+  run non-interactively in an untrusted folder (a fresh temp dir always is)
+  unless `--skip-trust` is passed. Separately, a
   stale cached OAuth token makes `gemini -p` try to reopen a browser
   re-auth flow and hang on an interactive `[Y/n]`-style prompt that a
   non-TTY stdin never answers — confirmed even with `--skip-trust` and
@@ -202,6 +209,32 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   background regardless (observed version drift across a few minutes of
   local testing); `Detect` doesn't hard-fail on an unexpected version
   string, just reports it.
+- **antigravity** (`agy`) is Google's replacement for the deprecated
+  standalone Gemini CLI (its own login flow now points users at
+  Antigravity). Like gemini/copilot, `agy` documents no separate
+  system-prompt flag, so `antigravityArgs` concatenates
+  `system + "\n\n" + prompt` into `-p`. Full argv:
+  `agy -p <text> --output-format text --sandbox --mode plan [--model M]`.
+  `--mode plan` makes agy describe/propose actions in text instead of
+  running them (verified live: asked to create a file, it wrote a plan
+  description and touched nothing); `--sandbox` layers on terminal
+  restrictions on top. `--disable-slash-commands` is deliberately NOT
+  passed even though every other spec in this file favors "disable
+  everything optional": agy prints a warning and neutralizes `--mode plan`
+  when both are given together, falling back to headless mode's default
+  behavior of silently auto-denying any tool call it can't get permission
+  for (exit 0, empty stdout, only an explanatory stderr line). `agy
+  --help` writes its usage text to stderr, not stdout, unlike every other
+  CLI in this file. `agy models`'s list is account/tier-dependent (free
+  tier, observed 2026-09-30: three Gemini 3.x flash families x 3 effort
+  levels, Gemini 3.1 Pro x 2 effort levels, claude-sonnet-4-6,
+  claude-opus-4-6-thinking, gpt-oss-120b-medium) and can change, so
+  `antigravityIdentify` (`Detect`) refreshes a cache at
+  `$XDG_CACHE_HOME/shelp/antigravity-models.json` instead of hardcoding
+  it; `Providers()` reads that cache (falling back to two hardcoded ids on
+  a cold cache), so a second `shelp providers` lists every model the
+  account actually has. Measured p50: `gemini-3.8-flash-low` 5.18s,
+  `gemini-3.1-pro-low` 8.12s.
 
 ## Rate limits and cooldowns
 
@@ -216,14 +249,22 @@ flooded. `shelp`'s own CLI has the identical exposure: each call tries
 the rate-limited shortcut first (another notification) before falling
 through to the next provider in the chain.
 
-Classification per family: shortcuts.go treats stdout/stderr containing
-"usage limit" or "try again later" (case-insensitive, checked regardless
-of exit code -- a rate-limited "Use Model" run typically still exits 0
-with the error text as its output) as a rate limit; openai.go treats an
-HTTP 429 as one, parsing `Retry-After` (seconds or an HTTP-date) when
-present; agentcli.go's parse funcs treat "rate limit", "quota", "usage
-limit", "429", or "resource exhausted" in a failed call's stderr/stdout
-(case-insensitive, non-zero exit) as one. All three construct
+Classification per family: shortcuts.go treats stdout/stderr as a rate
+limit in two shapes only, not a blanket substring match regardless of
+exit code -- that would misfire on a successful answer that happens to
+contain "try again later" (e.g. explaining a retry loop). (a) a non-zero
+exit whose stdout/stderr contains "usage limit" or "try again later"
+(case-insensitive); or (b) an exit-0 run whose trimmed stdout starts with
+"Error:" and contains "usage limit" -- the one real observed exit-0 shape
+("Error: You have reached the usage limit for this model. Please try
+again later.": a rate-limited "Use Model" run typically still exits 0,
+its output IS the error text). openai.go treats an HTTP 429 as one,
+parsing `Retry-After` (seconds or an HTTP-date) when present; agentcli.go's
+parse funcs treat "rate limit", "quota", "usage limit", "429", or
+"resource exhausted" in a failed call's stderr/stdout (case-insensitive,
+non-zero exit) as one, plus antigravityParse's own "overloaded"/"high
+traffic" (agy-specific phrases, inferred from its embedded strings, not
+observed live). All three families construct
 `provider.RateLimitedError` via `provider.RateLimited(id, retryAfter,
 format, args...)`, which still satisfies `errors.As(err,
 &*UnavailableError)` (via `Unwrap`), so every existing "is this provider

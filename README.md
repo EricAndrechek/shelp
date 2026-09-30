@@ -64,6 +64,7 @@ currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
 | `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
 | `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
 | `claude:haiku`, `claude:sonnet`, `gemini:default`, `codex:default`, `copilot:default` | agent-cli | the CLI installed and logged in (`claude`, `gemini`, `codex`, `copilot`) | log in with each CLI's own command (`claude /login`, `gemini` once interactively, `codex login`, `copilot login`) |
+| `antigravity:<model>`, e.g. `antigravity:gemini-3.8-flash-low` | agent-cli | `agy` (Antigravity CLI, Google's free-tier replacement for the deprecated Gemini CLI) installed and logged in | run `agy` once interactively to sign in; available models are listed by `agy models` and cached to `~/.cache/shelp/antigravity-models.json` after a `shelp providers` |
 
 `shelp providers` probes every registered provider and prints which are
 `ok` vs `unavailable` (and why) on this machine right now.
@@ -130,6 +131,9 @@ models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
 
 [agentcli.copilot]
 disabled = true   # e.g. to keep it out of the default fallback chain
+
+[agentcli.antigravity]
+models = ["gemini-3.8-flash-low", "claude-sonnet-4-6"]   # pick from `agy models`
 ```
 
 ## Benchmark
@@ -164,7 +168,8 @@ _Results pending._
 Any provider can be rate-limited or out of quota, not just missing or
 offline -- Apple's Shortcuts "Use Model" backends, OpenAI-compatible
 endpoints (HTTP 429), and the agent CLIs (`claude`, `gemini`, `codex`,
-`copilot`) all report this distinctly from a plain failure. When shelp
+`copilot`, `antigravity`) all report this distinctly from a plain
+failure. When shelp
 sees one, it remembers: the provider ID goes into a small cooldown store
 (`$XDG_CACHE_HOME/shelp/cooldown.json`, `~/.cache/shelp/` by default) for
 30 minutes by default (the `cooldown` config key, or the backend's own
@@ -195,9 +200,13 @@ By default shelp tells the model only your OS and shell (`context =
 they leave the machine once a cloud provider is in the chain. Apple's
 on-device `fm` never sends anything off your Mac. Any cloud provider —
 Shortcuts' Apple Intelligence Pro / ChatGPT, an `[[openai.endpoint]]`, or
-one of the agent CLIs (`claude`, `gemini`, `codex`, `copilot`, each
-talking to its own cloud account) — receives your full prompt: the task
-or command you gave it, plus whatever context fields are enabled.
+one of the agent CLIs (`claude`, `gemini`, `codex`, `copilot`,
+`antigravity`, each talking to its own cloud account) — receives your
+full prompt: the task or command you gave it, plus whatever context
+fields are enabled. `agy` (the antigravity provider) additionally stores
+every conversation under `~/.gemini/antigravity-cli/` on disk regardless
+of any flags shelp passes it, so calls made through `antigravity:*` leave
+a local history there too, independent of shelp's own behavior.
 
 ## Caveats
 
@@ -208,8 +217,9 @@ or command you gave it, plus whatever context fields are enabled.
   click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
   and signs the shortcut and opens it for you, but can't click through
   the import dialog itself — there's no API for that.
-- The `claude`/`gemini`/`codex`/`copilot` agent-cli providers spend your
-  subscription's usage quota on every call, same as using that CLI
-  directly, and are noticeably slower than the other backends: about 2-6s
-  per call (they're full coding agents starting up in headless mode, not
-  a lightweight API request).
+- The `claude`/`gemini`/`codex`/`copilot`/`antigravity` agent-cli providers
+  spend your account's usage quota on every call, same as using that CLI
+  directly (a paid subscription for claude/codex/copilot, a free-tier
+  daily quota for gemini/antigravity), and are noticeably slower than the
+  other backends: about 2-8s per call (they're full coding agents starting
+  up in headless mode, not a lightweight API request).
