@@ -23,14 +23,24 @@ Status: early, local-only (no remote for this repo yet).
 ## Install
 
 ```sh
+# Homebrew (local tap while the repo has no public remote)
+brew tap ericandrechek/shelp ~/Code/public-projects/shelp
+brew install ericandrechek/shelp/shelp
+
+# or from a checkout
 make install                 # -> ~/.local/bin/shelp
+```
+
+Then hook it into your shell and see what works:
+
+```sh
 eval "$(shelp init zsh)"     # add to ~/.zshrc
 eval "$(shelp init bash)"    # add to ~/.bashrc, or:
 shelp init fish | source     # add to ~/.config/fish/config.fish
 
-# optional: keep the old ghcs/ghce muscle memory
-alias ghcs=shelp
-alias ghce='shelp explain'
+shelp providers              # which models work on this machine
+shelp setup shortcuts        # optional: Apple Intelligence Pro via Shortcuts
+sudo fm license              # optional: Apple's on-device model (macOS 27+)
 ```
 
 The shell integration wraps `shelp` in a function (zsh/bash/fish, in the
