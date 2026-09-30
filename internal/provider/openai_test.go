@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -271,6 +272,73 @@ func TestGenerate_429IsUnavailable(t *testing.T) {
 	assertUnavailable(t, err)
 }
 
+func TestGenerate_429IsRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:model-a", kind: API, baseURL: srv.URL, model: "model-a", label: "unit"}
+	_, err := p.Generate(context.Background(), testReq(t, nil))
+	var rle *RateLimitedError
+	if !errors.As(err, &rle) {
+		t.Fatalf("error = %v (%T), want *RateLimitedError", err, err)
+	}
+	if rle.ID != "unit:model-a" {
+		t.Errorf("ID = %q, want unit:model-a", rle.ID)
+	}
+	if rle.RetryAfter != 0 {
+		t.Errorf("RetryAfter = %v, want 0 (no Retry-After header)", rle.RetryAfter)
+	}
+}
+
+func TestGenerate_429WithRetryAfterSecondsIsRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "42")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"rate limited"}}`)
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:model-a", kind: API, baseURL: srv.URL, model: "model-a", label: "unit"}
+	_, err := p.Generate(context.Background(), testReq(t, nil))
+	var rle *RateLimitedError
+	if !errors.As(err, &rle) {
+		t.Fatalf("error = %v (%T), want *RateLimitedError", err, err)
+	}
+	if rle.RetryAfter != 42*time.Second {
+		t.Errorf("RetryAfter = %v, want 42s", rle.RetryAfter)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want time.Duration
+	}{
+		{"empty", "", 0},
+		{"seconds", "120", 120 * time.Second},
+		{"zero seconds", "0", 0},
+		{"negative seconds", "-5", 0},
+		{"garbage", "not-a-duration", 0},
+		{"past http-date", "Sun, 06 Nov 1994 08:49:37 GMT", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseRetryAfter(c.in); got != c.want {
+				t.Errorf("parseRetryAfter(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+	// A future HTTP-date should parse to a roughly-correct positive
+	// duration; check with tolerance rather than an exact value.
+	future := time.Now().Add(90 * time.Second).UTC()
+	got := parseRetryAfter(future.Format(http.TimeFormat))
+	if got < 80*time.Second || got > 100*time.Second {
+		t.Errorf("parseRetryAfter(future http-date) = %v, want ~90s", got)
+	}
+}
+
 func TestGenerate_404IsUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -326,13 +394,18 @@ func TestGenerate_MissingAPIKeyIsUnavailable(t *testing.T) {
 	}
 }
 
+// assertUnavailable checks the "is this provider unavailable" contract the
+// way real callers do (errors.As, which also finds an *UnavailableError
+// reachable via Unwrap -- e.g. a *RateLimitedError, which is a form of
+// unavailability), not a direct type assertion.
 func assertUnavailable(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if _, ok := err.(*UnavailableError); !ok {
-		t.Fatalf("expected *UnavailableError, got %T: %v", err, err)
+	var ue *UnavailableError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected an error satisfying errors.As(&UnavailableError), got %T: %v", err, err)
 	}
 }
 

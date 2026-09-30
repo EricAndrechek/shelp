@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -371,12 +372,36 @@ func mapHTTPError(id, model string, resp *http.Response) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return Unavailable(id, "authentication failed (%d): check the API key (%s)", resp.StatusCode, msg)
 	case http.StatusTooManyRequests:
-		return Unavailable(id, "rate limited (429): %s", msg)
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		return RateLimited(id, retryAfter, "rate limited (429): %s", msg)
 	case http.StatusNotFound:
 		return Unavailable(id, "model %q not found: is it loaded/served? (%s)", model, msg)
 	default:
 		return fmt.Errorf("%s: unexpected status %d: %s", id, resp.StatusCode, excerpt(body))
 	}
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value, which the spec
+// allows as either an integer number of seconds or an HTTP-date. Returns 0
+// (no override; the caller applies its own default cooldown) when the
+// header is absent, empty, negative, or unparseable in either form.
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func extractErrorMessage(body []byte) string {
