@@ -314,7 +314,10 @@ limit instead of tripping the breaker at all.
 
 ## Conventions
 
-- Go 1.27, stdlib first; deps so far: BurntSushi/toml.
+- Go 1.27, stdlib first; deps so far: BurntSushi/toml, mvdan.cc/sh/v3
+  (`internal/bench/checks.go`'s `commands_exist` check parses the command
+  for real instead of a naive regex splitter -- see "Automatic checks" in
+  bench/README.md).
 - `make vet test build`. Keep `shelp` startup < 10ms: no work in init()
   beyond registration.
 - Commits: one change per commit; this repo has no remote.

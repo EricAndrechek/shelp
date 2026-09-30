@@ -288,11 +288,28 @@ Run per trial, recorded in `checks`, never a substitute for grading:
   whichever matches the trial's target shell. `null` when that shell isn't
   installed on the runner.
 - **`commands_exist`** (only when the trial's case `os` matches the host
-  actually running the benchmark): the first word of each simple command
-  (pipelines/`&&`/`;`/one level of `$(...)`/backtick substitution are
-  split; leading `VAR=val` assignments, variables, and shell
-  builtins/keywords are skipped) is checked with `command -v` in the target
-  shell. Lists any missing names.
+  actually running the benchmark): the command is parsed with
+  `mvdan.cc/sh/v3/syntax` (`LangBash` for the `bash`/`zsh` target shells,
+  `LangPOSIX` for `sh`; `fish` skips this check entirely, since its syntax
+  differs too much from bash/POSIX to parse safely as either) and every
+  `CallExpr`'s first argument is taken as a candidate command name — but
+  only when it's a plain literal (`Word.Lit()` non-empty): a `$x` variable,
+  a `"$(...)"`/backtick substitution, or a quoted string is never treated
+  as a command name. Real parsing (rather than the naive regex splitter
+  this replaced) is what keeps zsh arithmetic (`(( ... ))`), `case`
+  patterns, and a quoted awk/sed/grep program from ever being misread as a
+  command word in the first place — the old splitter produced false
+  "missing command" hits like `((`, `master)$'`, `sub(/^`, `c[n]++`, and
+  `HEAD)(N)` on exactly these constructs. Leading `VAR=val` assignments and
+  shell builtins/keywords are skipped, same as before. Some zsh-only
+  syntax (a `repeat` loop, for example) genuinely fails to parse as bash —
+  glob qualifiers like `*(N)`, `${f:l}`-style modifiers, `print -z`, and
+  `(( ... ))` itself all parse fine and do NOT hit this — and on a parse
+  error the check falls back to the old regex-based splitter, but now also
+  drops any candidate containing a character that can't appear in a real
+  command name (`` (){}[]'"$;|&<>= `` and `/`, unless the candidate is a
+  path that actually exists), so a parse failure can't reintroduce the
+  same false positives through the fallback path. Lists any missing names.
 - **`gnuisms`** (`os = "macos"` only): named regex/heuristic rules for
   GNU-only usage that behaves differently or fails on stock macOS —
   `sed -i` without a backup-suffix argument, `grep -P`, `find -printf`,

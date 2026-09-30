@@ -6,10 +6,12 @@ package bench
 
 import (
 	"context"
+	"os"
 	"regexp"
 	"strings"
 
 	"github.com/ericandrechek/shelp/internal/provider"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Checks holds every automatic check's result for one trial. Fields are
@@ -174,20 +176,110 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// CommandsExist checks that the first word of each simple command in cmd
-// resolves via `command -v` in the given shell. It returns (nil, nil) when
-// the shell isn't installed (skipped); callers should only invoke this when
+// badCommandNameChars are characters that can never appear in a real
+// command name; a fallback-splitter candidate containing one of these is a
+// mis-split artifact (an awk program fragment, a case pattern, a regex
+// alternation, ...), not a real command, and is dropped rather than
+// reported as "missing". "/" is handled separately (see
+// plausibleCommandName): a path IS a legal thing to exec.
+const badCommandNameChars = `(){}[]'"$;|&<>=`
+
+// plausibleCommandName reports whether w could plausibly be a real command
+// name: it contains none of badCommandNameChars, and if it contains a "/"
+// (a path, e.g. "./script.sh" or "/usr/local/bin/foo"), that path actually
+// exists. Only used by the fallback splitter path (parse error), to keep
+// the "naive" splitter from reporting split artifacts as missing commands.
+func plausibleCommandName(w string) bool {
+	if strings.ContainsAny(w, badCommandNameChars) {
+		return false
+	}
+	if strings.Contains(w, "/") {
+		if _, err := os.Stat(w); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// commandNames extracts the candidate command names to check in cmd for
+// the given target shell, or (nil, false) when the check does not apply at
+// all (fish: its syntax differs enough from bash/POSIX that parsing it as
+// either would misparse it, so it is skipped entirely rather than risk
+// false positives).
+//
+// bash/zsh are parsed as syntax.LangBash, sh as syntax.LangPOSIX, walking
+// every CallExpr and taking each one's first Arg as the candidate (Assigns
+// -- leading VAR=val environment assignments -- are already kept separate
+// from Args by the parser, so they never need special-casing; a call with
+// no Args at all, e.g. a bare "FOO=bar", is skipped). Word.Lit() returns ""
+// for anything that isn't a plain literal (a "$x" parameter expansion, a
+// "$(...)"/backtick command substitution, a quoted string, a glob), so
+// those are skipped rather than misreported -- this, plus the parser
+// correctly modeling constructs like zsh arithmetic ("(( ... ))"), case
+// patterns, and quoted awk/sed/grep programs as their own syntax nodes
+// rather than plain commands, is what fixes the false positives the naive
+// splitter used to produce (e.g. "((", "master)$'", "sub(/^",  "c[n]++",
+// "HEAD)(N)" -- see checks_test.go).
+//
+// Some zsh-only syntax genuinely fails to parse as bash (e.g. a "repeat"
+// loop); glob qualifiers like "*(N)", "${f:l}"-style modifiers, "print -z",
+// and "(( ... ))" itself all parse fine under LangBash and don't hit this.
+// On a parse error, commandNames falls back to the old regex-based
+// splitter (commandSegments/firstCommandWord) but additionally drops any
+// candidate that fails plausibleCommandName, since the naive splitter is
+// exactly what produced those false positives in the first place.
+func commandNames(shell, cmd string) (names []string, applicable bool) {
+	if shell == "fish" {
+		return nil, false
+	}
+	lang := syntax.LangBash
+	if shell == "sh" {
+		lang = syntax.LangPOSIX
+	}
+	parser := syntax.NewParser(syntax.Variant(lang))
+	f, err := parser.Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		for _, seg := range commandSegments(cmd) {
+			w := firstCommandWord(seg)
+			if w != "" && plausibleCommandName(w) {
+				names = append(names, w)
+			}
+		}
+		return names, true
+	}
+	syntax.Walk(f, func(n syntax.Node) bool {
+		ce, isCall := n.(*syntax.CallExpr)
+		if !isCall || len(ce.Args) == 0 {
+			return true
+		}
+		w := ce.Args[0].Lit()
+		if w == "" || builtinsAndKeywords[w] {
+			return true
+		}
+		names = append(names, w)
+		return true
+	})
+	return names, true
+}
+
+// CommandsExist checks that each candidate command name found in cmd (see
+// commandNames) resolves via `command -v` in the given shell. It returns
+// (nil, nil) when the shell isn't installed, or when the check doesn't
+// apply to this shell at all (fish); callers should only invoke this when
 // the trial's case os matches the host os.
 func CommandsExist(ctx context.Context, shell, cmd string) (ok *bool, missing []string) {
 	bin, _ := shellBin(shell)
 	if _, found := provider.LookPath(bin); !found {
 		return nil, nil
 	}
+	names, applicable := commandNames(shell, cmd)
+	if !applicable {
+		return nil, nil
+	}
 	seen := map[string]bool{}
 	allOK := true
-	for _, seg := range commandSegments(cmd) {
-		w := firstCommandWord(seg)
-		if w == "" || seen[w] {
+	for _, w := range names {
+		if seen[w] {
 			continue
 		}
 		seen[w] = true
