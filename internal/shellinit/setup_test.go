@@ -326,3 +326,23 @@ func TestSetup_UnknownShell(t *testing.T) {
 		t.Fatal("want error for unknown shell")
 	}
 }
+
+func TestSetupSkipsWhenHookActive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELP_HOOKS", "bash zsh")
+	res, err := Setup(context.Background(), SetupOptions{Shell: "zsh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != "active" {
+		t.Fatalf("Action = %q, want active (%s)", res.Action, res.Message)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zshrc")); !os.IsNotExist(err) {
+		t.Fatalf(".zshrc should not have been created (err=%v)", err)
+	}
+	t.Setenv("SHELP_HOOKS", "bash")
+	if res, _ := Setup(context.Background(), SetupOptions{Shell: "zsh", DryRun: true}); res.Action == "active" {
+		t.Fatal("zsh hook should not count as active when only bash is hooked")
+	}
+}

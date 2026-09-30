@@ -1,4 +1,7 @@
 # shelp shell integration for fish. Load with:  shelp init fish | source
+# SHELP_HOOKS lists the shells whose integration is loaded, so
+# `shelp setup shell` can tell the hook is already active.
+set -gx SHELP_HOOKS fish $SHELP_HOOKS
 # fish cannot pre-fill the next prompt from a function, so `shelp <task>`
 # prints the command; the widget replaces the command line in place.
 function shelp

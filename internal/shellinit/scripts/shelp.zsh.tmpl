@@ -1,4 +1,7 @@
 # shelp shell integration for zsh. Load with:  eval "$(shelp init zsh)"
+# SHELP_HOOKS lists the shells whose integration is loaded, so
+# `shelp setup shell` can tell the hook is already active.
+typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # `shelp <task>` puts the suggested command on your next prompt line
 # (print -z), ready to edit or run. Other subcommands pass straight through.
 shelp() {
@@ -64,7 +67,7 @@ _shelp_raw_dispatch() {
     return
   fi
   errfile=$(mktemp "${TMPDIR:-/tmp}/shelp-line.XXXXXX" 2>/dev/null) || errfile=/dev/null
-  zle -M $'\e[2mshelp: thinking…\e[0m'
+  zle -M 'shelp: thinking…'  # zle -M prints escapes literally, so no dim styling
   cmd=$(command shelp suggest --shell zsh -- "$body" 2>"$errfile")
   rc=$?
   if (( rc == 0 )) && [[ -n $cmd ]]; then

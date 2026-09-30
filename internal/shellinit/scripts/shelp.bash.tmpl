@@ -1,4 +1,7 @@
 # shelp shell integration for bash. Load with:  eval "$(shelp init bash)"
+# SHELP_HOOKS lists the shells whose integration is loaded, so
+# `shelp setup shell` can tell the hook is already active.
+export SHELP_HOOKS="bash${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # `shelp <task>` shows an editable "run>" prompt prefilled with the
 # suggested command: Enter runs it, Ctrl-C abandons. It is also pushed to
 # history so up-arrow recalls it. Non-interactive: just prints the command.

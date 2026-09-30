@@ -31,7 +31,7 @@ type SetupOptions struct {
 type SetupResult struct {
 	Shell   string
 	RCFile  string
-	Action  string // "added", "updated", "unchanged", "manual", "already-manual"
+	Action  string // "added", "updated", "unchanged", "manual", "already-manual", "active"
 	Line    string // the init line that was/would be (in)serted
 	Message string // human-readable summary, ready to print
 }
@@ -122,6 +122,15 @@ func Setup(ctx context.Context, opts SetupOptions) (SetupResult, error) {
 		return SetupResult{}, err
 	}
 	res := SetupResult{Shell: shell, RCFile: rc, Line: line}
+
+	// The integration exports SHELP_HOOKS when it loads, so a hook that
+	// lives somewhere other than the rc file itself (a sourced snippet, a
+	// dotfiles module) still counts as set up.
+	if opts.Bind == "" && hookActive(shell) {
+		res.Action = "active"
+		res.Message = fmt.Sprintf("shelp is already hooked into %s (its integration is loaded in this shell); nothing to do", shell)
+		return res, nil
+	}
 
 	if reason := managedElsewhere(ctx, rc); reason != "" {
 		res.Action = "manual"
@@ -267,4 +276,15 @@ func writeFile(path, content string) error {
 		return fmt.Errorf("shellinit: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// hookActive reports whether this process inherited SHELP_HOOKS naming
+// shell, i.e. `shelp init <shell>` ran in the shell that launched us.
+func hookActive(shell string) bool {
+	for _, h := range strings.Fields(os.Getenv("SHELP_HOOKS")) {
+		if h == shell {
+			return true
+		}
+	}
+	return false
 }
