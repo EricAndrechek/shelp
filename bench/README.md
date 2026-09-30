@@ -1,0 +1,265 @@
+# shelp bench
+
+`shelp-bench` runs shelp's benchmark: cases x shells x os x providers x
+templates x samples. It does **not** grade answers itself — grading is done
+by a human-supervised Claude reviewer against the automatic checks and
+grading store this tool maintains. The harness's job is to run trials
+cheaply, apply mechanical checks, store grades durably, and report.
+
+```sh
+make bench-build              # -> bin/shelp-bench
+./bin/shelp-bench run --providers available
+./bin/shelp-bench pending --format md | less
+./bin/shelp-bench pending > review.jsonl   # edit: add "score" (0/1/2), optional "note"
+./bin/shelp-bench grade review.jsonl
+./bin/shelp-bench report --readme README.md
+```
+
+Run these from the repo root: case files, run output, and the grades store
+are all relative paths (`bench/cases`, `bench/runs`, `bench/grades.jsonl`).
+
+## Case format (`bench/cases/*.toml`)
+
+Each file holds a list of `[[case]]` tables (see `internal/bench/case.go`
+for the authoritative struct and `bench/cases/example.toml` for samples used
+by this package's own tests — the real case set lives in other
+`bench/cases/*.toml` files, written on another branch; don't add to
+`example.toml`).
+
+| field        | meaning |
+|---|---|
+| `id`         | unique, kebab-case |
+| `mode`       | `"suggest"` (default) or `"explain"` |
+| `input`      | the task (suggest) or command to explain (explain) |
+| `shells`     | target shells; default `["zsh"]` |
+| `os`         | target case-os keys; default `["macos"]`. See below — this is a label, not host detection |
+| `difficulty` | `"easy"` \| `"medium"` \| `"hard"` |
+| `tags`       | free-form, used by `--cases tag:x` |
+| `rubric`     | what a grader checks: correct behavior, acceptable variants, known-wrong answers |
+| `reference`  | answers known to be fully correct; an exact (normalized) match auto-grades 2 |
+| `setup`      | the fixture the command assumes (files, a git repo); informational for graders |
+
+Trials = cases x each case's `shells` x each case's `os` x providers x
+templates x samples.
+
+## Synthetic context — never detected from the runner's host
+
+A trial's `os` is a **label** (`"macos"` or `"linux"`), not this machine's
+real OS. `internal/bench/context.go` maps it to a fixed environment so
+results are comparable across machines, no matter what actually ran the
+benchmark:
+
+| case os | Context.OS   | Userland | Cwd (`cwd` field)       | Tools (`tools` field) |
+|---|---|---|---|---|
+| `macos` | `macOS 27.0` | `BSD`    | `/Users/bench/project`  | brew, git, gh, jq, rg, fd, fzf, docker, kubectl, uv, pnpm, node, python3, go |
+| `linux` | `Ubuntu 24.04` | `GNU`  | `/home/bench/project`   | apt, git, gh, jq, rg, fd, fzf, docker, kubectl, uv, pnpm, node, python3, go |
+
+`--context` (default `os,shell`) selects which of `os,shell,cwd,tools` are
+included in the rendered prompt; `shell` comes from the case's `shells`
+entry for that trial, not from this host's `$SHELL`.
+
+## Commands
+
+### `run`
+
+```
+shelp-bench run [--providers a,b|available] [--templates v1,...]
+                 [--cases ids|tag:x|mode:suggest|glob] [--samples N]
+                 [--context os,shell,...] [--concurrency N]
+                 [--out bench/runs/<UTC timestamp>] [--resume dir]
+                 [--cases-dir dir]
+```
+
+- `--providers available` (the default) probes every registered provider's
+  `Detect` in parallel with a timeout and uses the ones that pass, printing
+  which were skipped and why. A comma list instead resolves those exact IDs
+  via `provider.Get`, without probing — useful for testing a provider you
+  know is flaky.
+- `--templates` defaults to just the CLI's default template
+  (`internal/prompt.Default`); pass a list to compare templates.
+- `--cases` selectors are comma-separated and OR'd together: an exact case
+  id, `tag:x`, `mode:suggest`/`mode:explain`, or a glob (`filepath.Match`
+  syntax) against the case id. Omit for every case.
+- Every call mirrors `cmd/shelp/main.go`'s `runGenerate` exactly: suggest
+  mode passes no `OnChunk` and cleans with `clean.Command`; explain mode
+  passes a no-op `OnChunk` (the CLI streams explain to the terminal; the
+  benchmark just needs the same timing behavior, not the output) and cleans
+  with `clean.Text`. Timing comes from `provider.Call`, not `provider.Chain`
+  — the benchmark tests one provider at a time, no fallback.
+- Concurrency: each provider gets its own semaphore sized `--concurrency`
+  (default 1, i.e. serialized — safe for `fm` and Shortcuts); different
+  providers always run in parallel with each other. The first trial
+  dispatched for a provider is marked `"cold": true`.
+- Results stream to `results.jsonl` as each trial finishes (fsync'd per
+  line), so a crash mid-run keeps every finished trial. `--resume <dir>`
+  recomputes the same trial grid from your flags and skips any trial whose
+  key (case, shell, os, provider, template, sample) is already present.
+- `run.json` records the invocation: args, host OS, `shelp` git commit,
+  every provider's `Detect` result as of run start, templates, cases,
+  samples, context fields, concurrency, and start/end time.
+
+### `pending`
+
+```
+shelp-bench pending [--run dir ...] [--cases-dir dir] [--grades file]
+                     [--limit N] [--format jsonl|md]
+```
+
+Walks the given run directories (default: every subdirectory of
+`bench/runs/` with a `results.jsonl`), computes each trial's `grade_key`,
+and groups by it: trials whose cleaned answer normalizes identically share
+one record, however many providers/templates/samples/runs produced it. A
+record is left out once it's resolvable — either an exact (normalized)
+match against the case's `reference` answers, or already present in
+`bench/grades.jsonl` — so the reviewer never sees the same answer twice.
+Sorted by case, then by descending count (the most-produced wrong answers
+first). `--format jsonl` (default) is shaped to feed straight into `grade`
+once you add `"score"`; `--format md` is a readable sheet.
+
+### `grade`
+
+```
+shelp-bench grade [--grades file] [--grader name] [--force] [file.jsonl]
+```
+
+Reads jsonl (file or stdin) shaped like `pending`'s output plus `"score"`
+(0, 1, or 2 — see below) and optional `"note"`. Unknown JSON fields are
+rejected by default (catches a typo'd key); `--force` accepts them, ignored.
+Appends one record per line to the grades store (default
+`bench/grades.jsonl`), stamping `grader` (default `"claude"`) and
+`graded_at`. A later line for the same `grade_key` overrides an earlier one
+— regrading is just grading again.
+
+Score meaning:
+
+| score | meaning |
+|---|---|
+| 2 | correct and idiomatic for the shell/OS |
+| 1 | works, with caveats or a minor inaccuracy |
+| 0 | wrong, unsafe, or unusable |
+
+### `report`
+
+```
+shelp-bench report [--run dir ...] [--cases-dir dir] [--grades file]
+                    [--out bench/RESULTS.md] [--readme README.md]
+```
+
+Writes a markdown report from every given run (default: all of
+`bench/runs/`):
+
+1. **Summary**: trials, graded%, mean score (as a % of 2), fully-correct%,
+   format-clean%, unavailable%, suggest latency p50/p90, explain
+   first-chunk p50 and total p50, and cold-call p50 — per provider x
+   template.
+2. **By difficulty** and **by mode**: the same graded%/mean-score%/
+   fully-correct% breakdown.
+3. **Per-case grid**: rows are cases, columns are providers; each cell is
+   the mean graded score for that pair (averaged across every
+   template/shell/os/sample): ✅ mean rounds to 2, 🟡 rounds to 1, ❌ rounds
+   to 0, · ungraded.
+4. **Prompt templates**, compared only over the provider set common to
+   every template present, so the comparison is apples-to-apples.
+
+Ungraded trials count toward `Trials` everywhere but are excluded from every
+accuracy percentage. `--readme` additionally replaces the text between
+`<!-- bench:start -->` and `<!-- bench:end -->` in that file with table (1)
+plus a one-line footnote (date, case count, samples); it errors if the
+markers aren't there rather than silently doing nothing.
+
+### `latency`
+
+```
+shelp-bench latency --providers a,b [--n 10] [--binary path] [--prompt text]
+```
+
+Measures what a user actually feels: builds `./cmd/shelp` to a temp binary
+(unless `--binary` is given) and runs `shelp -p <id> --json <prompt>` as a
+real subprocess, N times per provider, sequentially. Reports cold (the
+first call) vs warm p50/p90 (process spawn through output, so it also
+includes exec overhead beyond `Generate`'s own latency_ms). Appends to
+`bench/latency.jsonl`.
+
+## `results.jsonl` schema (one object per trial)
+
+```jsonc
+{
+  "case": "find-large-files", "mode": "suggest", "shell": "zsh", "os": "macos",
+  "provider": "fm", "template": "v1",
+  "context": {"os": "macOS 27.0", "userland": "BSD", "shell": "zsh"},
+  "sample": 1,
+  "raw": "Sure, here's the command:\nfind ~ -type f -size +100M\n",
+  "output": "find ~ -type f -size +100M",
+  "error": "", "unavailable": false,
+  "latency_ms": 612, "first_chunk_ms": 612, "cold": true,
+  "checks": {
+    "format_clean": false,
+    "parses": true,
+    "commands_exist": true,
+    "gnuisms": [],
+    "dangerous": []
+  },
+  "grade_key": "3a7f...", "started_at": "2026-09-30T12:00:00Z"
+}
+```
+
+`checks` fields are omitted when the check didn't apply: `parses` and
+`commands_exist` are `null`/absent when the needed shell isn't installed;
+`commands_exist` is also absent when the trial's case `os` doesn't match the
+host actually running the benchmark (it needs a local `command -v`);
+`gnuisms` only runs for `os = "macos"`. See "Automatic checks" below for
+exactly what each one flags.
+
+## `grades.jsonl` schema (one object per grade, append-only)
+
+```jsonc
+{"grade_key": "3a7f...", "case": "find-large-files", "answer": "find ~ -type f -size +100M",
+ "score": 2, "note": "", "grader": "claude", "graded_at": "2026-09-30T13:00:00Z"}
+```
+
+Later lines for the same `grade_key` override earlier ones; nothing is ever
+edited in place, so the file is a complete audit trail of regrades.
+
+`grade_key` = hex sha256 of `case_id | shell | os | normalized_answer`.
+Normalization (also used for `reference` matching, so both use the same
+rule): trim; for suggest mode, collapse runs of whitespace *outside* single-
+or double-quoted spans to one space (whitespace inside quotes is part of the
+command and is preserved) and drop one trailing `;`; for explain mode, trim
+and collapse all whitespace.
+
+## Automatic checks (suggest mode)
+
+Run per trial, recorded in `checks`, never a substitute for grading:
+
+- **`format_clean`**: the raw reply was already just the command (cleaning
+  changed nothing but whitespace) and has no prose lead-in (`"Here"`,
+  `"To "`, `"You can"`, `"Sure"`).
+- **`parses`**: a syntax-only check, never executing the command:
+  `zsh -n -c`, `bash -n -c`, `sh -n -c`, or `fish --no-execute -c`,
+  whichever matches the trial's target shell. `null` when that shell isn't
+  installed on the runner.
+- **`commands_exist`** (only when the trial's case `os` matches the host
+  actually running the benchmark): the first word of each simple command
+  (pipelines/`&&`/`;`/one level of `$(...)`/backtick substitution are
+  split; leading `VAR=val` assignments, variables, and shell
+  builtins/keywords are skipped) is checked with `command -v` in the target
+  shell. Lists any missing names.
+- **`gnuisms`** (`os = "macos"` only): named regex/heuristic rules for
+  GNU-only usage that behaves differently or fails on stock macOS —
+  `sed -i` without a backup-suffix argument, `grep -P`, `find -printf`,
+  `date -d`, `stat -c`/`--format`, `xargs -r`, `du --max-depth`,
+  `ls --color`, `readlink -e`, `tac`, `nproc`, `free -*`, `ip a|addr|route`,
+  `ss -*`, `netstat -tulpn`, `systemctl`, `apt`/`apt-get`, `timeout`.
+  `sort -h` is explicitly not flagged (it works on macOS).
+- **`dangerous`** (always): `rm -rf /`, `rm -rf ~`, `sudo `, `dd if=`,
+  `mkfs`, `chmod -R 777`, `curl|wget ... | sh|bash`, `> /dev/sd*`, a fork
+  bomb (`:(){ :|:& };:`).
+
+Explain mode only runs `format_clean`, redefined as: no markdown (headings,
+`**`, bullets, fences). Everything else is left to the grader.
+
+## Grading and normalization
+
+An answer that normalizes equal to one of its case's `reference` answers is
+auto-graded 2 with grader `"reference"` — computed on the fly by `pending`
+and `report`, never written to `bench/grades.jsonl`.

@@ -1,0 +1,51 @@
+# Sample cases for shelp-bench's own tests/smoke runs only. The real case
+# set lives in other bench/cases/*.toml files written on another branch —
+# don't add to this one.
+
+[[case]]
+id = "find-large-files"
+mode = "suggest"
+input = "find all files over 100MB in my home dir"
+shells = ["zsh", "bash"]
+os = ["macos", "linux"]
+difficulty = "easy"
+tags = ["find", "files"]
+rubric = """
+Must use `find` (or `fd`) rooted at $HOME/~, filter by size > 100M, and
+not execute anything destructive. -size +100M (find) is correct; +100m
+(lowercase, 100 KiB blocks) is wrong. GNU find's -printf is fine on
+linux, a gnuism on macos.
+"""
+reference = [
+  "find ~ -type f -size +100M",
+  "find ~ -type f -size +100m",
+]
+
+[[case]]
+id = "listen-port-8080"
+mode = "suggest"
+input = "what process is listening on TCP port 8080"
+shells = ["zsh"]
+os = ["macos"]
+difficulty = "medium"
+tags = ["network"]
+rubric = """
+lsof -nP -iTCP:8080 -sTCP:LISTEN is the canonical macOS answer; lsof -i
+:8080 alone is acceptable (score 1, less precise). netstat/ss-based
+GNU/Linux answers are wrong for macos.
+"""
+reference = ["lsof -nP -iTCP:8080 -sTCP:LISTEN"]
+
+[[case]]
+id = "explain-lsof"
+mode = "explain"
+input = "lsof -nP -iTCP:8080 -sTCP:LISTEN"
+shells = ["zsh"]
+os = ["macos"]
+difficulty = "easy"
+tags = ["network", "explain"]
+rubric = """
+Must say it lists processes with a listening TCP socket on port 8080,
+and that -n/-P skip DNS/service-name lookups for speed. Plain text, no
+markdown.
+"""
