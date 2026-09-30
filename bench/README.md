@@ -170,15 +170,26 @@ Writes a markdown report from every given run (default: all of
 1. **Summary**: trials, graded%, mean score (as a % of 2), fully-correct%,
    format-clean%, unavailable%, suggest latency p50/p90, explain
    first-chunk p50 and total p50, and cold-call p50 — per provider x
-   template.
+   template x **context-field set** (the set of `os,shell,cwd,tools` fields
+   actually populated in each trial's recorded `context`, from
+   `bench.ContextSet`, not from `run.json`). Two runs of the same
+   provider/template made with different `--context` flags (e.g. one with
+   `os,shell`, one with `os,shell,tools`) get separate rows instead of being
+   silently averaged together, since their prompts differed. A **Context**
+   column only appears when more than one context-field set is present
+   across the loaded runs; with the common case of a single context-field
+   set, the table is identical to a plain provider x template summary.
 2. **By difficulty** and **by mode**: the same graded%/mean-score%/
    fully-correct% breakdown.
 3. **Per-case grid**: rows are cases, columns are providers; each cell is
    the mean graded score for that pair (averaged across every
-   template/shell/os/sample): ✅ mean rounds to 2, 🟡 rounds to 1, ❌ rounds
-   to 0, · ungraded.
+   template/shell/os/sample/context — this grid is not context-aware).
+   ✅ mean rounds to 2, 🟡 rounds to 1, ❌ rounds to 0, · ungraded.
 4. **Prompt templates**, compared only over the provider set common to
-   every template present, so the comparison is apples-to-apples.
+   every template present *within the same context-field set*, so the
+   comparison is apples-to-apples; also gets a Context column (and a
+   separate common-provider set per context) when more than one
+   context-field set is present.
 
 Ungraded trials count toward `Trials` everywhere but are excluded from every
 accuracy percentage. `--readme` additionally replaces the text between

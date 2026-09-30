@@ -3,6 +3,7 @@ package bench
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/ericandrechek/shelp/internal/prompt"
 )
@@ -87,4 +88,29 @@ type ContextFields struct {
 // FromPromptContext converts a prompt.Context to its recorded form.
 func FromPromptContext(c prompt.Context) ContextFields {
 	return ContextFields{OS: c.OS, Userland: c.Userland, Shell: c.Shell, Cwd: c.Cwd, Tools: c.Tools}
+}
+
+// ContextSet returns the canonical, stable label for which of the
+// os/shell/cwd/tools fields a recorded ContextFields actually populated —
+// e.g. "os,shell" or "os,shell,tools" — in the same names and order as the
+// `--context` flag. It is derived from each trial's own recorded context,
+// not from run.json's `context` list, so report.go can group and compare
+// trials by what their prompt actually included even when results from
+// several runs (potentially invoked with different --context flags) are
+// loaded together. Empty (no fields populated) yields "".
+func ContextSet(c ContextFields) string {
+	var fields []string
+	if c.OS != "" {
+		fields = append(fields, "os")
+	}
+	if c.Shell != "" {
+		fields = append(fields, "shell")
+	}
+	if c.Cwd != "" {
+		fields = append(fields, "cwd")
+	}
+	if len(c.Tools) > 0 {
+		fields = append(fields, "tools")
+	}
+	return strings.Join(fields, ",")
 }

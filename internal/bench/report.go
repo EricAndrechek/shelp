@@ -106,8 +106,11 @@ func fmtMS(v int64, ok bool) string {
 
 func fmtPct(v float64) string { return fmt.Sprintf("%.0f%%", v) }
 
-// ptKey groups by provider+template.
-type ptKey struct{ provider, template string }
+// ptKey groups by provider+template+context. context is the context-field
+// set label from ContextSet (e.g. "os,shell" or "os,shell,tools"): two runs
+// of the same provider/template made with different --context flags get
+// distinct keys instead of being silently merged into one row.
+type ptKey struct{ provider, template, context string }
 
 // Report holds every computed table for the markdown report.
 type Report struct {
@@ -119,9 +122,18 @@ type Report struct {
 	Providers          []string
 	Templates          []string
 	Cases              []string
-	CaseCount          int
-	MaxSample          int
+	// Contexts lists every distinct context-field set seen across the
+	// input results, sorted. Usually has one element.
+	Contexts  []string
+	CaseCount int
+	MaxSample int
 }
+
+// MultiContext reports whether more than one context-field set appears in
+// the input results. Report tables show a Context column only when this is
+// true, so a single-context report (the common case) renders identically
+// to before this field existed.
+func (rep Report) MultiContext() bool { return len(rep.Contexts) > 1 }
 
 // Compute builds every table from raw trials.
 func Compute(results []TrialResult, cases []Case, grades map[string]GradeRecord) Report {
@@ -136,6 +148,7 @@ func Compute(results []TrialResult, cases []Case, grades map[string]GradeRecord)
 	provSeen := map[string]bool{}
 	tmplSeen := map[string]bool{}
 	caseSeen := map[string]bool{}
+	ctxSeen := map[string]bool{}
 	for _, r := range results {
 		c, ok := idx[r.Case]
 		if !ok {
@@ -150,7 +163,9 @@ func Compute(results []TrialResult, cases []Case, grades map[string]GradeRecord)
 			rep.MaxSample = r.Sample
 		}
 
-		pt := ptKey{r.Provider, r.Template}
+		ctxSet := ContextSet(r.Context)
+		ctxSeen[ctxSet] = true
+		pt := ptKey{r.Provider, r.Template, ctxSet}
 		if rep.ByProviderTemplate[pt] == nil {
 			rep.ByProviderTemplate[pt] = &Stats{}
 			rep.LatByPT[pt] = &latencies{}
@@ -202,15 +217,26 @@ func Compute(results []TrialResult, cases []Case, grades map[string]GradeRecord)
 		rep.Cases = append(rep.Cases, c)
 	}
 	sort.Strings(rep.Cases)
+	for ctxSet := range ctxSeen {
+		rep.Contexts = append(rep.Contexts, ctxSet)
+	}
+	sort.Strings(rep.Contexts)
 	rep.CaseCount = len(rep.Cases)
 	return rep
 }
 
-// SummaryTable renders table (a): provider x template.
+// SummaryTable renders table (a): provider x template (x context, when more
+// than one context-field set appears in the input — see MultiContext).
 func (rep Report) SummaryTable() string {
+	multi := rep.MultiContext()
 	var b strings.Builder
-	b.WriteString("| Provider | Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	if multi {
+		b.WriteString("| Provider | Template | Context | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	} else {
+		b.WriteString("| Provider | Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	}
 	keys := ptKeysSorted(rep.ByProviderTemplate)
 	for _, k := range keys {
 		s := rep.ByProviderTemplate[k]
@@ -220,10 +246,17 @@ func (rep Report) SummaryTable() string {
 		efp50, efok := percentile(lat.explainFirst, 50)
 		etp50, etok := percentile(lat.explainTotal, 50)
 		cp50, cpok := percentile(lat.cold, 50)
-		fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %s | %s | %s/%s | %s | %s | %s |\n",
-			k.provider, k.template, s.Trials, fmtPct(s.GradedPct()), fmtPct(s.MeanScorePct()),
-			fmtPct(s.FullyCorrectPct()), fmtPct(s.FormatCleanPct()), fmtPct(s.UnavailablePct()),
-			fmtMS(sp50, sp50ok), fmtMS(sp90, sp90ok), fmtMS(efp50, efok), fmtMS(etp50, etok), fmtMS(cp50, cpok))
+		if multi {
+			fmt.Fprintf(&b, "| %s | %s | %s | %d | %s | %s | %s | %s | %s | %s/%s | %s | %s | %s |\n",
+				k.provider, k.template, k.context, s.Trials, fmtPct(s.GradedPct()), fmtPct(s.MeanScorePct()),
+				fmtPct(s.FullyCorrectPct()), fmtPct(s.FormatCleanPct()), fmtPct(s.UnavailablePct()),
+				fmtMS(sp50, sp50ok), fmtMS(sp90, sp90ok), fmtMS(efp50, efok), fmtMS(etp50, etok), fmtMS(cp50, cpok))
+		} else {
+			fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %s | %s | %s/%s | %s | %s | %s |\n",
+				k.provider, k.template, s.Trials, fmtPct(s.GradedPct()), fmtPct(s.MeanScorePct()),
+				fmtPct(s.FullyCorrectPct()), fmtPct(s.FormatCleanPct()), fmtPct(s.UnavailablePct()),
+				fmtMS(sp50, sp50ok), fmtMS(sp90, sp90ok), fmtMS(efp50, efok), fmtMS(etp50, etok), fmtMS(cp50, cpok))
+		}
 	}
 	return b.String()
 }
@@ -237,7 +270,10 @@ func ptKeysSorted(m map[ptKey]*Stats) []ptKey {
 		if keys[i].provider != keys[j].provider {
 			return keys[i].provider < keys[j].provider
 		}
-		return keys[i].template < keys[j].template
+		if keys[i].template != keys[j].template {
+			return keys[i].template < keys[j].template
+		}
+		return keys[i].context < keys[j].context
 	})
 	return keys
 }
@@ -313,53 +349,101 @@ func (rep Report) CaseGrid() string {
 }
 
 // TemplateTable renders (d): templates compared on the same provider set
-// (the providers present for every template in this report).
+// (the providers present for every template in this report), within the
+// same context-field set — a provider that ran template v1 under
+// "os,shell" and v2 under "os,shell,tools" is never treated as common
+// between them, since their prompts differed. When more than one
+// context-field set appears in the input (MultiContext), a Context column
+// is added and the provider-commonality computation, and each row's
+// aggregate, are done separately per context-field set; commonProviders is
+// then the union of every context's own common-provider set (each row's own
+// commonality is what actually gates its numbers, this return value is only
+// used for the summary line callers print). With a single context (the
+// common case), this renders identically to before context-awareness was
+// added.
 func (rep Report) TemplateTable() (table string, commonProviders []string) {
 	if len(rep.Templates) == 0 {
 		return "(no data)\n", nil
 	}
-	present := map[string]map[string]bool{} // template -> provider set
-	for k := range rep.ByProviderTemplate {
-		if present[k.template] == nil {
-			present[k.template] = map[string]bool{}
-		}
-		present[k.template][k.provider] = true
+	multi := rep.MultiContext()
+	contexts := rep.Contexts
+	if len(contexts) == 0 {
+		contexts = []string{""}
 	}
-	common := map[string]bool{}
-	for p := range present[rep.Templates[0]] {
-		inAll := true
+
+	commonSet := map[string]bool{}
+	var b strings.Builder
+	if multi {
+		b.WriteString("| Template | Context | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% |\n|---|---|---|---|---|---|---|\n")
+	} else {
+		b.WriteString("| Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% |\n|---|---|---|---|---|---|\n")
+	}
+
+	for _, ctxSet := range contexts {
+		present := map[string]map[string]bool{} // template -> provider set, within this context
+		for k := range rep.ByProviderTemplate {
+			if k.context != ctxSet {
+				continue
+			}
+			if present[k.template] == nil {
+				present[k.template] = map[string]bool{}
+			}
+			present[k.template][k.provider] = true
+		}
+		var templatesHere []string
 		for _, t := range rep.Templates {
-			if !present[t][p] {
-				inAll = false
-				break
+			if present[t] != nil {
+				templatesHere = append(templatesHere, t)
 			}
 		}
-		if inAll {
-			common[p] = true
+		if len(templatesHere) == 0 {
+			continue
+		}
+		common := map[string]bool{}
+		for p := range present[templatesHere[0]] {
+			inAll := true
+			for _, t := range templatesHere {
+				if !present[t][p] {
+					inAll = false
+					break
+				}
+			}
+			if inAll {
+				common[p] = true
+			}
+		}
+		var commonHere []string
+		for p := range common {
+			commonHere = append(commonHere, p)
+			commonSet[p] = true
+		}
+		sort.Strings(commonHere)
+
+		for _, t := range templatesHere {
+			agg := &Stats{}
+			for _, p := range commonHere {
+				if s := rep.ByProviderTemplate[ptKey{p, t, ctxSet}]; s != nil {
+					agg.Trials += s.Trials
+					agg.Answered += s.Answered
+					agg.Unavailable += s.Unavailable
+					agg.Graded += s.Graded
+					agg.ScoreSum += s.ScoreSum
+					agg.FullyCorrect += s.FullyCorrect
+					agg.FormatCleanN += s.FormatCleanN
+				}
+			}
+			if multi {
+				fmt.Fprintf(&b, "| %s | %s | %d | %s | %s | %s | %s |\n", t, ctxSet, agg.Trials, fmtPct(agg.GradedPct()), fmtPct(agg.MeanScorePct()), fmtPct(agg.FullyCorrectPct()), fmtPct(agg.FormatCleanPct()))
+			} else {
+				fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s |\n", t, agg.Trials, fmtPct(agg.GradedPct()), fmtPct(agg.MeanScorePct()), fmtPct(agg.FullyCorrectPct()), fmtPct(agg.FormatCleanPct()))
+			}
 		}
 	}
-	for p := range common {
+
+	for p := range commonSet {
 		commonProviders = append(commonProviders, p)
 	}
 	sort.Strings(commonProviders)
-
-	var b strings.Builder
-	b.WriteString("| Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% |\n|---|---|---|---|---|---|\n")
-	for _, t := range rep.Templates {
-		agg := &Stats{}
-		for _, p := range commonProviders {
-			if s := rep.ByProviderTemplate[ptKey{p, t}]; s != nil {
-				agg.Trials += s.Trials
-				agg.Answered += s.Answered
-				agg.Unavailable += s.Unavailable
-				agg.Graded += s.Graded
-				agg.ScoreSum += s.ScoreSum
-				agg.FullyCorrect += s.FullyCorrect
-				agg.FormatCleanN += s.FormatCleanN
-			}
-		}
-		fmt.Fprintf(&b, "| %s | %d | %s | %s | %s | %s |\n", t, agg.Trials, fmtPct(agg.GradedPct()), fmtPct(agg.MeanScorePct()), fmtPct(agg.FullyCorrectPct()), fmtPct(agg.FormatCleanPct()))
-	}
 	return b.String(), commonProviders
 }
 
@@ -395,7 +479,14 @@ func (rep Report) Render(now time.Time) string {
 	fmt.Fprintln(&b, "## Prompt templates (same provider set)")
 	fmt.Fprintln(&b)
 	tmplTable, common := rep.TemplateTable()
-	if len(common) > 0 {
+	if rep.MultiContext() {
+		if len(common) > 0 {
+			fmt.Fprintf(&b, "Providers common to every template within a given context: %s\n\n", strings.Join(common, ", "))
+		} else {
+			fmt.Fprintln(&b, "No provider ran every template within any single context; table below is empty per template.")
+			fmt.Fprintln(&b)
+		}
+	} else if len(common) > 0 {
 		fmt.Fprintf(&b, "Providers common to every template: %s\n\n", strings.Join(common, ", "))
 	} else {
 		fmt.Fprintln(&b, "No provider ran every template; table below is empty per template.")
