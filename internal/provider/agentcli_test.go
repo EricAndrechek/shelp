@@ -100,7 +100,7 @@ func contains(args []string, s string) bool {
 	return false
 }
 
-func testReq() Request {
+func agentTestReq() Request {
 	return Request{
 		Mode:   Suggest,
 		System: "Output ONLY the command.",
@@ -229,7 +229,7 @@ func TestGenerate_Claude_ArgvAndCwd(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT", "git log -5 --oneline")
 
 	p := newProvider(claudeSpec, "haiku")
-	req := testReq()
+	req := agentTestReq()
 	startCwd, _ := os.Getwd()
 
 	got, err := p.Generate(context.Background(), req)
@@ -289,7 +289,7 @@ func TestGenerate_Claude_DefaultOmitsModelFlag(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT", "ok")
 
 	p := newProvider(claudeSpec, "")
-	if _, err := p.Generate(context.Background(), testReq()); err != nil {
+	if _, err := p.Generate(context.Background(), agentTestReq()); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
 	r := readRecord(t, rec)
@@ -305,7 +305,7 @@ func TestGenerate_Gemini_ArgvAndCwd(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT", "git log -5 --oneline")
 
 	p := newProvider(geminiSpec, "")
-	req := testReq()
+	req := agentTestReq()
 	startCwd, _ := os.Getwd()
 
 	got, err := p.Generate(context.Background(), req)
@@ -347,7 +347,7 @@ func TestGenerate_Codex_ArgvAndOutFile(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT_NOISE", "OpenAI Codex v0.144.0\n--------\nnoise\n")
 
 	p := newProvider(codexSpec, "gpt-5.6-terra")
-	req := testReq()
+	req := agentTestReq()
 	startCwd, _ := os.Getwd()
 
 	got, err := p.Generate(context.Background(), req)
@@ -407,7 +407,7 @@ func TestGenerate_Codex_NoStreaming(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT_NOISE", "should never reach OnChunk")
 
 	var chunks []string
-	req := testReq()
+	req := agentTestReq()
 	req.OnChunk = func(s string) { chunks = append(chunks, s) }
 
 	p := newProvider(codexSpec, "")
@@ -424,7 +424,7 @@ func TestGenerate_Claude_Streams(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT", "the reply")
 
 	var chunks []string
-	req := testReq()
+	req := agentTestReq()
 	req.OnChunk = func(s string) { chunks = append(chunks, s) }
 
 	p := newProvider(claudeSpec, "haiku")
@@ -443,7 +443,7 @@ func TestGenerate_Copilot_ArgvAndCwd(t *testing.T) {
 	t.Setenv("SHELP_FAKE_STDOUT", "git log -5 --oneline")
 
 	p := newProvider(copilotSpec, "auto")
-	req := testReq()
+	req := agentTestReq()
 	startCwd, _ := os.Getwd()
 
 	got, err := p.Generate(context.Background(), req)
@@ -512,7 +512,7 @@ func TestGenerate_ErrorMapping(t *testing.T) {
 			t.Setenv("SHELP_FAKE_STDOUT", "")
 
 			p := newProvider(c.spec, c.model)
-			_, err := p.Generate(context.Background(), testReq())
+			_, err := p.Generate(context.Background(), agentTestReq())
 			if err == nil {
 				t.Fatal("Generate() returned nil error, want *UnavailableError")
 			}
@@ -533,7 +533,7 @@ func TestGenerate_EmptyOutput(t *testing.T) {
 	t.Setenv("SHELP_FAKE_EXIT", "0")
 
 	p := newProvider(claudeSpec, "haiku")
-	_, err := p.Generate(context.Background(), testReq())
+	_, err := p.Generate(context.Background(), agentTestReq())
 	var ue *UnavailableError
 	if !errors.As(err, &ue) {
 		t.Fatalf("error is %T, want *UnavailableError for empty output: %v", err, err)
@@ -549,7 +549,7 @@ func TestGenerate_CodexModelNotSupported(t *testing.T) {
 	// leave SHELP_FAKE_STDOUT unset so the -o file stays empty
 
 	p := newProvider(codexSpec, "some-bad-model")
-	_, err := p.Generate(context.Background(), testReq())
+	_, err := p.Generate(context.Background(), agentTestReq())
 	var ue *UnavailableError
 	if !errors.As(err, &ue) {
 		t.Fatalf("error is %T, want *UnavailableError: %v", err, err)
@@ -571,7 +571,7 @@ func TestGenerate_Timeout(t *testing.T) {
 
 	p := newProvider(geminiSpec, "")
 	start := time.Now()
-	_, err := p.Generate(ctx, testReq())
+	_, err := p.Generate(ctx, agentTestReq())
 	elapsed := time.Since(start)
 
 	if elapsed > 4*time.Second {
