@@ -20,6 +20,10 @@ class Shelp < Formula
   def caveats
     <<~EOS
       Hook shelp into your shell so suggestions land on your prompt line:
+        shelp setup shell
+
+      (or by hand -- shelp setup shell prints the exact line to add if your
+      rc file is managed by chezmoi or another dotfiles tool instead):
         zsh:  echo 'eval "$(shelp init zsh)"' >> ~/.zshrc
         bash: echo 'eval "$(shelp init bash)"' >> ~/.bashrc
         fish: echo 'shelp init fish | source' >> ~/.config/fish/config.fish

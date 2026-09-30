@@ -34,6 +34,8 @@ make install                 # -> ~/.local/bin/shelp
 Then hook it into your shell and see what works:
 
 ```sh
+shelp setup shell            # add the right eval/source line to your rc file
+# or by hand:
 eval "$(shelp init zsh)"     # add to ~/.zshrc
 eval "$(shelp init bash)"    # add to ~/.bashrc, or:
 shelp init fish | source     # add to ~/.config/fish/config.fish
@@ -43,9 +45,13 @@ shelp setup shortcuts        # optional: Apple Intelligence Pro via Shortcuts
 sudo fm license              # optional: Apple's on-device model (macOS 27+)
 ```
 
-The shell integration wraps `shelp` in a function (zsh/bash/fish, in the
-style of zoxide/starship) so a suggested command lands on your prompt line
-ready to edit or run — shelp never executes anything itself.
+`shelp setup shell` (see "Shell setup" below) detects your shell, finds
+its rc file, and appends a marked block; it's idempotent and never edits
+an rc file that's a symlink or managed by a dotfiles tool like chezmoi (it
+prints the line to add by hand instead). The shell integration wraps
+`shelp` in a function (zsh/bash/fish, in the style of zoxide/starship) so
+a suggested command lands on your prompt line ready to edit or run —
+shelp never executes anything itself.
 
 ## Usage
 
@@ -94,6 +100,35 @@ Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
 config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
 `--json`, `-v`/`--verbose`, `--force` (call a provider even if it's
 currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
+
+## Shell setup
+
+```console
+$ shelp setup shell                # detect $SHELL, add the block to its rc file
+$ shelp setup shell --shell zsh    # be explicit about which shell
+$ shelp setup shell --bind '^G'    # also bind shelp-widget to Ctrl-G
+$ shelp setup shell --dry-run      # show what would change, write nothing
+```
+
+It picks the rc file (`~/.zshrc`, honoring `$ZDOTDIR`; `~/.bashrc`, and on
+macOS checks whether `~/.bash_profile` sources it — a login shell
+otherwise never reads it — printing a note rather than editing
+`~/.bash_profile` itself; `~/.config/fish/config.fish`, honoring
+`$XDG_CONFIG_HOME`) and appends a marked block:
+
+```sh
+# >>> shelp >>>
+eval "$(shelp init zsh)"
+# <<< shelp <<<
+```
+
+Idempotent: if the rc file already has a `shelp init` line anywhere
+(inside or outside the block), it doesn't add a second one; passing
+`--bind` when a managed block already exists updates just that block.
+It never edits an rc file that's a symlink or that `chezmoi source-path`
+recognizes as managed (the chezmoi check is skipped entirely when
+chezmoi isn't on PATH) — either way it prints the exact line to add to
+your dotfiles yourself and exits cleanly.
 
 ## Providers
 

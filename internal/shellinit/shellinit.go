@@ -1,4 +1,5 @@
-// Package shellinit holds the shell integration printed by `shelp init`.
+// Package shellinit holds the shell integration printed by `shelp init`
+// and the `shelp setup shell` rc-file installer (see setup.go).
 //
 // A binary cannot put text on its parent shell's command line, so the
 // integration wraps `shelp` in a shell function that does (zsh: print -z,

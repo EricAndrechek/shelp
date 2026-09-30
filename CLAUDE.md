@@ -30,10 +30,12 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
-- `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode by
-  default; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
-  `Render`/`Options`, see `shellinit.go` and `config.go`'s `[shell]`
-  table).
+- `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode,
+  `--bind`; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
+  `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,
+  `config.go`'s `[shell]` table) and `shelp setup shell`'s rc-file
+  installer (`setup.go`: idempotent marked block, chezmoi/symlink
+  detection, the macOS `~/.bash_profile` note).
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
 - `internal/cooldown/` — the rate-limit cooldown store

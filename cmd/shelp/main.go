@@ -35,6 +35,8 @@ Usage:
   shelp providers [--json] [--all]     list model providers and whether they work
   shelp providers --reset-cooldowns    clear all recorded rate-limit cooldowns
   shelp setup [shortcuts]              install optional pieces (Apple Shortcuts)
+  shelp setup shell [--shell sh] [--bind KEY] [--dry-run]
+                                        add shelp's hook to your shell rc file
   shelp init <zsh|bash|fish> [--bind KEY] [--no-line-mode]
                                         print shell integration; add to your rc:
                                          eval "$(shelp init zsh)"
@@ -55,6 +57,11 @@ Flags (init):
                        shell-native escape form); also config "[shell] bind"
   --no-line-mode       disable raw-line Enter interception (default: on);
                        also config "[shell] line_mode = false"
+
+Flags (setup shell):
+  --shell sh           zsh, bash, or fish (default: from $SHELL)
+  --bind KEY           keybinding to pass through to "shelp init ... --bind"
+  --dry-run            print what would change without writing it
 `
 
 func main() {
@@ -346,6 +353,12 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	// "shell" takes its own flags (--shell/--bind/--dry-run), unlike the
+	// registered provider.SetupStep steps below (which take none), so it's
+	// handled as its own subcommand rather than a step.
+	if len(args) > 0 && args[0] == "shell" {
+		return runSetupShell(ctx, args[1:], stdout)
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -369,5 +382,31 @@ func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if !ran {
 		return usageError{fmt.Errorf("unknown setup step %q", args[0])}
 	}
+	return nil
+}
+
+// runSetupShell handles `shelp setup shell [--shell sh] [--bind KEY]
+// [--dry-run]`: it appends (or updates) shelp's hook in the target
+// shell's rc file. See internal/shellinit.Setup for the mechanics
+// (idempotency, chezmoi/symlink detection, the macOS bash_profile note).
+func runSetupShell(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("setup shell", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var shell, bind string
+	var dryRun bool
+	fs.StringVar(&shell, "shell", "", "")
+	fs.StringVar(&bind, "bind", "", "")
+	fs.BoolVar(&dryRun, "dry-run", false, "")
+	if err := fs.Parse(args); err != nil {
+		return usageError{fmt.Errorf("usage: shelp setup shell [--shell zsh|bash|fish] [--bind KEY] [--dry-run]: %w", err)}
+	}
+	if fs.NArg() > 0 {
+		return usageError{errors.New("usage: shelp setup shell [--shell zsh|bash|fish] [--bind KEY] [--dry-run]")}
+	}
+	res, err := shellinit.Setup(ctx, shellinit.SetupOptions{Shell: shell, Bind: bind, DryRun: dryRun})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, res.Message)
 	return nil
 }
