@@ -227,6 +227,12 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	if err != nil {
 		return err
 	}
+	// Best-effort, once-per-shelp-version hint that an installed Apple
+	// Shortcuts wrapper is outdated (e.g. after `brew upgrade shelp`).
+	// Deferred so it runs after every print below, never before -- see
+	// CheckShortcutsFreshness's doc comment for the full guarantee (bounded
+	// timeout, never blocks/fails the real command).
+	defer provider.CheckShortcutsFreshness(ctx, cfg, version, chain, stderr)
 	text := clean.Text(res.Text)
 	if mode == provider.Suggest {
 		text = clean.Command(res.Text)
