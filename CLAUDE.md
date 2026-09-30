@@ -25,11 +25,8 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `agentcli.go` (the `claude` headless-CLI provider, +`agentcli_test.go`,
   `testdata/agentcli/claude` — a fake CLI script driven entirely by
   `SHELP_FAKE_*` env vars, see its doc comment; gemini, codex, antigravity
-  (`agy`), and copilot were all removed from agentcli.go, see PURITY below
-  — their fake-CLI fixtures should be deleted too (`git rm
-  testdata/agentcli/{gemini,codex,agy,copilot}`) but weren't as part of
-  this change; do that before relying on the directory listing matching
-  this note).
+  (`agy`), and copilot were all removed from agentcli.go, see PURITY
+  below).
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
