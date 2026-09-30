@@ -966,3 +966,75 @@
 {"grade_key":"df93b0e2270574b2e30f4f3ef378e95bd148ce1b7e10555b9e25aca96fc72aa9","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
 {"grade_key":"063c1d8c1da96e0dfad3673e99494372a0841eb7000561588c5c39405ae8eb7e","score":0,"note":"sorts by %CPU (column 3), not memory","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
 {"grade_key":"ee82b4cc6872c8b3447b957d6e44fdf135bbecbf9fe4ec6fa46e93c5e6f87f59","score":1,"note":"gifsicle isn't installed on stock macOS","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:37:26.669209Z"}
+{"grade_key":"d420079b4835582464c34eeef67cf7166acdb6addf74d270f158a48371c0cc03","score":0,"note":"bash writing to .zshrc","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"b34114194a09021161ac17f6a1b217787840b1e320e38ca26cbf75f8b35e56cc","score":0,"note":"pmset and grep -P on Linux","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"2aeb7fa317839db4f657d7b0cec19c67a3d23738f54c0a767e4d714c5c34da8f","score":1,"note":"brew cache --prune=all isn't a command; cleanup still runs","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"a6d7ec24d2b2ffff1e8015ad9bba1d8b824358d3776b723f7e516be13ee378d8","score":1,"note":"(#i) needs setopt extendedglob, off by default; with (N) it silently matches nothing","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"dfe68dc4216a18d7427b347f671db54a2326a1cd89b0e326cb3d15966da970a9","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"83fd6eed3006cf32953c7f078f775e64c93897cd03c047ad49229b18cf28fede","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"9fc61f00b99ee192c56ea61de23a8d8653cad5deacced60b36832571344c1f31","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"7b1fb12b7b29ffe7cb8b2b5d8f1efbdcbb1ff04bb9c5ec2529d5174ff1079043","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"250f4c5c07b619c97c651d2600d48e736614d20ca4c373d1b9c1ad24e98be126","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"fb43c7374241cdd267a1a5264317157cde6d486bd5903d2adda7941313ca45a8","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"292dad5d303f2010dfe54061ce9ddfec36c5f4b1f4340e89c39c80cfbdadff24","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"31a6a178f3f19609e16158f3200ab22465efde6b560ff007f30ddb28c6ae62be","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"656013de5079105d2ace45b42d0c4364bcb5fd29fe5f32d3e7813ae51642926e","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"bceecf63bb4952a5780d9275a1307c60adbb14811334335944ecfe197099701d","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"ff0af61a3a3ed052b9d089fdd09de463df195dd2980ea27e62649a25958d14e0","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"daacd17e930efdeef6c637ef89574f544352b60b0843e1d6a4e017283754289c","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"ec49c62609f318fadbefdd26ae00e02f1aa87927db8095a8a90e70a3b7b3cac3","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"750965436238abe09658c0131c68fae055a49a8c59abf3289146df087cac942a","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"e4aa9e22e40b76b9cae857eed7bb5b34f25a7a048fcbc1c30fa2cb71e4475770","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"adde927866ceef8db84275068276a7428370065ed842644e84f377a8b9a2814b","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"e72c1cc7d085fc0b15d06b2545b267ff0eab84f8f67580fd9b2c9acb46e169a0","score":1,"note":"describes NUL output without saying why (names with spaces)","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"25ed8217d9a0c17ef85cdf4e04864a5ed2835f59510d28df8afd9b6a09620ed5","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"2d233c1c977fc9b632464341ec38ca44b3ead194665d4b5085d616393fe65533","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"240e1f011c814e1eed2319f56daba4e32c2a54e3062fb97cea4e6d4c0e958542","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"868d5e42943b56c04e2e75585bc02d7c21d34e531f45cca7a849ffe06193a230","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"bdea011593b0e58081b37e4ea141589256b3152d8b8a7ff07542319c8cc7dd24","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"ddd80e347133f9b02864cf25cfbe01e5088e33663fb4d5addc4c556f204c42f0","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"bbb468d629820f7d5290a67cb8e157174a774420b9ad7b0c2a077993c354c836","score":1,"note":"adds harness context: says the current directory isn't a git repo","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"cd49b067a01ff1b1f6bf4acff44f2f586a4070debb8637d92086e1b82ef0d000","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"bcbd7a674f4e8e0169da5b1257a11bc8b40a31014ff6d90409e0b1c4823a1847","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"d7a1ddf85ea6c49062f9a946d57068bbb4ec9268a797264124eb22c922ab73f7","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"72075706920ef4269619067d4435ce071d9632580598fb19bff3c6682f330d2a","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"c9cd004bc93086411fec40b8c88b4384d643ef25d1ab8219bf52609bd1776be2","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"7d83cf42d0cd6c2347c1dfeda179e395976abd158a2cacbffdc3cd02f182b660","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"af6b263d9c56dea45c26379daaf38de3b2e8e7d09651f26da6d27a4f4307fe95","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"11c6fc6bf2a497d3058ed50e39fffb236502e208bacbc678d339459c27a2a48f","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"80626139628088849500f52399f62217bcb5d8f386c183c37f2e00c05e661abf","score":1,"note":"says -N keeps it in the background (that's -f)","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"504faec797b6fdf967466d91c9b01b38e9ffc3e571e751fe0b635aa3e5ce29ba","score":1,"note":"calls extraction read-only; it writes and can overwrite","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"ec6e357ad17eeef0e4b8d94cd0022d33855a62ea8f1868662a0363fcaedac29c","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"5dd8e2b5cb356260229f1ef9ae5054d61e5829036d8de05fd9793729b094554d","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"34987b19f67fdd1a222b46a187454a29a56b3ee5057600966a2cc17d9a859886","score":1,"note":"dscacheutil without sudo","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"02121b411ca5fec9174509e34e152a35f48dcb6f9eac161a603780f95ef151c2","score":0,"note":"convoluted, broken pipeline","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"697de885e2216abcc203da2acd3942f58d27b3b4d819546d6723d89745582835","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"309580c9264e28b682e2753134dc97f967d01cc77472cf9bccb59fc16bf9fc16","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"05ae6ab79acabbbfcfb8a0976f9789c80f1eb523e236281aed7742c222e231e8","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"3217dadee958db97663dce4a0d178a2e667205605133931c0e7806196f346c4a","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"0d2b365166b96672c31e60b2943743ad4183c0a1e748ea23087b6a9e43ffa98c","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"9cb14dfad068a842aa814591854a490d95e05729a73d7e9a45b16cb3be4002dc","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"a602878fa0656ecfcbdcd4c38279e34e54b01d9f6d534382c46dfd9d58315380","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"cf1173ed60c4f736efd15eb1ac9193447ca42612374a515510a3e204320cca4f","score":1,"note":"after the soft reset, log -n 3 picks an older commit's message","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"f301eb11b9db78b0abd180f20479d1ac829719446ab04d3341090febee7f31b2","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"00234b74c0269eeef4e4a229dd717441fb218b1a27776696567e1051e1967ed9","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"1d5bca34a2fc91bccf35939baa9a134a50c98765f8fd94bc53b29ad2991d4642","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"5e379812b73a8faf6c390220a23a0b921f353c76ce72459f39d0f6f420d43ed5","score":1,"note":"ls -S sorts within each xargs batch only","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"dbae26442c72dc15c6f7a40333ec5e8a14f7af888e1c73bc385d46c8a89d5589","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"ccce4990ff30e4ae438dcfe65077d56d9e036c3c4def0a4fd59f5eeac673e332","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"e4796a824d0d52f415f705613dceda359aa2e1158bad07b60b59718d6ddf0a48","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"9820209fc0afc683012af534014ce7c10eb22bae973f09b29f7d0cb4ff755763","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"be36289952a69155aa6c05f57cc20bd14f7c2397668a08e05ae91d75101e24e1","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"18bfaa82196c47bbb166f95ff863c86bd82d35ff93bfb92d75094b63dee05276","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"32bc49856d9abdf562cb3f3b36fbf3c4f245d3c5e7835725c15dc2edfe1cacc5","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"8f0894ae3127fd1be6004d7a2edf826056a39caef847030de837c6ea5d9ad84f","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"71a25dedf1aaf45faeed2ae9c1ece99d2729fcb4a127c7717588793109c1aa45","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"8c48a5c78dbfb263bec24c696f42cadc24a124322119f098e3162fab6412368f","score":0,"note":"${f,,} is bash-only; zsh: bad substitution (verified)","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"2a5470ced1b00642650eac651510e9acb0c331bf4c90ade63e65e3ff8ee6d103","score":1,"note":"sips -Z caps the longest side, not width","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"771b6a5b18c492cae7be50073eff9ac0c679931a32bdd720158ac5ca57084acf","score":0,"note":"sed -i '' on GNU","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"92f32228aa1296e2f9f1b47b62cba13a86b5bca35a1edae6af792205e9b78542","score":0,"note":"bash writing to .zshrc","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"9b87201ed8a7f47a1ae44b870a61bc2fedf74cb5236453c9fdf8bcba331f09aa","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"77f0426e003d7fd58095f18be97543d05416368cdc092c28bdab1e2160e8030e","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"a71787971dd36c22732792a302033fcbd61efba74914111458cfeeeb65878e7c","score":0,"note":"sorts by %CPU, not memory","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"cc8137ec9e9f9dbe457bbfb283f7ee2064e69720cdb5e492d16de9dbaf795258","score":1,"note":"tail -5 drops the top process","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
+{"grade_key":"95f35301a7c30f1392d89af4b412591ded66459e96c8488a9e9a671e583e7cf7","score":1,"note":"needs ImageMagick convert, not on stock macOS","grader":"claude-opus-5.5","graded_at":"2026-09-30T14:42:47.221631Z"}
