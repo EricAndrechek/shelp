@@ -34,7 +34,7 @@ shelp() {
 }
 
 # Widget: turn the text on the command line into a command in place.
-# Bind it yourself, e.g.:  bind -x '"\C-g": shelp-widget'
+{{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bind -x '"\C-g": shelp-widget'{{end}}
 shelp-widget() {
   [ -n "$READLINE_LINE" ] || return
   local cmd
@@ -42,11 +42,12 @@ shelp-widget() {
   [ -n "$cmd" ] && READLINE_LINE=$cmd && READLINE_POINT=${#cmd}
 }
 
-{{if .LineMode}}
 # `bind` warns ("line editing not enabled") and is a no-op in a
 # non-interactive shell, so every binding below is guarded.
 case $- in
   *i*)
+{{if .Bind}}    bind -x '"{{.Bind}}": shelp-widget'
+{{end}}{{if .LineMode}}
     # Raw line mode: pressing Enter or Ctrl-J on a line whose first word
     # is `shelp` rewrites the line to `shelp suggest -- <task>` / `shelp
     # explain -- <cmd>`, quoting the rest with `printf %q` so it reaches
@@ -95,6 +96,5 @@ case $- in
     bind '"\C-x\C-]": accept-line'
     bind '"\C-m": "\C-x\C-_\C-x\C-]"'
     bind '"\C-j": "\C-x\C-_\C-x\C-]"'
-    ;;
+{{end}}    ;;
 esac
-{{end}}

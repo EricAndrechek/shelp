@@ -11,7 +11,7 @@ function shelp
 end
 
 # Widget: turn the text on the command line into a command in place.
-# Bind it yourself, e.g.:  bind \cg shelp-widget
+{{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bind \cg shelp-widget{{end}}
 function shelp-widget
     set -l line (commandline)
     test -n "$line"; or return
@@ -19,7 +19,10 @@ function shelp-widget
     test -n "$cmd"; and commandline -r -- $cmd
     commandline -f repaint
 end
-
+{{if .Bind}}
+bind {{.Bind}} shelp-widget
+bind -M insert {{.Bind}} shelp-widget
+{{end}}
 {{if .LineMode}}
 # Raw line mode: pressing Enter on a line whose first word is `shelp`
 # sends the REST OF THE LINE to shelp byte-for-byte -- no shell parsing,

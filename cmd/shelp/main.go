@@ -35,7 +35,7 @@ Usage:
   shelp providers [--json] [--all]     list model providers and whether they work
   shelp providers --reset-cooldowns    clear all recorded rate-limit cooldowns
   shelp setup [shortcuts]              install optional pieces (Apple Shortcuts)
-  shelp init <zsh|bash|fish> [--no-line-mode]
+  shelp init <zsh|bash|fish> [--bind KEY] [--no-line-mode]
                                         print shell integration; add to your rc:
                                          eval "$(shelp init zsh)"
   shelp version
@@ -51,6 +51,8 @@ Flags (suggest/explain):
   --force              call a provider even if it's in a rate-limit cooldown
 
 Flags (init):
+  --bind KEY           bind shelp-widget to KEY (caret notation "^G", or a
+                       shell-native escape form); also config "[shell] bind"
   --no-line-mode       disable raw-line Enter interception (default: on);
                        also config "[shell] line_mode = false"
 `
@@ -99,17 +101,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 func loadConfig() (*config.Config, error) { return config.Load(config.Path()) }
 
-// runInit handles `shelp init <shell> [--no-line-mode]`. It runs at every
-// shell start (via `eval "$(shelp init zsh)"`), so it stays cheap: a
-// config read (file I/O only, no probing) and a template render.
+// runInit handles `shelp init <shell> [--bind KEY] [--no-line-mode]`. It
+// runs at every shell start (via `eval "$(shelp init zsh)"`), so it stays
+// cheap: a config read (file I/O only, no probing) and a template render.
 func runInit(args []string, stdout, stderr io.Writer) error {
-	usage := fmt.Sprintf("usage: shelp init <%s> [--no-line-mode]", strings.Join(shellinit.Shells(), "|"))
-	var shellName string
+	usage := fmt.Sprintf("usage: shelp init <%s> [--bind KEY] [--no-line-mode]", strings.Join(shellinit.Shells(), "|"))
+	var shellName, bind string
 	var noLineMode bool
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--bind":
+			i++
+			if i >= len(args) {
+				return usageError{errors.New("--bind needs a value, e.g. --bind '^G'")}
+			}
+			bind = args[i]
+		case strings.HasPrefix(a, "--bind="):
+			bind = strings.TrimPrefix(a, "--bind=")
 		case a == "--no-line-mode":
 			noLineMode = true
 		case a == "-h" || a == "--help":
@@ -132,6 +142,10 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 	_ = cfg.Section("shell", &shCfg) // malformed config: fall back to defaults
 
 	opts := shellinit.Options{LineMode: shCfg.LineModeEnabled(noLineMode)}
+	opts.Bind = bind
+	if opts.Bind == "" {
+		opts.Bind = shCfg.Bind
+	}
 	s, err := shellinit.Render(shellName, opts)
 	if err != nil {
 		return err

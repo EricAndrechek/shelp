@@ -20,7 +20,7 @@ shelp() {
 alias shelp='noglob shelp'
 
 # Widget: turn the text on the command line into a command in place.
-# Bind it yourself, e.g.:  bindkey '^G' shelp-widget
+{{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bindkey '^G' shelp-widget{{end}}
 shelp-widget() {
   [[ -z $BUFFER ]] && return
   local cmd
@@ -32,7 +32,9 @@ shelp-widget() {
   zle reset-prompt
 }
 zle -N shelp-widget
-
+{{if .Bind}}
+bindkey '{{.Bind}}' shelp-widget
+{{end}}
 {{if .LineMode}}
 # Raw line mode: pressing Enter on a line whose first word is `shelp`
 # sends the REST OF THE LINE to shelp byte-for-byte -- no shell parsing,

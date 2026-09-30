@@ -82,6 +82,14 @@ model as typed; bash and fish expand globs before any function sees them,
 so quote tasks there that contain `*`, `?` or `[`, and in any shell quote
 tasks containing an apostrophe (`shelp "what's my ip"`).
 
+**Widget keybinding.** `shelp-widget` turns whatever's currently on your
+command line into a suggested command in place — handy when you've
+already typed something shelp should rewrite, or when raw line mode is
+off. Bind it at install time with `shelp init <shell> --bind KEY` (KEY in
+caret notation, e.g. `^G`, or a shell-native escape form like zsh's
+`\eg`) or config `[shell] bind = "^G"`; a flag passed to `shelp init`
+wins over the config value.
+
 Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
 config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
 `--json`, `-v`/`--verbose`, `--force` (call a provider even if it's
@@ -172,6 +180,7 @@ models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
 # Shell integration `shelp init` renders. Read at every shell start, so
 # keep it fast -- it's just a config read.
 [shell]
+bind = "^G"           # keybinding for shelp-widget; --bind on `shelp init` wins
 line_mode = true      # raw-line Enter interception; default true
 ```
 
