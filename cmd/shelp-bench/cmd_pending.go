@@ -15,13 +15,20 @@ Usage:
   shelp-bench pending [flags]
 
 Flags:
-  --run dir            a run directory (repeatable, comma-separated); default:
-                       every dir under bench/runs/ with a results.jsonl
-  --cases-dir dir      where *.toml case files live (default: bench/cases)
-  --grades file        grades store (default: bench/grades.jsonl)
-  --limit N            cap the number of records returned (default: no cap)
-  --format jsonl|md    jsonl (default; feed straight into 'grade' once
-                       scored) or md (readable review sheet)
+  --run dir                a run directory (repeatable, comma-separated);
+                           default: every dir under bench/runs/ with a
+                           results.jsonl
+  --cases-dir dir          where *.toml case files live (default: bench/cases)
+  --grades file            grades store (default: bench/grades.jsonl)
+  --limit N                cap the number of records returned (default: no cap)
+  --format jsonl|md|compact  jsonl (default; feed straight into 'grade' once
+                           scored), md (readable review sheet), or compact
+                           (dense sheet: one header per case, one line per
+                           answer with a [n] index -- see 'grade --index')
+  --index path             with --format compact, also write the [n] ->
+                           grade_key sidecar mapping 'grade --index' needs
+                           to grade a compact sheet (default:
+                           pending.index.tsv in the current dir)
 `
 
 func cmdPending(ctx context.Context, args []string, stdout, stderr *os.File) error {
@@ -29,18 +36,19 @@ func cmdPending(ctx context.Context, args []string, stdout, stderr *os.File) err
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, pendingUsage) }
 	var runs runFlag
-	var casesDir, gradesPath, format string
+	var casesDir, gradesPath, format, indexPath string
 	var limit int
 	fs.Var(&runs, "run", "")
 	fs.StringVar(&casesDir, "cases-dir", defaultCasesDir, "")
 	fs.StringVar(&gradesPath, "grades", bench.DefaultGradesPath, "")
 	fs.IntVar(&limit, "limit", 0, "")
 	fs.StringVar(&format, "format", "jsonl", "")
+	fs.StringVar(&indexPath, "index", "pending.index.tsv", "")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
-	if format != "jsonl" && format != "md" {
-		return usageError{fmt.Errorf("--format must be jsonl or md, got %q", format)}
+	if format != "jsonl" && format != "md" && format != "compact" {
+		return usageError{fmt.Errorf("--format must be jsonl, md, or compact, got %q", format)}
 	}
 
 	dirs := runs.dirs
@@ -64,8 +72,24 @@ func cmdPending(ctx context.Context, args []string, stdout, stderr *os.File) err
 		return err
 	}
 	recs := bench.BuildPending(results, cases, grades, limit)
-	if format == "md" {
+	switch format {
+	case "md":
 		return bench.WritePendingMarkdown(stdout, recs)
+	case "compact":
+		if err := bench.WritePendingCompact(stdout, recs); err != nil {
+			return err
+		}
+		idxFile, err := os.Create(indexPath)
+		if err != nil {
+			return err
+		}
+		defer idxFile.Close()
+		if err := bench.WriteIndex(idxFile, recs); err != nil {
+			return err
+		}
+		fmt.Fprintf(stderr, "shelp-bench: wrote %s (%d entries)\n", indexPath, len(recs))
+		return nil
+	default:
+		return bench.WritePendingJSONL(stdout, recs)
 	}
-	return bench.WritePendingJSONL(stdout, recs)
 }

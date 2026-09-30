@@ -121,7 +121,7 @@ shelp-bench run [--providers a,b|available] [--templates v1,...]
 
 ```
 shelp-bench pending [--run dir ...] [--cases-dir dir] [--grades file]
-                     [--limit N] [--format jsonl|md]
+                     [--limit N] [--format jsonl|md|compact] [--index path]
 ```
 
 Walks the given run directories (default: every subdirectory of
@@ -133,12 +133,37 @@ match against the case's `reference` answers, or already present in
 `bench/grades.jsonl` — so the reviewer never sees the same answer twice.
 Sorted by case, then by descending count (the most-produced wrong answers
 first). `--format jsonl` (default) is shaped to feed straight into `grade`
-once you add `"score"`; `--format md` is a readable sheet.
+once you add `"score"`; `--format md` is a readable sheet (full rubric
+repeated per case, one bullet per answer, 64-hex `grade_key` shown in
+full).
+
+`--format compact` is a much denser sheet for reviewing a lot of answers
+at once: one header per case —
+
+```
+### <case id> [<mode>] :: <input>
+RUBRIC: <rubric>
+REF: <reference 1> | <reference 2>       # only when the case has references
+
+[1] (<shell>/<os> x<count> <providers>) <answer> {<flags>}
+[2] (<shell>/<os> x<count> <providers>) <answer>
+```
+
+— then one line per answer, `n` a 1-based index running across the *whole*
+sheet (not reset per case). Newlines inside an answer are shown as ` ⏎ `
+so every answer stays on one line. `{flags}` is appended only when at
+least one of these fired, comma-joined as `key=value`: `parses=false`,
+`missing_commands=...`, `gnuisms=...`, `dangerous=...` — a clean answer
+gets no `{}` at all. Alongside the compact sheet, `--index path` (default
+`pending.index.tsv` in the current directory) writes a sidecar
+`n\tgrade_key` file, one line per answer, so `grade --index` can map a
+graded compact sheet's `n`s back to real grade keys without you ever
+needing to see one.
 
 ### `grade`
 
 ```
-shelp-bench grade [--grades file] [--grader name] [--force] [file.jsonl]
+shelp-bench grade [--grades file] [--grader name] [--force] [--index path] [file]
 ```
 
 Reads jsonl (file or stdin) shaped like `pending`'s output plus `"score"`
@@ -148,6 +173,16 @@ Appends one record per line to the grades store (default
 `bench/grades.jsonl`), stamping `grader` (default `"claude"`) and
 `graded_at`. A later line for the same `grade_key` overrides an earlier one
 — regrading is just grading again.
+
+`--index path` switches the input format entirely: `file`/stdin is read as
+a plain-text sheet, one line per graded answer, `n score note...` (score
+0, 1, or 2; the rest of the line, if any, is the note; blank lines and
+lines starting with `#` are ignored) — exactly what a reviewer fills in
+against a `pending --format compact` sheet. `path` is that sheet's sidecar
+index file (its own `--index`, or the default `pending.index.tsv`), which
+maps each `n` back to the grade_key `pending --format jsonl`/`md` would
+have shown directly. `--force` doesn't apply in this mode (there's no JSON
+to have unknown fields).
 
 Score meaning:
 
