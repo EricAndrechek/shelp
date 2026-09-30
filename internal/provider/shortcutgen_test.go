@@ -76,9 +76,15 @@ func TestBuildWorkflowMatchesReference(t *testing.T) {
 }
 
 // TestBuildWorkflowVariants checks the two fields that vary per shelp
-// provider variant: WFLLMModel and WFAllowWebSearch, plus that the two
-// actions share one UUID (the output action's OutputUUID must reference
-// the askllm action's UUID) and that FollowUp is always false.
+// provider variant: WFLLMModel and WFAllowWebSearch, plus that the askllm
+// and its output action share one UUID (the output action's OutputUUID
+// must reference the askllm action's UUID), that FollowUp is always false,
+// and that the leading version-check If/Otherwise/End If block (see
+// buildWorkflow) is wired correctly: all three conditional actions share
+// one GroupingIdentifier distinct from the askllm UUID, the If checks
+// Shortcut Input against shortcutVersionMarker with conditionIsEquals, the
+// marker branch's literal output text matches ShortcutFormatVersion, and
+// the End If carries its own UUID.
 func TestBuildWorkflowVariants(t *testing.T) {
 	for _, tc := range []struct {
 		model string
@@ -92,12 +98,69 @@ func TestBuildWorkflowVariants(t *testing.T) {
 		{"ChatGPT", true},
 	} {
 		wf := buildWorkflow(tc.model, tc.web)
-		if len(wf.WFWorkflowActions) != 2 {
-			t.Fatalf("%s/web=%v: got %d actions, want 2", tc.model, tc.web, len(wf.WFWorkflowActions))
+		if len(wf.WFWorkflowActions) != 6 {
+			t.Fatalf("%s/web=%v: got %d actions, want 6", tc.model, tc.web, len(wf.WFWorkflowActions))
 		}
-		ask, ok := wf.WFWorkflowActions[0].WFWorkflowActionParameters.(askLLMParams)
+
+		wantIdents := []string{
+			"is.workflow.actions.conditional", // If
+			"is.workflow.actions.output",      // Stop and Output "shelp-shortcut N"
+			"is.workflow.actions.conditional", // Otherwise
+			"is.workflow.actions.askllm",
+			"is.workflow.actions.output",
+			"is.workflow.actions.conditional", // End If
+		}
+		for i, want := range wantIdents {
+			if got := wf.WFWorkflowActions[i].WFWorkflowActionIdentifier; got != want {
+				t.Fatalf("%s/web=%v: action %d identifier = %q, want %q", tc.model, tc.web, i, got, want)
+			}
+		}
+
+		ifParams, ok := wf.WFWorkflowActions[0].WFWorkflowActionParameters.(conditionalParams)
 		if !ok {
-			t.Fatalf("%s/web=%v: action 0 params are %T, want askLLMParams", tc.model, tc.web, wf.WFWorkflowActions[0].WFWorkflowActionParameters)
+			t.Fatalf("%s/web=%v: action 0 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[0].WFWorkflowActionParameters)
+		}
+		if ifParams.WFControlFlowMode != wfControlFlowStart {
+			t.Errorf("%s/web=%v: If WFControlFlowMode = %d, want %d", tc.model, tc.web, ifParams.WFControlFlowMode, wfControlFlowStart)
+		}
+		if ifParams.WFCondition != conditionIsEquals {
+			t.Errorf("%s/web=%v: If WFCondition = %d, want %d", tc.model, tc.web, ifParams.WFCondition, conditionIsEquals)
+		}
+		if ifParams.WFConditionalActionString != shortcutVersionMarker {
+			t.Errorf("%s/web=%v: If WFConditionalActionString = %q, want %q", tc.model, tc.web, ifParams.WFConditionalActionString, shortcutVersionMarker)
+		}
+		if ifParams.WFInput == nil || ifParams.WFInput.Value.Type != "ExtensionInput" {
+			t.Errorf("%s/web=%v: If WFInput = %#v, want a WFTextTokenAttachment referencing ExtensionInput", tc.model, tc.web, ifParams.WFInput)
+		}
+		if ifParams.GroupingIdentifier == "" {
+			t.Errorf("%s/web=%v: If GroupingIdentifier is empty", tc.model, tc.web)
+		}
+
+		markerOut, ok := wf.WFWorkflowActions[1].WFWorkflowActionParameters.(outputParams)
+		if !ok {
+			t.Fatalf("%s/web=%v: action 1 params are %T, want outputParams", tc.model, tc.web, wf.WFWorkflowActions[1].WFWorkflowActionParameters)
+		}
+		if want := shortcutVersionOutputText(ShortcutFormatVersion); markerOut.WFOutput.Value.String != want {
+			t.Errorf("%s/web=%v: marker branch output = %q, want %q", tc.model, tc.web, markerOut.WFOutput.Value.String, want)
+		}
+		if len(markerOut.WFOutput.Value.AttachmentsByRange) != 0 {
+			t.Errorf("%s/web=%v: marker branch output has attachments %#v, want none (literal text)", tc.model, tc.web, markerOut.WFOutput.Value.AttachmentsByRange)
+		}
+
+		otherwiseParams, ok := wf.WFWorkflowActions[2].WFWorkflowActionParameters.(conditionalParams)
+		if !ok {
+			t.Fatalf("%s/web=%v: action 2 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[2].WFWorkflowActionParameters)
+		}
+		if otherwiseParams.WFControlFlowMode != wfControlFlowMiddle {
+			t.Errorf("%s/web=%v: Otherwise WFControlFlowMode = %d, want %d", tc.model, tc.web, otherwiseParams.WFControlFlowMode, wfControlFlowMiddle)
+		}
+		if otherwiseParams.GroupingIdentifier != ifParams.GroupingIdentifier {
+			t.Errorf("%s/web=%v: Otherwise GroupingIdentifier %q != If's %q", tc.model, tc.web, otherwiseParams.GroupingIdentifier, ifParams.GroupingIdentifier)
+		}
+
+		ask, ok := wf.WFWorkflowActions[3].WFWorkflowActionParameters.(askLLMParams)
+		if !ok {
+			t.Fatalf("%s/web=%v: action 3 params are %T, want askLLMParams", tc.model, tc.web, wf.WFWorkflowActions[3].WFWorkflowActionParameters)
 		}
 		if ask.WFLLMModel != tc.model {
 			t.Errorf("%s/web=%v: WFLLMModel = %q", tc.model, tc.web, ask.WFLLMModel)
@@ -111,14 +174,42 @@ func TestBuildWorkflowVariants(t *testing.T) {
 		if ask.UUID == "" {
 			t.Errorf("%s/web=%v: empty UUID", tc.model, tc.web)
 		}
-		out, ok := wf.WFWorkflowActions[1].WFWorkflowActionParameters.(outputParams)
+		if ask.UUID == ifParams.GroupingIdentifier {
+			t.Errorf("%s/web=%v: askllm UUID collides with the conditional's GroupingIdentifier", tc.model, tc.web)
+		}
+
+		out, ok := wf.WFWorkflowActions[4].WFWorkflowActionParameters.(outputParams)
 		if !ok {
-			t.Fatalf("%s/web=%v: action 1 params are %T, want outputParams", tc.model, tc.web, wf.WFWorkflowActions[1].WFWorkflowActionParameters)
+			t.Fatalf("%s/web=%v: action 4 params are %T, want outputParams", tc.model, tc.web, wf.WFWorkflowActions[4].WFWorkflowActionParameters)
 		}
 		gotOut := out.WFOutput.Value.AttachmentsByRange["{0, 1}"].OutputUUID
 		if gotOut != ask.UUID {
 			t.Errorf("%s/web=%v: output OutputUUID %q != askllm UUID %q", tc.model, tc.web, gotOut, ask.UUID)
 		}
+
+		endParams, ok := wf.WFWorkflowActions[5].WFWorkflowActionParameters.(conditionalParams)
+		if !ok {
+			t.Fatalf("%s/web=%v: action 5 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[5].WFWorkflowActionParameters)
+		}
+		if endParams.WFControlFlowMode != wfControlFlowEnd {
+			t.Errorf("%s/web=%v: End If WFControlFlowMode = %d, want %d", tc.model, tc.web, endParams.WFControlFlowMode, wfControlFlowEnd)
+		}
+		if endParams.GroupingIdentifier != ifParams.GroupingIdentifier {
+			t.Errorf("%s/web=%v: End If GroupingIdentifier %q != If's %q", tc.model, tc.web, endParams.GroupingIdentifier, ifParams.GroupingIdentifier)
+		}
+		if endParams.UUID == "" {
+			t.Errorf("%s/web=%v: End If UUID is empty", tc.model, tc.web)
+		}
+	}
+}
+
+// TestCurrentShortcutActionCount pins the value shortcuts.go's outdated-
+// version detection relies on: today's generator always produces 6
+// actions (the version-check If/Otherwise/End If wrapping the 2-action
+// v1 Use Model + Stop and Output pair).
+func TestCurrentShortcutActionCount(t *testing.T) {
+	if got := currentShortcutActionCount(); got != 6 {
+		t.Errorf("currentShortcutActionCount() = %d, want 6", got)
 	}
 }
 
@@ -201,10 +292,11 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal plutil roundtrip output: %v\n%s", err, res.Stdout)
 	}
 	actions, _ := got["WFWorkflowActions"].([]any)
-	if len(actions) != 2 {
-		t.Fatalf("roundtrip: got %d actions, want 2", len(actions))
+	if len(actions) != 6 {
+		t.Fatalf("roundtrip: got %d actions, want 6 (If/Otherwise/End If wrapping Use Model + Stop and Output)", len(actions))
 	}
-	askParams, _ := actions[0].(map[string]any)["WFWorkflowActionParameters"].(map[string]any)
+	// askllm is action index 3: If(0), Stop and Output "shelp-shortcut N"(1), Otherwise(2), askllm(3), Stop and Output(4), End If(5).
+	askParams, _ := actions[3].(map[string]any)["WFWorkflowActionParameters"].(map[string]any)
 
 	if fu, ok := askParams["FollowUp"].(bool); !ok || fu {
 		t.Errorf("FollowUp after plutil roundtrip = %#v (%T), want bool false", askParams["FollowUp"], askParams["FollowUp"])

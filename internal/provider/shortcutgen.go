@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // wfIcon is WFWorkflowIcon.
@@ -31,7 +32,8 @@ type wfIcon struct {
 	WFWorkflowIconGlyphNumber int `json:"WFWorkflowIconGlyphNumber"`
 }
 
-// wfAttachment is one entry of a WFTextTokenString's attachmentsByRange.
+// wfAttachment is one entry of a WFTextTokenString's attachmentsByRange, or
+// (wrapped in wfTextTokenAttachment) a directly-referenced single value.
 // Only Type is set for the prompt's ExtensionInput attachment; the output
 // action's ActionOutput attachment also sets OutputUUID/OutputName.
 type wfAttachment struct {
@@ -53,6 +55,18 @@ type wfTextToken struct {
 	Value               wfTextTokenValue `json:"Value"`
 }
 
+// wfTextTokenAttachment is a parameter value that references a single
+// attachment directly (Value is the attachment dict itself), rather than
+// interpolating it into a string like wfTextToken does. Verified against
+// macOS 27's Gallery.bundle/DocumentReview.wflow, whose "Choose from Menu"
+// branches reference a file/URL the same way, e.g.
+// "WFFile": {"Value": {"Type": "Ask"}, "WFSerializationType": "WFTextTokenAttachment"}.
+// Used here for the version-check conditional's WFInput (Shortcut Input).
+type wfTextTokenAttachment struct {
+	WFSerializationType string       `json:"WFSerializationType"`
+	Value               wfAttachment `json:"Value"`
+}
+
 // askLLMParams is WFWorkflowActionParameters for is.workflow.actions.askllm.
 type askLLMParams struct {
 	UUID                   string      `json:"UUID"`
@@ -66,6 +80,96 @@ type askLLMParams struct {
 // outputParams is WFWorkflowActionParameters for is.workflow.actions.output.
 type outputParams struct {
 	WFOutput wfTextToken `json:"WFOutput"`
+}
+
+// conditionalParams is WFWorkflowActionParameters for
+// is.workflow.actions.conditional (an "If"/"Otherwise"/"End If" triplet).
+// All three actions in one group share GroupingIdentifier and repeat the
+// same action identifier; WFControlFlowMode distinguishes which part of the
+// group a given entry is (see the WFControlFlowMode* constants below). Only
+// the "If" entry sets WFCondition/WFConditionalActionString/WFInput; only
+// the "End If" entry sets UUID (present but never referenced elsewhere in
+// this generator -- matches the pattern of every WFControlFlowMode-based
+// action observed, e.g. DocumentReview.wflow's repeat/choosefrommenu ends).
+//
+// Shape verified two ways (no conditional action exists in any macOS 27
+// Gallery.bundle *.wflow to lift directly -- see MERGE NOTES):
+//  1. macOS 27's Gallery.bundle/DocumentReview.wflow, which confirms the
+//     general WFControlFlowMode 0/1/2 + shared GroupingIdentifier + only the
+//     end boundary carries UUID pattern via is.workflow.actions.choosefrommenu
+//     and is.workflow.actions.repeat.count (both real, on-disk examples).
+//  2. github.com/electrikmilk/cherri (an actively maintained, real Shortcuts
+//     compiler) -- shortcutgen.go's makeConditionalAction builds exactly
+//     this shape for is.workflow.actions.conditional, and shortcut.go's
+//     `conditions` map gives the WFCondition codes (see WFConditionIsEquals
+//     below).
+type conditionalParams struct {
+	GroupingIdentifier        string                 `json:"GroupingIdentifier"`
+	WFControlFlowMode         int                    `json:"WFControlFlowMode"`
+	UUID                      string                 `json:"UUID,omitempty"`
+	WFCondition               int                    `json:"WFCondition,omitempty"`
+	WFConditionalActionString string                 `json:"WFConditionalActionString,omitempty"`
+	WFInput                   *wfTextTokenAttachment `json:"WFInput,omitempty"`
+}
+
+// WFControlFlowMode values for a control-flow action group (conditional,
+// repeat, choosefrommenu, ...): the first entry opens the group, an
+// optional middle entry marks a branch/case boundary, and the last entry
+// closes it. Verified against macOS 27's Gallery.bundle/DocumentReview.wflow
+// (is.workflow.actions.repeat.count and .choosefrommenu both use 0/1/2 this
+// way) and against Cherri's shortcutgen.go (startStatement/statementPart/
+// endStatement uint64 constants = 0/1/2).
+const (
+	wfControlFlowStart  = 0 // "If"
+	wfControlFlowMiddle = 1 // "Otherwise"
+	wfControlFlowEnd    = 2 // "End If"
+)
+
+// conditionIsEquals is the WFCondition code for "Is" (equals) on a text
+// input. Verified against github.com/electrikmilk/cherri's shortcut.go,
+// which maps its `Is` token to 4 in the `conditions` map used to build
+// is.workflow.actions.conditional's WFCondition parameter -- Cherri is a
+// real, actively maintained compiler that produces genuinely importable/
+// runnable .shortcut files, so this is the value real Shortcuts app
+// releases accept for this action.
+const conditionIsEquals = 4
+
+// ShortcutFormatVersion is the current generated shortcut's plist format.
+// It increments whenever buildWorkflow's action shape changes in a way
+// that changes currentShortcutActionCount() or otherwise requires an
+// installed shortcut to be regenerated (see shortcuts.go's outdated-version
+// detection). 1 was the original marker-less, 2-action (Use Model + Stop
+// and Output) shape; 2 adds the leading version-marker If block below.
+const ShortcutFormatVersion = 2
+
+// shortcutVersionMarker is the literal Shortcut Input value that asks a
+// generated shortcut to report its own format version instead of calling
+// Use Model. buildWorkflow wires it into a leading "If Shortcut Input is
+// <marker>" action, so this check never reaches Apple's model backend --
+// see CLAUDE.md's "Shortcuts Use Model" section and shortcuts.go's
+// detection code, which relies on that guarantee.
+const shortcutVersionMarker = "__shelp_shortcut_version__"
+
+// shortcutVersionOutputText is what a >=2 shortcut answers when its
+// Shortcut Input is exactly shortcutVersionMarker.
+func shortcutVersionOutputText(version int) string {
+	return fmt.Sprintf("shelp-shortcut %d", version)
+}
+
+// literalOutputParams builds an is.workflow.actions.output action whose
+// WFOutput is a plain literal string (no attachment/interpolation) --
+// contrast with buildWorkflow's model-response output, whose WFOutput
+// attaches the askllm action's ActionOutput.
+func literalOutputParams(text string) outputParams {
+	return outputParams{
+		WFOutput: wfTextToken{
+			WFSerializationType: "WFTextTokenString",
+			Value: wfTextTokenValue{
+				String:             text,
+				AttachmentsByRange: map[string]wfAttachment{},
+			},
+		},
+	}
 }
 
 // wfAction is one entry of WFWorkflowActions.
@@ -101,9 +205,26 @@ const extensionInputPlaceholder = "￼"
 // marshal to JSON) for the "Use Model" action configured with model and
 // web, wired to take Shortcut Input as the prompt and return the model's
 // response as output. Matches the reference in CLAUDE.md exactly except
-// for a freshly generated action UUID.
+// for freshly generated UUIDs.
+//
+// Since ShortcutFormatVersion 2, the actual Use Model call is wrapped in a
+// leading version-check block: "If Shortcut Input is <the marker string>,
+// Stop and Output 'shelp-shortcut <N>'; Otherwise, <the v1 Use Model +
+// Stop and Output pair>; End If." This lets shelp ask an already-installed
+// shortcut what format it is (see shortcuts.go) without ever spending a
+// real model call to find out, and without risking one on a shortcut that
+// might still be the marker-less v1 format (that branch never runs unless
+// the input equals the exact marker string).
 func buildWorkflow(model string, web bool) workflow {
 	uuid := newUUID()
+	groupID := newUUID()
+	endUUID := newUUID()
+
+	extensionInput := &wfTextTokenAttachment{
+		WFSerializationType: "WFTextTokenAttachment",
+		Value:               wfAttachment{Type: "ExtensionInput"},
+	}
+
 	return workflow{
 		WFWorkflowMinimumClientVersionString: "900",
 		WFWorkflowMinimumClientVersion:       900,
@@ -113,6 +234,27 @@ func buildWorkflow(model string, web bool) workflow {
 			WFWorkflowIconGlyphNumber: 61699,
 		},
 		WFWorkflowActions: []wfAction{
+			{ // If Shortcut Input is <shortcutVersionMarker>
+				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
+				WFWorkflowActionParameters: conditionalParams{
+					GroupingIdentifier:        groupID,
+					WFControlFlowMode:         wfControlFlowStart,
+					WFCondition:               conditionIsEquals,
+					WFConditionalActionString: shortcutVersionMarker,
+					WFInput:                   extensionInput,
+				},
+			},
+			{ // Stop and Output "shelp-shortcut <N>" (no model call)
+				WFWorkflowActionIdentifier: "is.workflow.actions.output",
+				WFWorkflowActionParameters: literalOutputParams(shortcutVersionOutputText(ShortcutFormatVersion)),
+			},
+			{ // Otherwise
+				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
+				WFWorkflowActionParameters: conditionalParams{
+					GroupingIdentifier: groupID,
+					WFControlFlowMode:  wfControlFlowMiddle,
+				},
+			},
 			{
 				WFWorkflowActionIdentifier: "is.workflow.actions.askllm",
 				WFWorkflowActionParameters: askLLMParams{
@@ -146,6 +288,14 @@ func buildWorkflow(model string, web bool) workflow {
 					},
 				},
 			},
+			{ // End If
+				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
+				WFWorkflowActionParameters: conditionalParams{
+					GroupingIdentifier: groupID,
+					WFControlFlowMode:  wfControlFlowEnd,
+					UUID:               endUUID,
+				},
+			},
 		},
 		WFWorkflowHasShortcutInputVariables: true,
 		WFWorkflowInputContentItemClasses:   []string{"WFStringContentItem", "WFGenericFileContentItem"},
@@ -156,6 +306,15 @@ func buildWorkflow(model string, web bool) workflow {
 		WFWorkflowImportQuestions:           []string{},
 	}
 }
+
+// currentShortcutActionCount is how many WFWorkflowActions entries the
+// current generator (buildWorkflow) produces, regardless of (model, web) --
+// used by shortcuts.go's action-count detection so it can never drift from
+// the real generator. It's computed once (all variants produce the same
+// count) rather than hardcoded.
+var currentShortcutActionCount = sync.OnceValue(func() int {
+	return len(buildWorkflow("Apple Intelligence", false).WFWorkflowActions)
+})
 
 // newUUID returns a random RFC 4122 version 4 UUID, upper-cased to match
 // the style Shortcuts itself uses (e.g. "071CFEDD-6402-4772-A3CC-9A9B4EEB1123").
