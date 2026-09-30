@@ -14,8 +14,8 @@ import (
 	"github.com/ericandrechek/shelp/internal/config"
 )
 
-// fakePATH puts testdata/agentcli (the fake claude/copilot scripts) first on
-// PATH, ahead of anything real that happens to be installed on the machine
+// fakePATH puts testdata/agentcli (the fake claude script) first on PATH,
+// ahead of anything real that happens to be installed on the machine
 // running the tests.
 func fakePATH(t *testing.T) {
 	t.Helper()
@@ -144,7 +144,7 @@ func TestProviders_Defaults(t *testing.T) {
 			t.Errorf("%s: Kind() = %q, want %q", p.ID(), p.Kind(), AgentCLI)
 		}
 	}
-	want := []string{"claude:haiku", "claude:sonnet", "copilot:default"}
+	want := []string{"claude:haiku", "claude:sonnet"}
 	for _, id := range want {
 		if !got[id] {
 			t.Errorf("Providers() missing %q; got %v", id, got)
@@ -157,15 +157,18 @@ func TestProviders_Defaults(t *testing.T) {
 
 func TestProviders_Disabled(t *testing.T) {
 	fakePATH(t)
-	cfg, err := config.Parse("[agentcli.copilot]\ndisabled = true\n")
+	cfg, err := config.Parse("[agentcli.claude]\ndisabled = true\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ps := agentCLIFamily{}.Providers(cfg)
 	for _, p := range ps {
-		if strings.HasPrefix(p.ID(), "copilot:") {
-			t.Errorf("Providers() with [agentcli.copilot] disabled still returned %s", p.ID())
+		if strings.HasPrefix(p.ID(), "claude:") {
+			t.Errorf("Providers() with [agentcli.claude] disabled still returned %s", p.ID())
 		}
+	}
+	if len(ps) != 0 {
+		t.Errorf("Providers() with claude (the only agentcli spec) disabled = %v, want none", ps)
 	}
 }
 
@@ -309,15 +312,19 @@ func TestGenerate_Claude_DefaultOmitsModelFlag(t *testing.T) {
 	}
 }
 
-// TestGenerate_ConcurrentClaudeCopilotDistinctCwd is the regression test for
-// the os.Chdir + chdirMu removal: two Generate calls run concurrently (as
-// shelp-bench does across providers, in one process that itself relies on
-// relative paths) must each see their OWN scratch temp dir as the
-// subprocess's working directory, never the other's and never this
+// TestGenerate_ConcurrentClaudeDistinctCwd is the regression test for the
+// os.Chdir + chdirMu removal: several Generate calls run concurrently (as
+// shelp-bench does across providers/samples, in one process that itself
+// relies on relative paths) must each see their OWN scratch temp dir as
+// the subprocess's working directory, never another call's and never this
 // process's own cwd -- and this process's own cwd must never move at all.
+// Two concurrent haiku/sonnet calls stand in for what used to be two
+// different CLIs (claude + copilot) before copilot was dropped; the
+// property under test -- Dir isolation across concurrent Generate calls,
+// not "two different binaries" specifically -- is unaffected by that.
 // Run with `go test -race` to also catch any reintroduced shared mutable
 // state (a chdir, a shared record file, a racy env mutation).
-func TestGenerate_ConcurrentClaudeCopilotDistinctCwd(t *testing.T) {
+func TestGenerate_ConcurrentClaudeDistinctCwd(t *testing.T) {
 	fakePATH(t)
 	// A single static flag read (never written) by both subprocesses; safe
 	// under -race because it's set once, before either goroutine starts,
@@ -331,21 +338,21 @@ func TestGenerate_ConcurrentClaudeCopilotDistinctCwd(t *testing.T) {
 
 	const n = 8 // a few rounds each, to make a real race more likely to show up
 	var wg sync.WaitGroup
-	claudeCwds := make([]string, n)
-	copilotCwds := make([]string, n)
-	claudeErrs := make([]error, n)
-	copilotErrs := make([]error, n)
+	haikuCwds := make([]string, n)
+	sonnetCwds := make([]string, n)
+	haikuErrs := make([]error, n)
+	sonnetErrs := make([]error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
 			p := newProvider(claudeSpec, "haiku")
-			claudeCwds[i], claudeErrs[i] = p.Generate(context.Background(), agentTestReq())
+			haikuCwds[i], haikuErrs[i] = p.Generate(context.Background(), agentTestReq())
 		}(i)
 		go func(i int) {
 			defer wg.Done()
-			p := newProvider(copilotSpec, "auto")
-			copilotCwds[i], copilotErrs[i] = p.Generate(context.Background(), agentTestReq())
+			p := newProvider(claudeSpec, "sonnet")
+			sonnetCwds[i], sonnetErrs[i] = p.Generate(context.Background(), agentTestReq())
 		}(i)
 	}
 	wg.Wait()
@@ -356,23 +363,23 @@ func TestGenerate_ConcurrentClaudeCopilotDistinctCwd(t *testing.T) {
 
 	seen := map[string]int{} // cwd -> how many calls reported it
 	for i := 0; i < n; i++ {
-		if claudeErrs[i] != nil {
-			t.Fatalf("claude Generate[%d]: %v", i, claudeErrs[i])
+		if haikuErrs[i] != nil {
+			t.Fatalf("haiku Generate[%d]: %v", i, haikuErrs[i])
 		}
-		if copilotErrs[i] != nil {
-			t.Fatalf("copilot Generate[%d]: %v", i, copilotErrs[i])
+		if sonnetErrs[i] != nil {
+			t.Fatalf("sonnet Generate[%d]: %v", i, sonnetErrs[i])
 		}
-		if claudeCwds[i] == "" || copilotCwds[i] == "" {
-			t.Fatalf("empty cwd reported: claude=%q copilot=%q", claudeCwds[i], copilotCwds[i])
+		if haikuCwds[i] == "" || sonnetCwds[i] == "" {
+			t.Fatalf("empty cwd reported: haiku=%q sonnet=%q", haikuCwds[i], sonnetCwds[i])
 		}
-		if claudeCwds[i] == startCwd || copilotCwds[i] == startCwd {
-			t.Fatalf("a call saw this process's own cwd instead of a scratch dir: claude=%q copilot=%q startCwd=%q", claudeCwds[i], copilotCwds[i], startCwd)
+		if haikuCwds[i] == startCwd || sonnetCwds[i] == startCwd {
+			t.Fatalf("a call saw this process's own cwd instead of a scratch dir: haiku=%q sonnet=%q startCwd=%q", haikuCwds[i], sonnetCwds[i], startCwd)
 		}
-		if claudeCwds[i] == copilotCwds[i] {
-			t.Fatalf("round %d: claude and copilot saw the SAME cwd %q, want distinct scratch dirs", i, claudeCwds[i])
+		if haikuCwds[i] == sonnetCwds[i] {
+			t.Fatalf("round %d: the two concurrent calls saw the SAME cwd %q, want distinct scratch dirs", i, haikuCwds[i])
 		}
-		seen[claudeCwds[i]]++
-		seen[copilotCwds[i]]++
+		seen[haikuCwds[i]]++
+		seen[sonnetCwds[i]]++
 	}
 	for dir, count := range seen {
 		if count != 1 {
@@ -398,96 +405,6 @@ func TestGenerate_Claude_Streams(t *testing.T) {
 	}
 }
 
-func TestGenerate_Copilot_ArgvAndCwd(t *testing.T) {
-	fakePATH(t)
-	rec := filepath.Join(t.TempDir(), "record.txt")
-	t.Setenv("SHELP_FAKE_RECORD", rec)
-	t.Setenv("SHELP_FAKE_STDOUT", "git log -5 --oneline")
-
-	p := newProvider(copilotSpec, "auto")
-	req := agentTestReq()
-	startCwd, _ := os.Getwd()
-
-	got, err := p.Generate(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if got != "git log -5 --oneline" {
-		t.Errorf("Generate() = %q", got)
-	}
-	r := readRecord(t, rec)
-	if r.stdinBytes != 0 {
-		t.Errorf("stdin bytes = %d, want 0", r.stdinBytes)
-	}
-	if r.cwd == startCwd {
-		t.Error("cwd was not changed to a scratch dir")
-	}
-	if procCwd, _ := os.Getwd(); procCwd != startCwd {
-		t.Errorf("this process's cwd changed to %s, want unchanged %s", procCwd, startCwd)
-	}
-	if r.envMaxThinking != "<unset>" {
-		t.Errorf("MAX_THINKING_TOKENS in copilot's subprocess env = %q, want unset (only claudeSpec sets extraEnv)", r.envMaxThinking)
-	}
-	if v, ok := argAfter(r.args, "-p"); !ok || v != req.System+"\n\n"+req.Prompt {
-		t.Errorf("-p = %q, %v; want system+prompt", v, ok)
-	}
-	if !contains(r.args, "-s") {
-		t.Error("missing -s (silent)")
-	}
-	dir, ok := argAfter(r.args, "-C")
-	if !ok {
-		t.Fatal("missing -C <dir>")
-	}
-	if dir == "" {
-		t.Error("-C dir is empty")
-	}
-	if r.cDirExists != "yes" {
-		t.Errorf("-C dir %q did not exist at call time (cDirExists=%q)", dir, r.cDirExists)
-	}
-	// --available-tools must carry an EXPLICIT empty value ("--available-
-	// tools=", one empty-string list element), not a bare flag: verified
-	// live that a bare flag with no value does not actually restrict
-	// anything (see agentcli.go's file header and copilotArgs comment).
-	if !contains(r.args, "--available-tools=") {
-		t.Errorf("missing --available-tools= (explicit empty value, not a bare flag), got %v", r.args)
-	}
-	if contains(r.args, "--available-tools") {
-		t.Error("--available-tools must never appear as a bare flag (verified live: doesn't restrict anything), only --available-tools=")
-	}
-	if !contains(r.args, "--disable-builtin-mcps") {
-		t.Error("missing --disable-builtin-mcps")
-	}
-	if v, ok := argAfter(r.args, "--deny-tool"); !ok || v != "shell" {
-		t.Errorf("--deny-tool = %q, %v; want shell (the fix for the built-in bash tool --available-tools doesn't gate)", v, ok)
-	}
-	if v, ok := argAfter(r.args, "--reasoning-effort"); !ok || v != "none" {
-		t.Errorf("--reasoning-effort = %q, %v; want none", v, ok)
-	}
-	if v, ok := argAfter(r.args, "--model"); !ok || v != "auto" {
-		t.Errorf("--model = %q, %v; want auto", v, ok)
-	}
-	if contains(r.args, "--no-auto-update") {
-		t.Error("--no-auto-update must be omitted: it corrupts copilot's arg parser together with -p and -C (see agentcli.go)")
-	}
-}
-
-func TestGenerate_Copilot_Streams(t *testing.T) {
-	fakePATH(t)
-	t.Setenv("SHELP_FAKE_STDOUT", "the reply")
-
-	var chunks []string
-	req := agentTestReq()
-	req.OnChunk = func(s string) { chunks = append(chunks, s) }
-
-	p := newProvider(copilotSpec, "auto")
-	if _, err := p.Generate(context.Background(), req); err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if len(chunks) == 0 {
-		t.Error("OnChunk was never called for copilot, want at least one chunk")
-	}
-}
-
 // ---------------- error mapping ----------------
 
 func TestGenerate_ErrorMapping(t *testing.T) {
@@ -500,7 +417,6 @@ func TestGenerate_ErrorMapping(t *testing.T) {
 	}{
 		{"claude not logged in", claudeSpec, "haiku", "Not logged in · Please run /login", "not logged in"},
 		{"claude generic error", claudeSpec, "haiku", "boom", "boom"},
-		{"copilot model unavailable", copilotSpec, "gpt-5.4", "Error: Model \"gpt-5.4\" from --model flag is not available.", "not available"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -540,7 +456,6 @@ func TestGenerate_RateLimitMapping(t *testing.T) {
 	}{
 		{"claude rate limit", claudeSpec, "haiku", "Error: rate limit exceeded, please try again"},
 		{"claude quota", claudeSpec, "haiku", "You have exceeded your quota for this billing period"},
-		{"copilot rate limit", copilotSpec, "gpt-5.4", "Error: You have hit the rate limit. Please wait and try again."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -589,7 +504,7 @@ func TestGenerate_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	p := newProvider(copilotSpec, "auto")
+	p := newProvider(claudeSpec, "haiku")
 	start := time.Now()
 	_, err := p.Generate(ctx, agentTestReq())
 	elapsed := time.Since(start)
@@ -645,7 +560,7 @@ func TestDetect_WrongIdentity(t *testing.T) {
 	fakePATH(t)
 	t.Setenv("SHELP_FAKE_VERSION", "totally-unrelated-tool 1.0.0")
 
-	for _, spec := range []cliSpec{claudeSpec, copilotSpec} {
+	for _, spec := range []cliSpec{claudeSpec} {
 		st := spec.identify(context.Background())
 		if st.Available {
 			t.Errorf("%s: Detect() available for an unrelated binary, want unavailable", spec.name)
@@ -656,13 +571,18 @@ func TestDetect_WrongIdentity(t *testing.T) {
 // ---------------- Description() ----------------
 
 func TestDescription_NoDoubleCLI(t *testing.T) {
+	// A synthetic spec whose label already ends in "CLI" (the shape that
+	// used to be exercised by the real, now-removed, copilot spec:
+	// "GitHub Copilot CLI") exists purely to keep this regression test
+	// covering that branch of Description()'s logic.
+	labelAlreadyEndsInCLI := cliSpec{name: "synthetic", label: "Synthetic Agent CLI"}
 	cases := []struct {
 		spec     cliSpec
 		cliModel string
 		want     string
 	}{
 		{claudeSpec, "haiku", "Claude Code CLI, model haiku (headless, no tools)"},
-		{copilotSpec, "auto", "GitHub Copilot CLI, model auto (headless, no tools)"},
+		{labelAlreadyEndsInCLI, "default", "Synthetic Agent CLI, model default (headless, no tools)"},
 	}
 	for _, c := range cases {
 		p := newProvider(c.spec, c.cliModel)

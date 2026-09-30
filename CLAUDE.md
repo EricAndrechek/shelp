@@ -4,9 +4,9 @@ Turn a task into a shell command (`shelp find files over 100MB`), or explain
 one (`shelp explain 'lsof -nP -iTCP:8080'`), using whatever model the user
 has: Apple's on-device model (`fm`), Apple's cloud models via Shortcuts,
 OpenAI-compatible endpoints (hosted with a key, or local: LM Studio, Ollama,
-llama-server), or installed AI CLIs (claude, copilot -- gemini, codex, and
-Antigravity were evaluated and dropped, see "Dropped backends" in
-README.md and the agentcli PURITY note below).
+llama-server), or an installed AI CLI (claude -- gemini, codex,
+Antigravity, and Copilot CLI were all evaluated and dropped, see "Dropped
+backends" in README.md and the agentcli PURITY note below).
 Successor to the `ghcs`/`ghce` shell functions in Eric's dotfiles.
 
 Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
@@ -22,15 +22,14 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `shortcuts.go` (the `shortcuts:*` providers, +`shortcuts_test.go`),
   `shortcutgen.go` (builds/signs the "Use Model" `.shortcut` plist,
   +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`), and
-  `agentcli.go` (the `claude`/`copilot` headless-CLI providers,
-  +`agentcli_test.go`, `testdata/agentcli/{claude,copilot}` —
-  byte-identical fake CLI scripts driven entirely by `SHELP_FAKE_*` env
-  vars, see the doc comment in `testdata/agentcli/claude`; gemini, codex,
-  and antigravity (`agy`) were removed from agentcli.go, see PURITY below
+  `agentcli.go` (the `claude` headless-CLI provider, +`agentcli_test.go`,
+  `testdata/agentcli/claude` — a fake CLI script driven entirely by
+  `SHELP_FAKE_*` env vars, see its doc comment; gemini, codex, antigravity
+  (`agy`), and copilot were all removed from agentcli.go, see PURITY below
   — their fake-CLI fixtures should be deleted too (`git rm
-  testdata/agentcli/{gemini,codex,agy}`) but weren't as part of this
-  change; do that before relying on the directory listing matching this
-  note).
+  testdata/agentcli/{gemini,codex,agy,copilot}`) but weren't as part of
+  this change; do that before relying on the directory listing matching
+  this note).
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
@@ -109,14 +108,14 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `$XDG_CACHE_HOME/shelp/local-models.json` (`~/.cache/shelp/...` by
   default), refreshed by `Detect`, not read live on every `Providers()`
   call.
-- **agentcli**: `[agentcli]` has one sub-table per CLI — `[agentcli.claude]`,
-  `[agentcli.copilot]` — each with `models` (a list overriding that
-  CLI's built-in variant ids/flag values; a name matching a built-in id
-  like `"haiku"` reuses its flag value, any other string is passed through
+- **agentcli**: `[agentcli]` has one sub-table per CLI — today, just
+  `[agentcli.claude]` — with `models` (a list overriding that CLI's
+  built-in variant ids/flag values; a name matching a built-in id like
+  `"haiku"` reuses its flag value, any other string is passed through
   verbatim as both id and `-m`/`--model` value) and `disabled` (drop this
-  CLI's providers even when the binary is on PATH). Both always run in a
+  CLI's providers even when the binary is on PATH). It always runs in a
   fresh empty temp directory (`Generate`'s scratch dir, not the config
-  file's directory) so neither picks up this repo's own CLAUDE.md/
+  file's directory) so it never picks up this repo's own CLAUDE.md/
   AGENTS.md.
 
 ## Backend notes (verified on macOS 27.0, M4 Pro)
@@ -160,7 +159,7 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
 - PCC has an unpublished daily cap (higher with iCloud+).
 
-### agentcli (claude / copilot headless CLIs)
+### agentcli (claude headless CLI)
 
 **PURITY.** Every provider shelp ships must behave as a single plain chat
 completion: shelp's system prompt + one user message in, one text answer
@@ -169,12 +168,26 @@ the user's own setup, no multi-turn agent loop, no hidden "thinking"
 unless the user opts in. `fm`, `shortcuts:*`, and every OpenAI-compatible
 endpoint meet this by construction (no agent harness exists to strip
 down). The agent CLIs are full coding agents by default, so each one is
-wired up here only once there's a documented, verified, flag-only way
-back down to a plain completion — see the per-CLI notes below and the
-"Dropped backends" section of README.md for the three that were evaluated
-and rejected (gemini, codex, antigravity/`agy`: each is structurally an
-agent harness — a baked-in system prompt, always-available shell access,
-or both — with no plain-completion mode to switch into).
+wired up here only once there's a documented, verified, flag-only,
+*structural* way back down to a plain completion — "structural" meaning
+shelp can prove no tool call is possible at all, not merely deny specific
+tools by name (see the copilot note below for a CLI that only offered the
+latter, and was dropped for it). See the per-CLI notes below and the
+"Dropped backends" section of README.md for the four that were evaluated
+and rejected:
+- **gemini**, **codex**, **antigravity**/`agy`: each is structurally an
+  agent harness — a baked-in system prompt, always-available shell
+  access, or both — with no plain-completion mode to switch into.
+- **copilot**: had a documented-sounding flag (`--available-tools` with
+  no value, "disables all other tools") that turned out not to work at
+  all, live-verified (the model still ran its built-in `bash` tool); the
+  only thing that did stop it, `--deny-tool shell`, is a permission-layer
+  denylist, not a structural absence of tools — best-effort, not a
+  guarantee a future release can't reintroduce an uncovered capability.
+  See README's "Dropped backends" entry, and `git log --all
+  --oneline -- internal/provider/agentcli.go` for the commit that wired
+  copilot up (with the full flag-by-flag investigation in its message)
+  before it was removed here.
 
 - **claude** authenticates via claude.ai (a subscription, not an API key).
   `--bare` cannot be used with subscription auth: it forces
@@ -185,8 +198,8 @@ or both — with no plain-completion mode to switch into).
   `--permission-prompts none` + `--disable-slash-commands` +
   `--no-session-persistence` instead — auth-neutral, and the closest thing
   claude has to "just answer in text". `--model` takes the `haiku`/`sonnet`
-  aliases directly; `--system-prompt` is a separate flag (no
-  system+prompt concatenation needed, unlike copilot). `MAX_THINKING_TOKENS=0`
+  aliases directly; `--system-prompt` is a separate flag (no manual
+  system+prompt concatenation needed). `MAX_THINKING_TOKENS=0`
   is additionally set in the subprocess environment (`claudeSpec.extraEnv`,
   `agentcliProvider.Generate` appends it to `os.Environ()`): haiku
   otherwise spends real output tokens on hidden "thinking" for even a
@@ -203,52 +216,6 @@ or both — with no plain-completion mode to switch into).
   counts (392/463, not thousands) and `num_turns: 1` on both are also the
   evidence that `--setting-sources ""`/`--tools ""` really do keep out
   CLAUDE.md/project memory and any tool round-trip.
-- **copilot**: `--no-auto-update` corrupts its own argument parser when
-  combined with `-p` and `-C` on the installed 1.0.x build (fails with
-  `error: unknown option '-C'`; reproduced repeatedly, order-independent,
-  present only when both `-p` and `-C` are also present) — omitted from
-  the main call (still used for the cheap `--version` probe in `Detect`,
-  where `-p`/`-C` aren't present). copilot silently self-updates in the
-  background regardless (observed version drift across a few minutes of
-  local testing); `Detect` doesn't hard-fail on an unexpected version
-  string, just reports it. Tool suppression took three flags, not one,
-  discovered by inspecting `--output-format json` events live (2026-09-30,
-  GitHub Copilot CLI 1.0.89, account's default auto-routed model
-  `gpt-5.6-luna`):
-  - `copilot help permissions` documents `--available-tools` (no value) as
-    disabling every tool ("disables all other tools"), but a BARE
-    `--available-tools` flag (zero list values) verifiably does NOT
-    restrict anything — the model still invoked its built-in `bash` tool
-    and ran a real shell command (`find . -type f -size +100M -print`) in
-    the scratch dir. An EXPLICIT empty value, `--available-tools=` (one
-    argv token, one empty-string list element — NOT `--available-tools`
-    followed by nothing), is what actually produces `toolRequests: []`
-    and a single `model.call` for an easy prompt.
-  - `--available-tools=` alone still isn't enough for every prompt: for
-    "find files over 100MB" the model called `bash` again even with
-    `--available-tools=` AND `--disable-builtin-mcps` both set — the
-    built-in bash/shell tool is not gated by `--available-tools` at all.
-    What reliably suppressed it (same prompt, zero `tool.execution_start`
-    events, single `model.call`, clean text answer) was `--deny-tool
-    shell` — `copilot help permissions` documents `--deny-tool` as a
-    separate, higher-precedence permission layer ("Denial rules always
-    take precedence over allow rules, even --allow-all-tools"), distinct
-    from the `--available-tools`/`--excluded-tools` *visibility* filters.
-  - `--disable-builtin-mcps` is kept too so the CLI never connects to its
-    built-in GitHub MCP server at all (observed live: it connects and
-    loads that server's tool-usage instructions into session state even
-    when `--available-tools=` already keeps every one of its tools
-    unreachable — pure wasted latency/surface at that point, not a
-    text-content leak, but no reason to keep it).
-  - `--reasoning-effort none` (`--help`: possible values none, minimal,
-    low, medium, high, xhigh, max) was verified live to be accepted by
-    the account's current default model with no error.
-  - This is best-effort, not a structural guarantee the way claude's
-    `--tools ""` is: a future copilot release could add a built-in
-    capability that none of `--available-tools`/`--disable-builtin-mcps`/
-    `--deny-tool` happens to cover. Re-verify with `--output-format json`
-    (grep for `tool.execution_start`) after any copilot upgrade that
-    changes `--version`'s output materially.
 
 ## Rate limits and cooldowns
 
@@ -274,9 +241,10 @@ exit whose stdout/stderr contains "usage limit" or "try again later"
 again later.": a rate-limited "Use Model" run typically still exits 0,
 its output IS the error text). openai.go treats an HTTP 429 as one,
 parsing `Retry-After` (seconds or an HTTP-date) when present; agentcli.go's
-parse funcs (shared by claude and copilot, via `agentRateLimitReason`)
-treat "rate limit", "quota", "usage limit", "429", or "resource exhausted"
-in a failed call's stderr/stdout (case-insensitive, non-zero exit) as one.
+parse func (claude's, via `agentRateLimitReason`, shared with any future
+agentcli spec) treats "rate limit", "quota", "usage limit", "429", or
+"resource exhausted" in a failed call's stderr/stdout (case-insensitive,
+non-zero exit) as one.
 All three families construct
 `provider.RateLimitedError` via `provider.RateLimited(id, retryAfter,
 format, args...)`, which still satisfies `errors.As(err,

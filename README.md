@@ -63,14 +63,14 @@ currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
 | `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI | `shelp setup shortcuts` generates and opens each `.shortcut`; click "Add Shortcut" once per shortcut (no import API exists) |
 | `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
 | `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
-| `claude:haiku`, `claude:sonnet`, `copilot:default` | agent-cli | the CLI installed and logged in (`claude`, `copilot`) | log in with each CLI's own command (`claude /login`, `copilot login`) |
+| `claude:haiku`, `claude:sonnet` | agent-cli | `claude` installed and logged in | `claude /login` |
 
 `shelp providers` probes every registered provider and prints which are
 `ok` vs `unavailable` (and why) on this machine right now.
 
-Only `claude` and `copilot` are shipped among the AI-agent-CLI backends;
-gemini, codex, and Antigravity were evaluated and dropped -- see "Dropped
-backends" below.
+Only `claude` is shipped among the AI-agent-CLI backends; gemini, codex,
+Antigravity, and Copilot CLI were all evaluated and dropped -- see
+"Dropped backends" below.
 
 ## Configuration
 
@@ -124,16 +124,15 @@ base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
 names = { "apple-pro" = "Ask AI" }   # reuse an already-installed shortcut
 install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` creates
 
-# Headless AI CLIs: one optional sub-table per CLI. `models` overrides that
-# CLI's built-in variant ids/flag values (a name matching a built-in id
-# like "haiku" reuses its flag value; anything else is passed through
-# verbatim as both the id and the -m/--model value). `disabled` drops a
-# CLI's providers even when it's installed.
+# Headless AI CLIs: one optional sub-table per CLI (today, just claude --
+# see "Dropped backends" for why gemini/codex/Antigravity/Copilot CLI
+# aren't shipped). `models` overrides that CLI's built-in variant
+# ids/flag values (a name matching a built-in id like "haiku" reuses its
+# flag value; anything else is passed through verbatim as both the id and
+# the -m/--model value). `disabled` drops this CLI's providers even when
+# it's installed.
 [agentcli.claude]
 models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
-
-[agentcli.copilot]
-disabled = true   # e.g. to keep it out of the default fallback chain
 ```
 
 ## Benchmark
@@ -167,7 +166,7 @@ _Results pending._
 
 Any provider can be rate-limited or out of quota, not just missing or
 offline -- Apple's Shortcuts "Use Model" backends, OpenAI-compatible
-endpoints (HTTP 429), and the agent CLIs (`claude`, `copilot`) all report
+endpoints (HTTP 429), and the agent-CLI backend (`claude`) all report
 this distinctly from a plain failure. When shelp
 sees one, it remembers: the provider ID goes into a small cooldown store
 (`$XDG_CACHE_HOME/shelp/cooldown.json`, `~/.cache/shelp/` by default) for
@@ -199,8 +198,8 @@ By default shelp tells the model only your OS and shell (`context =
 they leave the machine once a cloud provider is in the chain. Apple's
 on-device `fm` never sends anything off your Mac. Any cloud provider —
 Shortcuts' Apple Intelligence Pro / ChatGPT, an `[[openai.endpoint]]`, or
-one of the agent CLIs (`claude`, `copilot`, each talking to its own cloud
-account) — receives your full prompt: the task or command you gave it,
+the agent-CLI backend (`claude`, talking to its own cloud account) —
+receives your full prompt: the task or command you gave it,
 plus whatever context fields are enabled.
 
 ## Provider purity
@@ -211,17 +210,19 @@ tools, no file/project access, no memory or instructions loaded from the
 user's own config, no multi-turn agent loop, and no hidden "thinking"
 unless the user opts in (nothing does, today). `fm`, the Shortcuts
 backends, and every OpenAI-compatible endpoint are pure completions by
-construction — there's no agent harness in the way. The two agent-CLI
-backends shelp ships (`claude`, `copilot`) are full coding agents by
-default, so each one only stays in the fallback chain because there's a
-verified, flag-only way to strip every optional capability back down to
-that same one-completion shape:
+construction — there's no agent harness in the way. The one agent-CLI
+backend shelp ships (`claude`) is a full coding agent by default, and
+stays in the fallback chain only because there's a verified, flag-only,
+*structural* way to strip every optional capability back down to that
+same one-completion shape — "structural" meaning shelp can prove no tool
+call is possible at all (`--tools ""`), not merely deny specific tools by
+name (see "Dropped backends" for a backend that only offered the latter,
+and was dropped for it):
 
 | provider | tools possible? | hidden input tokens (measured) | thinking/reasoning | turns |
 |---|---|---|---|---|
 | `fm`, `shortcuts:*`, `openai:*`/local servers | no (no agent harness at all) | none | none | 1 |
 | `claude:*` | no (`--tools ""`, `--strict-mcp-config`) | ~392-463 input tokens (haiku/sonnet, `--setting-sources ""`; no CLAUDE.md/memory) | none (`MAX_THINKING_TOKENS=0`; haiku otherwise burns ~318 output tokens/3.3s on hidden thinking for a trivial prompt) | 1 (`--output-format json`: `num_turns: 1`, `permission_denials: []`) |
-| `copilot:*` | best-effort only — see caveat below | not measured (no `--output-format json` input-token field) | none (`--reasoning-effort none`, verified accepted) | 1 in every run observed with the full hardened flag set |
 
 Measured live 2026-09-30 (`claude -p --model haiku/sonnet --output-format
 json` with `MAX_THINKING_TOKENS=0` and shelp's other claude flags):
@@ -230,27 +231,23 @@ time, `num_turns: 1`; sonnet — 13 output tokens, 0 thinking tokens, 463
 input tokens, 1038ms API time, `num_turns: 1` (sonnet doesn't think by
 default regardless, so the env var is just harmless insurance there).
 
-**Copilot caveat**: `copilot help permissions` documents `--available-tools`
-(no value) as disabling every tool, but this was verified live to be
-FALSE — the model still ran its built-in `bash` tool. shelp passes an
-explicit `--available-tools=` (one empty-string element, verified live to
-actually zero out `toolRequests`) plus `--disable-builtin-mcps` (stop it
-connecting to its built-in GitHub MCP server) plus `--deny-tool shell`
-(the actual fix for the built-in bash tool, which `--available-tools`
-doesn't gate at all — verified live: a prompt that previously triggered a
-real shell command instead gets a single clean text answer with this flag
-set). This is the most hardening currently possible through documented
-flags; it is best-effort, not a structural guarantee the way claude's
-`--tools ""` is, since a future copilot release could reintroduce a
-built-in capability not covered by any of `--available-tools`/
-`--disable-builtin-mcps`/`--deny-tool`.
-
 ## Dropped backends
 
-Three agent CLIs were evaluated and deliberately left unwired, rather than
+Four agent CLIs were evaluated and deliberately left unwired, rather than
 hardened, because none of them can be reduced to a single plain completion
 through documented flags:
 
+- **Copilot CLI** (`copilot`) — no structural way to disable its built-in
+  tools was found: `copilot help permissions` documents a bare
+  `--available-tools` (no value) as disabling every tool, but this was
+  verified live to be FALSE — the model still ran its built-in `bash` tool
+  and executed a real shell command. Only a *permission-layer*
+  `--deny-tool shell` stopped it (a denylist, not a structural absence of
+  tools) — best-effort, not a guarantee: a future release could add a
+  built-in capability not covered by `--available-tools`/
+  `--disable-builtin-mcps`/`--deny-tool`, and shelp would have no way to
+  know. Any backend whose harness can run tools shelp can't structurally
+  control is dropped, full stop — this is that rule's first casualty.
 - **Codex CLI** (`codex`) — its own agent system prompt is baked in and
   can't be replaced (unlike claude's `--system-prompt`), and even in the
   most restrictive sandbox it can still run read-only shell commands.
@@ -272,9 +269,8 @@ through documented flags:
   click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
   and signs the shortcut and opens it for you, but can't click through
   the import dialog itself — there's no API for that.
-- The `claude`/`copilot` agent-cli providers spend your account's usage
-  quota on every call, same as using that CLI directly (a paid
-  subscription for both), and are noticeably slower than the other
-  backends: about 1-3s per call even hardened down to a plain completion
-  (they're full coding agents starting up in headless mode, not a
-  lightweight API request).
+- The `claude` agent-cli provider spends your account's usage quota on
+  every call, same as using the CLI directly (a paid subscription), and is
+  noticeably slower than the other backends: about 1-2s per call even
+  hardened down to a plain completion (it's a full coding agent starting
+  up in headless mode, not a lightweight API request).

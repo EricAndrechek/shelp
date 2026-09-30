@@ -51,7 +51,7 @@ const (
 	AppleCloud  Kind = "apple-cloud"  // Apple Private Cloud Compute / ChatGPT via Shortcuts
 	API         Kind = "api"          // hosted OpenAI-compatible endpoint with a key
 	LocalServer Kind = "local-server" // LM Studio, Ollama, llama-server, fm serve
-	AgentCLI    Kind = "agent-cli"    // claude, gemini, codex, copilot in headless mode
+	AgentCLI    Kind = "agent-cli"    // an installed AI coding-agent CLI in headless mode (today: claude)
 )
 
 // Status is the result of probing a provider.
