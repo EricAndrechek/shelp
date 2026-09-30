@@ -82,11 +82,14 @@ ignored.
 ```toml
 # Fallback chain shelp tries in order; first success wins. Overridden by
 # -p/--provider and $SHELP_PROVIDER. Default: ["shortcuts:apple-pro", "fm"]
-providers = ["shortcuts:apple-pro", "openrouter:anthropic/claude-3.5-haiku", "fm"]
+# (free backends only). Adding claude:sonnet gives the best accuracy after
+# Apple's cloud model, at the cost of your Claude plan's usage.
+providers = ["shortcuts:apple-pro", "claude:sonnet", "fm"]
 
-# Prompt template: "v1" (default), "v2" (rules), "v3" (few-shot). See
-# internal/prompt/templates.go and bench/README.md for how they compare.
-template = "v1"
+# Prompt template: "v2" (default: rules), "v1" (minimal), "v3" (v2 +
+# few-shot). See internal/prompt/templates.go; the Benchmark section below
+# has the comparison.
+template = "v2"
 
 # What to tell the model about your environment. cwd/tools are opt-in --
 # they leave the machine once a cloud provider is in the chain. Default:
@@ -159,8 +162,70 @@ same provider to help stay under a rate limit in the first place. See
 `results.jsonl` schema.
 
 <!-- bench:start -->
-_Results pending._
+| Provider | Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| claude:haiku | v2 | 112 | 100% | 84% | 77% | 95% | 0% | 1976ms/2353ms | 2520ms | 2971ms | 1857ms |
+| claude:sonnet | v2 | 112 | 100% | 97% | 96% | 100% | 0% | 2345ms/2983ms | 3260ms | 3729ms | 2260ms |
+| fm | v2 | 112 | 100% | 36% | 29% | 100% | 0% | 586ms/1002ms | 385ms | 2392ms | - |
+| shortcuts:apple-pro | v2 | 112 | 28% | 98% | 97% | 100% | 72% | 1295ms/1508ms | 1717ms | 1717ms | - |
+
+_2026-09-30 · 81 cases · up to 1 sample(s) per trial_
 <!-- bench:end -->
+
+**How it's measured.** 81 cases (`bench/cases/*.toml`): 67 "suggest" tasks
+and 14 "explain" commands across files, text processing, processes and
+networking, git, OS-specific system tasks, archives/media, and shell syntax,
+with many targeting macOS/BSD vs Linux/GNU traps (`sed -i ''`, `date -v` vs
+`-d`, `ps --sort`, `du -d`) and zsh/bash/fish differences. Each case runs in
+every shell/OS combination it lists (112 trials per provider and template).
+Every distinct answer was graded 0/1/2 against the case's rubric by Claude
+(Opus 5.5), with suspicious claims checked by actually running them on this
+Mac (e.g. `sips -s format jpg` fails, `mv File file` works on APFS);
+identical answers share one grade, and answers matching a case's reference
+list are graded 2 automatically. "Mean score" is the average grade as a
+percentage of 2. Grades live in `bench/grades.jsonl`; `bench/RESULTS.md` is
+the full report across every run, including dropped backends.
+
+**Findings (2026-09-30, M4 Pro, macOS 27.0):**
+
+- **Apple Intelligence Pro via Shortcuts is the best fit when available:**
+  98% at ~1.3s, pure completion, free. Its catch is a usage limit: ~100
+  calls in quick succession, then "You have reached the usage limit for this
+  model" for more than 1.5 hours (the reset window is unpublished). Only 31
+  of its 112 trials ran before the limit, so treat its score as indicative.
+  shelp's cooldown then skips it instead of retrying.
+- **Claude Sonnet (`claude:sonnet`) is the best fallback:** 97-98% at
+  ~2.1-2.3s end to end, on your Claude plan's usage.
+- **Claude Haiku is not worth it here.** With Claude Code's default hidden
+  thinking it scored 89% but took ~6.6s; with thinking off it's ~1.8s but
+  drops to 77% as plain text (and occasionally wrapped commands in prose) or
+  84% with schema-enforced JSON output, which is what shelp now uses.
+- **Apple's on-device model (`fm`) is fast and private but weak:** 31-36%,
+  ~0.35s warm. It invents flags and tools (`battctl`, `jpegmini`, `ip` on
+  macOS) and falls for most BSD/GNU traps. Keep it as the offline fallback.
+- **Prompt template v2 is the default** because it matched or beat v1
+  everywhere: Apple Intelligence Pro 94% -> 98%, Claude Sonnet's
+  format-clean rate 91% -> 100%, fm 31% -> 36%. v3 (v2 plus worked
+  examples) added nothing over v2 for any model, and small models copy the
+  examples' shape.
+- **Telling the model which tools are installed (`--context ...,tools`)
+  made fm worse** (36% -> 32%): it reached for the listed tools where they
+  didn't fit. It stays opt-in.
+- Dropped backends, for reference (see "Dropped backends"): Codex CLI
+  scored ~95% and Copilot CLI ~94% at 4-5s before being dropped for harness
+  control reasons, not quality. Codex exhausted a free ChatGPT plan's
+  monthly allowance after 255 calls.
+
+End-to-end latency (process start to printed command, `shelp-bench
+latency`, warm p50 of 5): fm 0.35s (1.25s cold), claude:haiku 1.8s,
+claude:sonnet 2.1s. Apple Intelligence Pro measured ~1.3s per call in the
+benchmark run (it was rate-limited when the latency pass ran).
+
+Caveats: one sample per trial; the grader is itself a Claude model, so a
+bias toward Claude-style answers can't be ruled out, although every
+rubric names concrete pass/fail criteria and every disputed call was
+tested; the Linux cases are graded on the command's correctness for the
+stated OS, not executed on Linux.
 
 ## Rate limits and cooldowns
 

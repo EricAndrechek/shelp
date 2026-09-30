@@ -1,0 +1,3 @@
+{"provider":"fm","n":5,"cold_ms":1248,"warm_p50_ms":346,"warm_p90_ms":370,"errors":0,"timestamp":"2026-09-30T14:42:56.535847Z"}
+{"provider":"claude:sonnet","n":5,"cold_ms":2303,"warm_p50_ms":2070,"warm_p90_ms":2611,"errors":0,"timestamp":"2026-09-30T14:42:59.198843Z"}
+{"provider":"claude:haiku","n":5,"cold_ms":1840,"warm_p50_ms":1827,"warm_p90_ms":2044,"errors":0,"timestamp":"2026-09-30T14:43:10.308781Z"}
