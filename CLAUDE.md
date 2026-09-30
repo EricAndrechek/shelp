@@ -17,10 +17,13 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `Chain`, timing `Call` (`provider.go`), plus the `RunCmd` exec helper
   (`execx.go`). One file per family: `fm.go` (Apple on-device), `openai.go`
   (OpenAI-compatible hosted endpoints + local servers, +`openai_test.go`),
-  `shortcuts.go` (the `shortcuts:*` providers, +`shortcuts_test.go`) and
+  `shortcuts.go` (the `shortcuts:*` providers, +`shortcuts_test.go`),
   `shortcutgen.go` (builds/signs the "Use Model" `.shortcut` plist,
-  +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`); `agentcli.go`
-  (claude/gemini/codex/copilot) is still being built, not yet merged.
+  +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`), and
+  `agentcli.go` (the `claude`/`gemini`/`codex`/`copilot` headless-CLI
+  providers, +`agentcli_test.go`, `testdata/agentcli/{claude,gemini,codex,
+  copilot}` — byte-identical fake CLI scripts driven entirely by
+  `SHELP_FAKE_*` env vars, see the doc comment in `testdata/agentcli/claude`).
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
@@ -96,6 +99,15 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `$XDG_CACHE_HOME/shelp/local-models.json` (`~/.cache/shelp/...` by
   default), refreshed by `Detect`, not read live on every `Providers()`
   call.
+- **agentcli**: `[agentcli]` has one sub-table per CLI — `[agentcli.claude]`,
+  `[agentcli.gemini]`, `[agentcli.codex]`, `[agentcli.copilot]` — each with
+  `models` (a list overriding that CLI's built-in variant ids/flag values;
+  a name matching a built-in id like `"haiku"` reuses its flag value, any
+  other string is passed through verbatim as both id and `-m`/`--model`
+  value) and `disabled` (drop this CLI's providers even when the binary is
+  on PATH). Every CLI also always runs in a fresh empty temp directory
+  (`Generate`'s scratch dir, not the config file's directory) so none of
+  them pick up this repo's own CLAUDE.md/AGENTS.md/GEMINI.md.
 
 ## Backend notes (verified on macOS 27.0, M4 Pro)
 
@@ -137,6 +149,56 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `instruct_server_v2.shortcuts_use_model_pro` via `privatecloudcomputed`.
   Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
 - PCC has an unpublished daily cap (higher with iCloud+).
+
+### agentcli (claude / gemini / codex / copilot headless CLIs)
+- **claude** authenticates via claude.ai (a subscription, not an API key).
+  `--bare` cannot be used with subscription auth: it forces
+  `ANTHROPIC_API_KEY`/`apiKeyHelper` only ("OAuth and keychain are never
+  read"), and a subscription-only account then reports "Not logged in".
+  Use `--setting-sources ""` (skip user/project/local settings) +
+  `--strict-mcp-config` (no MCP servers) + `--tools ""` (no tools at all) +
+  `--permission-prompts none` + `--disable-slash-commands` +
+  `--no-session-persistence` instead — auth-neutral, and the closest thing
+  claude has to "just answer in text". `--model` takes the `haiku`/`sonnet`
+  aliases directly; `--system-prompt` is a separate flag (no
+  system+prompt concatenation needed, unlike gemini/codex/copilot).
+- **gemini** refuses to run non-interactively in an untrusted folder (a
+  fresh temp dir always is) unless `--skip-trust` is passed. Separately, a
+  stale cached OAuth token makes `gemini -p` try to reopen a browser
+  re-auth flow and hang on an interactive `[Y/n]`-style prompt that a
+  non-TTY stdin never answers — confirmed even with `--skip-trust` and
+  piped input. There is no CLI-level timeout for this, so `agentcli.go`'s
+  own `generateTimeout` (60s, on top of the caller's context) is what
+  actually bounds it; the fix is `gemini` run once interactively to
+  refresh the login, not a flag. gemini's `--help` lists no model-name
+  values, so `gemini:default` omits `--model` entirely rather than
+  guessing one.
+- **codex**: the reply is read from `--output-last-message`/`-o <file>`,
+  never stdout — stdout carries a version banner, warnings, and any
+  MCP-server-connect errors, which would otherwise corrupt the parsed
+  reply. `codex:default` (no shelp-config model override) additionally
+  peeks *only* the top-level `model`/`model_reasoning_effort` keys out of
+  `$CODEX_HOME/config.toml` (BurntSushi/toml into a two-field struct, so
+  nothing else the file contains — API keys, MCP server commands/env — is
+  ever decoded) and passes `--ignore-user-config` together with an
+  explicit `-m`/`-c` using that same model. Plain `--ignore-user-config`
+  alone is unsafe: it drops the account's configured model, and codex's
+  own hardcoded fallback model 400s on a ChatGPT-plan account ("model ...
+  is not supported when using Codex with a ChatGPT account"); loading the
+  full config to get the real model also connects to every configured MCP
+  server on every call. Measured live on this Mac (3 calls each, same
+  fixed prompt): before ~4.65s p50 (4.64s/4.65s/6.46s) vs after ~3.09s p50
+  (2.61s/3.09s/3.24s) — roughly a third faster, no more per-call MCP
+  connection attempts, same model either way.
+- **copilot**: `--no-auto-update` corrupts its own argument parser when
+  combined with `-p` and `-C` on the installed 1.0.x build (fails with
+  `error: unknown option '-C'`; reproduced repeatedly, order-independent,
+  present only when both `-p` and `-C` are also present) — omitted from
+  the main call (still used for the cheap `--version` probe in `Detect`,
+  where `-p`/`-C` aren't present). copilot silently self-updates in the
+  background regardless (observed version drift across a few minutes of
+  local testing); `Detect` doesn't hard-fail on an unexpected version
+  string, just reports it.
 
 ## Conventions
 
