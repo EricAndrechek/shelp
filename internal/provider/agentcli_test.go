@@ -923,6 +923,50 @@ func TestGenerate_ErrorMapping(t *testing.T) {
 	}
 }
 
+// TestGenerate_RateLimitMapping covers the quota-string classification in
+// each CLI's parse func: a non-zero exit whose stderr/stdout contains one
+// of agentRateLimitPhrases must map to *RateLimitedError (which, via
+// Unwrap, also satisfies errors.As(&UnavailableError) -- checked too, so a
+// caller that only knows about UnavailableError still treats it as
+// unavailable).
+func TestGenerate_RateLimitMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		spec   cliSpec
+		model  string
+		stderr string
+	}{
+		{"claude rate limit", claudeSpec, "haiku", "Error: rate limit exceeded, please try again"},
+		{"claude quota", claudeSpec, "haiku", "You have exceeded your quota for this billing period"},
+		{"gemini resource exhausted", geminiSpec, "", "RESOURCE_EXHAUSTED: Quota exceeded for quota metric"},
+		{"gemini 429", geminiSpec, "", "Error: got status 429 Too Many Requests"},
+		{"codex usage limit", codexSpec, "", "usage limit reached for this account"},
+		{"copilot rate limit", copilotSpec, "gpt-5.4", "Error: You have hit the rate limit. Please wait and try again."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fakePATH(t)
+			t.Setenv("SHELP_FAKE_EXIT", "1")
+			t.Setenv("SHELP_FAKE_STDERR", c.stderr)
+			t.Setenv("SHELP_FAKE_STDOUT", "")
+
+			p := newProvider(c.spec, c.model)
+			_, err := p.Generate(context.Background(), agentTestReq())
+			if err == nil {
+				t.Fatal("Generate() returned nil error, want *RateLimitedError")
+			}
+			var rle *RateLimitedError
+			if !errors.As(err, &rle) {
+				t.Fatalf("error is %T, want *RateLimitedError: %v", err, err)
+			}
+			var ue *UnavailableError
+			if !errors.As(err, &ue) {
+				t.Fatalf("error %v (%T) does not also satisfy errors.As(&UnavailableError)", err, err)
+			}
+		})
+	}
+}
+
 func TestGenerate_EmptyOutput(t *testing.T) {
 	fakePATH(t)
 	t.Setenv("SHELP_FAKE_STDOUT", "")

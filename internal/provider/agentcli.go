@@ -348,6 +348,25 @@ func unavailableMsg(res CmdResult) string {
 	return msg
 }
 
+// agentRateLimitPhrases are substrings that, found (case-insensitively) in
+// a failed agent-CLI call's stderr/stdout on a non-zero exit, mean the
+// account is rate-limited or out of quota rather than some other failure
+// (auth, a bad flag, an unsupported model, ...). Every parse func below
+// checks this first, ahead of its own CLI-specific error mapping.
+var agentRateLimitPhrases = []string{"rate limit", "quota", "usage limit", "429", "resource exhausted"}
+
+// agentRateLimitReason reports whether msg (already extracted via
+// unavailableMsg) names a known rate-limit/quota phrase.
+func agentRateLimitReason(msg string) (string, bool) {
+	low := strings.ToLower(msg)
+	for _, phrase := range agentRateLimitPhrases {
+		if strings.Contains(low, phrase) {
+			return msg, true
+		}
+	}
+	return "", false
+}
+
 // ==================== claude ====================
 
 var claudeSpec = cliSpec{
@@ -415,6 +434,9 @@ func claudeArgs(dir, model, outFile string, req Request) []string {
 func claudeParse(id string, res CmdResult, outFile string) (string, error) {
 	if res.ExitCode != 0 {
 		msg := unavailableMsg(res)
+		if reason, ok := agentRateLimitReason(msg); ok {
+			return "", RateLimited(id, 0, "%s", reason)
+		}
 		low := strings.ToLower(msg)
 		if strings.Contains(low, "not logged in") || strings.Contains(msg, "/login") {
 			return "", Unavailable(id, "claude not logged in: run `claude /login`")
@@ -481,6 +503,9 @@ func geminiArgs(dir, model, outFile string, req Request) []string {
 func geminiParse(id string, res CmdResult, outFile string) (string, error) {
 	if res.ExitCode != 0 {
 		msg := unavailableMsg(res)
+		if reason, ok := agentRateLimitReason(msg); ok {
+			return "", RateLimited(id, 0, "%s", reason)
+		}
 		low := strings.ToLower(msg)
 		if strings.Contains(low, "auth") || strings.Contains(low, "login") || strings.Contains(low, "cancelled") || strings.Contains(low, "trusted") {
 			return "", Unavailable(id, "gemini needs (re)authentication or workspace trust: run `gemini` once interactively (%s)", msg)
@@ -613,6 +638,9 @@ func codexConfigPath() string {
 func codexParse(id string, res CmdResult, outFile string) (string, error) {
 	if res.ExitCode != 0 {
 		msg := unavailableMsg(res)
+		if reason, ok := agentRateLimitReason(msg); ok {
+			return "", RateLimited(id, 0, "%s", reason)
+		}
 		low := strings.ToLower(msg)
 		if strings.Contains(low, "not logged in") || strings.Contains(low, "log in") {
 			return "", Unavailable(id, "codex not logged in: run `codex login`")
@@ -680,6 +708,9 @@ func copilotArgs(dir, model, outFile string, req Request) []string {
 func copilotParse(id string, res CmdResult, outFile string) (string, error) {
 	if res.ExitCode != 0 {
 		msg := unavailableMsg(res)
+		if reason, ok := agentRateLimitReason(msg); ok {
+			return "", RateLimited(id, 0, "%s", reason)
+		}
 		low := strings.ToLower(msg)
 		if strings.Contains(low, "not available") {
 			return "", Unavailable(id, "copilot: %s", msg)
