@@ -1,0 +1,55 @@
+{
+  "WFWorkflowMinimumClientVersionString": "900",
+  "WFWorkflowMinimumClientVersion": 900,
+  "WFWorkflowClientVersion": "4018.0.4",
+  "WFWorkflowIcon": {
+    "WFWorkflowIconStartColor": 946986751,
+    "WFWorkflowIconGlyphNumber": 61699
+  },
+  "WFWorkflowActions": [
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.askllm",
+      "WFWorkflowActionParameters": {
+        "UUID": "11111111-1111-1111-1111-111111111111",
+        "WFLLMModel": "Apple Intelligence Pro",
+        "WFGenerativeResultType": "Text",
+        "FollowUp": false,
+        "WFAllowWebSearch": false,
+        "WFLLMPrompt": {
+          "WFSerializationType": "WFTextTokenString",
+          "Value": {
+            "string": "￼",
+            "attachmentsByRange": {
+              "{0, 1}": { "Type": "ExtensionInput" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.output",
+      "WFWorkflowActionParameters": {
+        "WFOutput": {
+          "WFSerializationType": "WFTextTokenString",
+          "Value": {
+            "string": "￼",
+            "attachmentsByRange": {
+              "{0, 1}": {
+                "OutputUUID": "11111111-1111-1111-1111-111111111111",
+                "Type": "ActionOutput",
+                "OutputName": "Response"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "WFWorkflowHasShortcutInputVariables": true,
+  "WFWorkflowInputContentItemClasses": ["WFStringContentItem", "WFGenericFileContentItem"],
+  "WFWorkflowOutputContentItemClasses": ["WFStringContentItem"],
+  "WFWorkflowHasOutputFallback": false,
+  "WFWorkflowTypes": ["QuickActions"],
+  "WFQuickActionSurfaces": [],
+  "WFWorkflowImportQuestions": []
+}
