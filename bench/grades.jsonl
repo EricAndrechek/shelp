@@ -755,3 +755,86 @@
 {"grade_key":"687f833803e2afb0246589af4884e865f3386d4ccca86089d206d5ea4ab36150","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:30:22.030546Z"}
 {"grade_key":"a0b11c1c40386ca2d67e09d4076187dbc42aeec2b86df88c364afbf88e519228","score":1,"note":"zsh builtin log shadows /usr/bin/log","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:30:22.030546Z"}
 {"grade_key":"24c55ea42792abebf0d87716db952e3efe5f3516371aaaecf2dc869a83611bac","score":1,"note":"zsh builtin log shadows /usr/bin/log","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:30:22.030546Z"}
+{"grade_key":"d1f3a53872e4f185cc73e82674ef25abbeadbb25d897bd7f96989f7e87b23b61","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"4c18bc51590c96795bbe8dd16ba9da21f274eb14862d30b2305c5936e794ff90","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"abb5177d66c63ae087c4a238eec4972bee18dce96992c4b8f9d7c57aace5eb42","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"cf7375b762344dca534569c3a1a1a12171ea0ed5170a621308706f5a1cc291c4","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"4372ddca6d7f0537537ab0b9444ac2c275c41f221b0fa29aa9ba742e8d5510bf","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"d5156f68f6023127205046f1ec6c70b72ab260f6541c4247176f58d0848411a1","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"be1efc1f1cea14a3b75b12efa0c24808a0d79cbd4049d68e9f8c5e98d1eef1a6","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"68f8329db6502e66737859e2ad0e03d93e08bf55312216363bb3b8ad775f8286","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"f19e2d8abe9f2e85b34cc9de805cc1e5f5862b855cd8bdcdb0667db543634dc0","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"2ce0c8a0e6663c54c581efd289d32bd3383f27198936b55f9f3390b1c3644cab","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"06db2d69ee2d3f56b98e550cb5a4611032173fdce46a19375e6f22add50fc164","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"926f6dc803ca7fe7eb2b485d514e2890a53749516115b979769bebf1687a12a6","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"85199e115a61fce404e2469b15250da416d9523188dd53c8bc65bd86aa9cd1a6","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"f9800dd4a14ae92c048c8e9952f18916358c1f38e492cf976b6d9f494aa42fe1","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"b32898e0c7ddae8d9422aa1fc66e4be04c3f1b36830529460f71462ee7318adf","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"7c36293531b14d8b4cf43d5cbc277037cd91bae1bee3c0838b4aefe1cef9bd83","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"154c910be3f9ee75c67ff4c14012c9519d753f06827f2d4b91ae4541466a01cb","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"64f63ce22f44571d915bfe0ca1ed346f43a8364e3f2bff4000066b05da62ced1","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"b6a166c4f437b99c6cc736172f69c4b2aa81c7b790abb0485e2b9d56fafb1823","score":0,"note":"--continue is not a curl option","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"e6e2e1ed45a57738646f53201358b740d303bd1088b17beea3aaae893c0e43a5","score":0,"note":"misses dotfiles; nonsense mv","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"53a8df15ed830a8283240294a533fb7415d83f017bc8c0074a2dc1953329f5c4","score":1,"note":"invents a privacy/irreversibility risk","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"cf7a268cd615006ff4ffee0c7b1c2394b70ff376aa550d99cdf4b527a3e052a0","score":1,"note":"says -f forces URL decoding","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"7e5e48ba6ed2e563c231611b38e6a7d8d1f73471efdd59f8b7b74e3cd85e4a98","score":1,"note":"says it opens a shell; overstated data risk","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"4171268c8ac666173ff04018d857ba4584e7e8d3162e9088ee758bbddd1ea275","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"e57f3807a166618e0b0c0b9005a10e2a5eb66d0c3c98835da887e77be9cc6b75","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"e105e185a822ada8c8492693392e640077b8aefaf90a35cd0b6868a0589993ce","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"99332186b977bc63efd7e1f32b1543af6d37c5d0e0191603f15de0bd009f9486","score":1,"note":"calls -n '-N'","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"4829dd47ad3e4b30dd4243146169e8dfbb3bed497dc55186e7962a60a42ea205","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"0d4f507d6f9f256b4c3ee836789d22ccdfda1ba46c511b11badae0f40ca678d4","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"9a4b7bf111656b8340792655053aac541c053fee4ec5a18edc6629b4766eb064","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"1dd0e5e0f4acf586c52c5ac1a34fdc5f8ee30c680ce6408f8f60e7699eb6d7f8","score":1,"note":"says '' is a separator","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"b0629243b1825581d5bff18f054e28e1854cd1e25e90a9f892eec0085ec1a719","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"31f690149dc61571235f857ce68cb770e447407f5e97dd079145a095b59399b1","score":1,"note":"says -N disables port sharing","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"bc77f22a9e2a680c7ad3f596e7927ca9fbe9297fb93cd6786d80d24e5575e2b0","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"98bf40d84589cfca37a4d500f2dca573b063047987999da55ca254289a4c5bb0","score":0,"note":"BRE without -E; cut drops the domain","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"dd61306c2026eb058505ae1d23d302e4aa25e5eb8fc129d729fe338a61ba664b","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"121c2d35036f191d0e4bcee5c1104c24d9187cba8f80fdcd258b252687c4ea3f","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"e6173fb8ec87218d28e6ebcdeb75e70c83215c9afbbb97e2c9ad718fb90fed14","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"19f540f8bc15fdff6329261b3b782bf3e6ac1a34364b3a0e11461e421138698c","score":0,"note":"deletes the .js files it should list","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"6e21780e5242463a482c814aab88d4827a0c76681c767a00e3ae9c0b3350d688","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"600b342eeb3beca62f74918cefa9e509b5c5028cf08624776ae337a3c2ecd57f","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"3e2590f81f81fc354c3b82939a91f195c37b13f28bc89330affe10e965d65e37","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"a647d6d2defcf72d6713aa061752aef4b7e8c75c8b31bec8cfc5df835a8e5660","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"ea854d336cde76932f48f45a25854900374b5e369646394748a02c128b06722e","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"82c4fb1812520c55c3bba7590ad1179f53e6927e713eed46bb6480e2aa3341a8","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"f5047c70b79babf4c19e6b916c809ef0ab12b234553ccf972d36f4ced819e236","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"bfe3e0d18ec5caae7551e7314a64ee57a877c8c45c850cafcbd575759ac82522","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"c9b51b2e9af47cde58381bac5c7d0ce74a7b134126ea7297d6fe48fc734de2ae","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"a65acc32a66e3531fd7899871d663845a6bb8733ff977e2b58bfc9d94f5aaa99","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"27c9906883c47a0dcb60808d9b55a32db689a4a4d6e9bea327e701a58a3a7183","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"deb3403b28a414eda07f4b6f1c1944a5892211812e6bfecf6989da6f7ea70b35","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"99318fbd087ef07280e40a84d3d503454cbf54fe8929562abd531690b58f9422","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"d1dc9b117daa0bd299791b916c9146901607f034b8ae71080ef0b7509b662398","score":1,"note":"sort -n on human sizes misorders","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"19791796a473ff3c828a0a77c14b495683c349c9494ade29af812d5ed22fc84d","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"143daacd5d00d7fe3c7ac548a3c69b53a406641b38d82ffb2b9eddc59d1e6a84","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"51c8aedf5f97eaea53aeadbae3a8cb5873e2fa05bfd0d0049fd8b18c0f1df7e2","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"052a85424108c0247e8427cb62d2cdd8450003add96324982d126def4b72262f","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"364abb9b3ed10ebbb526288351086c012153495a5a117dcbad0f6758da26cffa","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"df533ed9eda932863b62c05e9f07e7f88f42dac30867b00ce841fd4f22792598","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"04d2a9dc8a0534bfc42d56ddf47f20b6a6aca3051e8a714edbe652a87e4a5748","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"c5c817d2716ceaf314455981ada82a3c2ad874a655f6996ba6e6331936702ff9","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"1d4bcbc7620417f646d7c79c6f8fdbd11949096f7145800e36bc019b1d0a202d","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"f6472a83471b75aacaf19cf3c4446847a5d3cf4111a78ab231d0165650ad30ab","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"9822e894fd790ec0409bdac6cfc5d410dfeab7bc9a46a01fba7c422bd078ec41","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"cab793fd53f4977a5d43d864e171a365232c55c3e1ab13f056030e40a1796683","score":0,"note":"grep drops lsof's service-name output","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"c6d08ec4553ed20b8571f67dff724d663f5f197ff3f30ad5c8897b1c82c75437","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"c53ad7a334df06602e3d7a7c56ded26e216cedbdfb8482ca76736f1a0f1ccdf3","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"4f2ce2bd2054f20673fbb922287dc2ef7159f025dc8000bca4e0f6e8f1e67dc4","score":0,"note":"$(basename {}) runs once, not per file","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"46c5c570d97cf7b672f8bad37908cb8c48ff2b56af675f6011af126e6d055bab","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"358d85d100eae3a1d1ed40e3ca4fb867b960dde34e834ecf95642361a297b8a5","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"aad9e03fdd69b3e99ac26e9dc61bcf75053966096abbf3c43c5dbb8bd77182ad","score":2,"note":"correct","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"149e3ca730b9be5ea11a42c5cdf148f7dbe82baa51c73b1a931ab76f07e66b52","score":0,"note":"-p eats 2\u003e/dev/null as its argument","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"1d7db79346fe214f527894c61efb72ddc7be7a3449b017476b47f45fb6f8d926","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"199e8409aa3dc4544343e3b1bed220d3704b8cf8fda955c7fa6f7868075486bc","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"85b8b070144f4a2f88405b3aa218ed25ff0bb9aaee158820bce0bc35ec58dbe7","score":1,"note":"archives '.' into itself","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"ef164beecde664867337c795006ec107641d3623e12abe67c39e369faca02b10","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"191ec918df1950b4c29d642f9eddc41202f29240d02af1c8fd87215556c185fd","score":1,"note":"head -5 shows header + 4","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"927551f8ab5537aef6619f894d681bce6f7915ffb29dd94efa4cda5f70770004","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"c18ba57d3991e2441e7c244782e08221911f47087ea2516022ba4d314063c9ab","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"632145d5d983c8479dc0b9dea00ff6f590c41b66e702bafd5cc1cf872af5ef6b","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"e667b144d6ac63e14896842278136bec16aa165c9aed5197f322147cd7aecf08","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"f1e505fc60b20ab781701b5e81bde627f2609178db548252e66b364340fd72e8","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
+{"grade_key":"ff7905527ec1fe9991ce93b8bc5aac860549f847c6224d7f20101e7c949312c0","score":0,"note":"wrong or invented tool/flags","grader":"claude-opus-5.5","graded_at":"2026-09-30T13:44:27.174476Z"}
