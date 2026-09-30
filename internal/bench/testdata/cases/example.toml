@@ -1,6 +1,5 @@
 # Sample cases for shelp-bench's own tests/smoke runs only. The real case
-# set lives in other bench/cases/*.toml files written on another branch —
-# don't add to this one.
+# set lives in bench/cases/*.toml at the repo root — don't add to this one.
 
 [[case]]
 id = "find-large-files"

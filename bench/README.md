@@ -21,10 +21,9 @@ are all relative paths (`bench/cases`, `bench/runs`, `bench/grades.jsonl`).
 ## Case format (`bench/cases/*.toml`)
 
 Each file holds a list of `[[case]]` tables (see `internal/bench/case.go`
-for the authoritative struct and `bench/cases/example.toml` for samples used
-by this package's own tests — the real case set lives in other
-`bench/cases/*.toml` files, written on another branch; don't add to
-`example.toml`).
+for the authoritative struct and `internal/bench/testdata/cases/example.toml`
+for a small fixture set used by this package's own tests/smoke runs — the
+real case set lives here in `bench/cases/*.toml`).
 
 | field        | meaning |
 |---|---|
