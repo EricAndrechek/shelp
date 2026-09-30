@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -337,6 +338,78 @@ func TestGenerate_Gemini_ArgvAndCwd(t *testing.T) {
 	}
 }
 
+// TestGenerate_ConcurrentClaudeGeminiDistinctCwd is the regression test for
+// the os.Chdir + chdirMu removal: two Generate calls run concurrently (as
+// shelp-bench does across providers, in one process that itself relies on
+// relative paths) must each see their OWN scratch temp dir as the
+// subprocess's working directory, never the other's and never this
+// process's own cwd -- and this process's own cwd must never move at all.
+// Run with `go test -race` to also catch any reintroduced shared mutable
+// state (a chdir, a shared record file, a racy env mutation).
+func TestGenerate_ConcurrentClaudeGeminiDistinctCwd(t *testing.T) {
+	fakePATH(t)
+	// A single static flag read (never written) by both subprocesses; safe
+	// under -race because it's set once, before either goroutine starts,
+	// and never mutated again for the rest of the test.
+	t.Setenv("SHELP_FAKE_ECHO_CWD", "1")
+
+	startCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+
+	const n = 8 // a few rounds each, to make a real race more likely to show up
+	var wg sync.WaitGroup
+	claudeCwds := make([]string, n)
+	geminiCwds := make([]string, n)
+	claudeErrs := make([]error, n)
+	geminiErrs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			p := newProvider(claudeSpec, "haiku")
+			claudeCwds[i], claudeErrs[i] = p.Generate(context.Background(), agentTestReq())
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			p := newProvider(geminiSpec, "")
+			geminiCwds[i], geminiErrs[i] = p.Generate(context.Background(), agentTestReq())
+		}(i)
+	}
+	wg.Wait()
+
+	if procCwd, _ := os.Getwd(); procCwd != startCwd {
+		t.Errorf("this process's cwd changed to %s, want unchanged %s", procCwd, startCwd)
+	}
+
+	seen := map[string]int{} // cwd -> how many calls reported it
+	for i := 0; i < n; i++ {
+		if claudeErrs[i] != nil {
+			t.Fatalf("claude Generate[%d]: %v", i, claudeErrs[i])
+		}
+		if geminiErrs[i] != nil {
+			t.Fatalf("gemini Generate[%d]: %v", i, geminiErrs[i])
+		}
+		if claudeCwds[i] == "" || geminiCwds[i] == "" {
+			t.Fatalf("empty cwd reported: claude=%q gemini=%q", claudeCwds[i], geminiCwds[i])
+		}
+		if claudeCwds[i] == startCwd || geminiCwds[i] == startCwd {
+			t.Fatalf("a call saw this process's own cwd instead of a scratch dir: claude=%q gemini=%q startCwd=%q", claudeCwds[i], geminiCwds[i], startCwd)
+		}
+		if claudeCwds[i] == geminiCwds[i] {
+			t.Fatalf("round %d: claude and gemini saw the SAME cwd %q, want distinct scratch dirs", i, claudeCwds[i])
+		}
+		seen[claudeCwds[i]]++
+		seen[geminiCwds[i]]++
+	}
+	for dir, count := range seen {
+		if count != 1 {
+			t.Errorf("cwd %q was reported by %d calls, want exactly 1 (each Generate call gets its own scratch dir)", dir, count)
+		}
+	}
+}
+
 func TestGenerate_Codex_ArgvAndOutFile(t *testing.T) {
 	fakePATH(t)
 	rec := filepath.Join(t.TempDir(), "record.txt")
@@ -361,8 +434,15 @@ func TestGenerate_Codex_ArgvAndOutFile(t *testing.T) {
 	if r.stdinBytes != 0 {
 		t.Errorf("stdin bytes = %d, want 0", r.stdinBytes)
 	}
-	if r.cwd != startCwd {
-		t.Errorf("codex uses -C, should not chdir the process; cwd changed to %s", r.cwd)
+	// Generate now sets RunCmdOpts.Dir for every CLI (not just the ones
+	// without their own -C flag), so codex's subprocess cwd is the scratch
+	// dir even though it also gets an explicit -C <dir> argument below;
+	// this process's own cwd (startCwd) must be untouched either way.
+	if r.cwd == startCwd {
+		t.Error("cwd was not changed to a scratch dir")
+	}
+	if procCwd, _ := os.Getwd(); procCwd != startCwd {
+		t.Errorf("this process's cwd changed to %s, want unchanged %s", procCwd, startCwd)
 	}
 	if len(r.args) == 0 || r.args[0] != "exec" {
 		t.Errorf("args[0] = %v, want \"exec\"", r.args)
@@ -457,8 +537,14 @@ func TestGenerate_Copilot_ArgvAndCwd(t *testing.T) {
 	if r.stdinBytes != 0 {
 		t.Errorf("stdin bytes = %d, want 0", r.stdinBytes)
 	}
-	if r.cwd != startCwd {
-		t.Errorf("copilot uses -C, should not chdir the process; cwd changed to %s", r.cwd)
+	// See the equivalent comment in TestGenerate_Codex_ArgvAndOutFile: Dir
+	// is now set for every CLI, so copilot's subprocess cwd is the scratch
+	// dir too, alongside its own -C <dir> argument.
+	if r.cwd == startCwd {
+		t.Error("cwd was not changed to a scratch dir")
+	}
+	if procCwd, _ := os.Getwd(); procCwd != startCwd {
+		t.Errorf("this process's cwd changed to %s, want unchanged %s", procCwd, startCwd)
 	}
 	if v, ok := argAfter(r.args, "-p"); !ok || v != req.System+"\n\n"+req.Prompt {
 		t.Errorf("-p = %q, %v; want system+prompt", v, ok)

@@ -25,6 +25,13 @@
 #                           file (mimics codex's banners/warnings)
 #   SHELP_FAKE_STDERR    - stderr text for the main call
 #   SHELP_FAKE_EXIT      - exit code for the main call (default 0)
+#   SHELP_FAKE_ECHO_CWD  - when set, print this process's cwd (`pwd -P`) as
+#                           the entire stdout reply and exit immediately,
+#                           ignoring SHELP_FAKE_STDOUT/RECORD/etc. Used to
+#                           observe the subprocess's own working directory
+#                           from concurrent callers without any of them
+#                           writing to shared state (a record file, an env
+#                           var) that a race detector would flag.
 
 has_version=0
 has_help=0
@@ -55,6 +62,11 @@ fi
 if [ "$1" = "login" ] && [ "$2" = "status" ]; then
   printf '%s\n' "${SHELP_FAKE_LOGIN_STATUS:-Logged in using Fake}"
   exit "${SHELP_FAKE_LOGIN_EXIT:-0}"
+fi
+
+if [ -n "$SHELP_FAKE_ECHO_CWD" ]; then
+  printf '%s' "$(pwd -P)"
+  exit "${SHELP_FAKE_EXIT:-0}"
 fi
 
 if [ -n "$SHELP_FAKE_SLEEP" ]; then

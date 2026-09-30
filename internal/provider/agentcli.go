@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
@@ -68,15 +67,14 @@ import (
 //     account ("Model \"gpt-5.4\" from --model flag is not available"), so
 //     it is deliberately not shipped as a second default variant.
 //
-// RunCmd (execx.go) has no per-call working directory or environment, and
-// execx.go is out of scope for this family. codex and copilot have their
-// own -C/--cd flag we point at the temp dir; claude and gemini don't, so
-// for those two we os.Chdir the whole process for the call's duration,
-// guarded by chdirMu (see runInDir). shelp only ever runs one provider's
-// Generate at a time (provider.Chain tries candidates sequentially), so
-// this is safe for the CLI; it would race if something called this
-// family's claude/gemini Generate concurrently from multiple goroutines in
-// the same process.
+// Every call sets execx.go's RunCmdOpts.Dir to the scratch temp dir, for
+// every CLI, whether or not it also has its own -C/--cd flag (codex and
+// copilot do; claude and gemini don't). Earlier this os.Chdir'd the whole
+// process for claude/gemini, guarded by a package mutex; that's gone now
+// because it raced with anything else in the process relying on relative
+// paths (e.g. shelp-bench, which runs providers concurrently and itself
+// writes relative bench/runs/... paths) -- Dir sets only the subprocess's
+// cwd, so concurrent Generate calls across providers/goroutines are safe.
 //
 // Every call is wrapped in its own bounded timeout (generateTimeout) on top
 // of the caller's context: agent CLIs are full coding agents that can, in
@@ -113,9 +111,6 @@ type cliSpec struct {
 	// reply to (codex's --output-last-message). model is the resolved CLI
 	// flag value ("" means omit the model flag).
 	buildArgs func(dir, model, outFile string, req Request) []string
-	// chdirRequired is true when the CLI has no native working-directory
-	// flag, so Generate must os.Chdir into dir for the call (see runInDir).
-	chdirRequired bool
 	// needsOutFile is true when the reply must be read from a file instead
 	// of stdout (codex, whose stdout carries banners/warnings/MCP errors).
 	needsOutFile bool
@@ -263,12 +258,7 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 		onChunk = req.OnChunk
 	}
 
-	var res CmdResult
-	if p.spec.chdirRequired {
-		res, err = runInDir(runCtx, dir, onChunk, p.spec.name, args...)
-	} else {
-		res, err = RunCmd(runCtx, nil, onChunk, p.spec.name, args...)
-	}
+	res, err := RunCmdOpts(runCtx, CmdOpts{Dir: dir, OnChunk: onChunk}, p.spec.name, args...)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return "", Unavailable(p.id, "%s timed out (shelp caps each agent-CLI call at %s; a stale login can make some agent CLIs hang on an interactive re-auth/trust prompt in headless mode -- try running `%s` interactively once)", p.spec.name, generateTimeout, p.spec.name)
@@ -276,28 +266,6 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 		return "", Unavailable(p.id, "%s: %v", p.spec.name, err)
 	}
 	return p.spec.parse(p.id, res, outFile)
-}
-
-// chdirMu serializes runInDir calls: os.Chdir is process-wide state.
-var chdirMu sync.Mutex
-
-// runInDir runs name/args with the process's working directory set to dir
-// for the call's duration, then restores it. Needed for claude and gemini,
-// neither of which has a CLI flag for its own working directory (unlike
-// codex's -C and copilot's -C), and RunCmd (execx.go) has no Dir parameter
-// this family is allowed to add.
-func runInDir(ctx context.Context, dir string, onChunk func(string), name string, args ...string) (CmdResult, error) {
-	chdirMu.Lock()
-	defer chdirMu.Unlock()
-	prev, err := os.Getwd()
-	if err != nil {
-		return CmdResult{}, err
-	}
-	if err := os.Chdir(dir); err != nil {
-		return CmdResult{}, err
-	}
-	defer os.Chdir(prev)
-	return RunCmd(ctx, nil, onChunk, name, args...)
 }
 
 // unavailableMsg picks the short reason to report: stderr's first line,
@@ -319,11 +287,10 @@ var claudeSpec = cliSpec{
 		{id: "haiku", cli: "haiku"},
 		{id: "sonnet", cli: "sonnet"},
 	},
-	chdirRequired: true, // no cwd flag
-	stream:        true, // --output-format text is exactly the reply
-	identify:      claudeIdentify,
-	buildArgs:     claudeArgs,
-	parse:         claudeParse,
+	stream:    true, // --output-format text is exactly the reply
+	identify:  claudeIdentify,
+	buildArgs: claudeArgs,
+	parse:     claudeParse,
 }
 
 func claudeIdentify(ctx context.Context) Status {
@@ -398,11 +365,10 @@ var geminiSpec = cliSpec{
 	defaultModels: []agentModel{
 		{id: "default", cli: ""}, // --help lists no model names; don't invent one
 	},
-	chdirRequired: true, // no cwd flag
-	stream:        true, // --output-format text is exactly the reply
-	identify:      geminiIdentify,
-	buildArgs:     geminiArgs,
-	parse:         geminiParse,
+	stream:    true, // --output-format text is exactly the reply
+	identify:  geminiIdentify,
+	buildArgs: geminiArgs,
+	parse:     geminiParse,
 }
 
 func geminiIdentify(ctx context.Context) Status {
@@ -457,12 +423,11 @@ var codexSpec = cliSpec{
 	defaultModels: []agentModel{
 		{id: "default", cli: ""}, // ChatGPT-plan accounts reject guessed model ids; use the account default
 	},
-	chdirRequired: false, // -C
-	needsOutFile:  true,  // stdout carries banners/warnings/MCP errors, not the reply
-	stream:        false,
-	identify:      codexIdentify,
-	buildArgs:     codexArgs,
-	parse:         codexParse,
+	needsOutFile: true, // stdout carries banners/warnings/MCP errors, not the reply
+	stream:       false,
+	identify:     codexIdentify,
+	buildArgs:    codexArgs,
+	parse:        codexParse,
 }
 
 func codexIdentify(ctx context.Context) Status {
@@ -535,11 +500,10 @@ var copilotSpec = cliSpec{
 	defaultModels: []agentModel{
 		{id: "default", cli: "auto"}, // "--model auto": "let Copilot pick automatically" (documented)
 	},
-	chdirRequired: false, // -C
-	stream:        true,  // -s (silent) output is exactly the reply
-	identify:      copilotIdentify,
-	buildArgs:     copilotArgs,
-	parse:         copilotParse,
+	stream:    true, // -s (silent) output is exactly the reply
+	identify:  copilotIdentify,
+	buildArgs: copilotArgs,
+	parse:     copilotParse,
 }
 
 func copilotIdentify(ctx context.Context) Status {

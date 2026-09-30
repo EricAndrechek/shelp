@@ -17,16 +17,49 @@ type CmdResult struct {
 	ExitCode int
 }
 
+// CmdOpts is the full set of knobs RunCmdOpts accepts. The zero value
+// matches RunCmd's old, fixed behavior: no stdin, no streaming, and -
+// critically - Dir "" and Env nil both mean "inherit the calling process's",
+// exactly like exec.Cmd's own zero value.
+type CmdOpts struct {
+	// Dir sets the subprocess's working directory without touching this
+	// process's own (unlike os.Chdir, safe to use concurrently with other
+	// goroutines that rely on relative paths). "" means inherit.
+	Dir string
+	// Env sets the subprocess's environment. nil means inherit (exec.Cmd
+	// semantics); pass os.Environ() plus overrides to inherit-and-extend.
+	Env []string
+	// Stdin feeds the subprocess's stdin. nil means /dev/null.
+	Stdin io.Reader
+	// OnChunk, when non-nil, receives stdout as it streams.
+	OnChunk func(string)
+}
+
 // RunCmd runs name with args, feeding stdin (nil means /dev/null), and
-// streams stdout to onChunk when it is non-nil. A non-zero exit is not an
-// error here; callers inspect ExitCode/Stderr. err is non-nil only when the
-// process could not run or ctx expired.
+// streams stdout to onChunk when it is non-nil, inheriting this process's
+// working directory and environment. A non-zero exit is not an error here;
+// callers inspect ExitCode/Stderr. err is non-nil only when the process
+// could not run or ctx expired. It is a thin wrapper over RunCmdOpts kept
+// for callers (fm, shortcuts, openai) that never need a per-call Dir/Env.
 func RunCmd(ctx context.Context, stdin io.Reader, onChunk func(string), name string, args ...string) (CmdResult, error) {
+	return RunCmdOpts(ctx, CmdOpts{Stdin: stdin, OnChunk: onChunk}, name, args...)
+}
+
+// RunCmdOpts is RunCmd with a per-call working directory and/or
+// environment. Setting Dir here - instead of os.Chdir'ing the whole
+// process - is what makes it safe to run several subprocesses that care
+// about relative paths concurrently in one process (e.g. shelp-bench
+// running providers in parallel while writing relative bench/runs/...
+// paths itself).
+func RunCmdOpts(ctx context.Context, opts CmdOpts, name string, args ...string) (CmdResult, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdin = stdin
+	cmd.Dir = opts.Dir
+	cmd.Env = opts.Env
+	cmd.Stdin = opts.Stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	var out strings.Builder
+	onChunk := opts.OnChunk
 	if onChunk == nil {
 		cmd.Stdout = &out
 		err := cmd.Run()
