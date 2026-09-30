@@ -65,6 +65,7 @@ entry for that trial, not from this host's `$SHELL`.
 shelp-bench run [--providers a,b|available] [--templates v1,...]
                  [--cases ids|tag:x|mode:suggest|glob] [--samples N]
                  [--context os,shell,...] [--concurrency N]
+                 [--min-interval duration]
                  [--out bench/runs/<UTC timestamp>] [--resume dir]
                  [--cases-dir dir]
 ```
@@ -88,14 +89,33 @@ shelp-bench run [--providers a,b|available] [--templates v1,...]
 - Concurrency: each provider gets its own semaphore sized `--concurrency`
   (default 1, i.e. serialized — safe for `fm` and Shortcuts); different
   providers always run in parallel with each other. The first trial
-  dispatched for a provider is marked `"cold": true`.
+  dispatched for a provider is marked `"cold": true`. `--min-interval`
+  additionally paces consecutive calls to the SAME provider at least that
+  far apart (across all its trials, independent of `--concurrency`) — use
+  it to stay under a backend's known rate limit, e.g.
+  `--min-interval 2s`.
+- **Rate-limit circuit breaker**: a trial whose call comes back as
+  `*provider.RateLimitedError` (a usage-limit/quota error, not just a
+  plain failure — see the root README's "Rate limits and cooldowns" and
+  CLAUDE.md) trips a breaker for that provider, the first time, for the
+  rest of the run: every other trial for that provider not yet dispatched
+  is skipped — **not run, and not written to `results.jsonl`** — so a
+  later `--resume <dir>` treats them as still pending and fills them in.
+  One line is printed when this happens: `provider X rate-limited after N
+  calls: <reason>; skipping its remaining M trials (resume later with
+  --resume <dir>)`. This is exactly what protects against a repeat of the
+  2026-09-30 incident where a rate-limited Apple Intelligence Pro shortcut
+  kept getting dispatched (and kept posting a macOS notification on every
+  failure) for the rest of a run.
 - Results stream to `results.jsonl` as each trial finishes (fsync'd per
   line), so a crash mid-run keeps every finished trial. `--resume <dir>`
   recomputes the same trial grid from your flags and skips any trial whose
-  key (case, shell, os, provider, template, sample) is already present.
+  key (case, shell, os, provider, template, sample) is already present —
+  this is also how a breaker-skipped trial gets filled in on a later run.
 - `run.json` records the invocation: args, host OS, `shelp` git commit,
   every provider's `Detect` result as of run start, templates, cases,
-  samples, context fields, concurrency, and start/end time.
+  samples, context fields, concurrency, start/end time, and
+  `breaker_trips` (below).
 
 ### `pending`
 
@@ -189,7 +209,7 @@ includes exec overhead beyond `Generate`'s own latency_ms). Appends to
   "sample": 1,
   "raw": "Sure, here's the command:\nfind ~ -type f -size +100M\n",
   "output": "find ~ -type f -size +100M",
-  "error": "", "unavailable": false,
+  "error": "", "unavailable": false, "rate_limited": false,
   "latency_ms": 612, "first_chunk_ms": 612, "cold": true,
   "checks": {
     "format_clean": false,
@@ -208,6 +228,25 @@ includes exec overhead beyond `Generate`'s own latency_ms). Appends to
 host actually running the benchmark (it needs a local `command -v`);
 `gnuisms` only runs for `os = "macos"`. See "Automatic checks" below for
 exactly what each one flags.
+
+`rate_limited` (omitted when `false`) is `true` exactly when `error` came
+from a `*provider.RateLimitedError` — a usage-limit/quota error
+specifically, a stricter condition than `unavailable` (which is also `true`
+in this case, since a rate limit is a form of unavailability). A trial
+skipped outright by the circuit breaker (see `run`, above) never produces
+a `results.jsonl` line at all, rate-limited or otherwise.
+
+`run.json`'s `breaker_trips` (empty/absent when nothing tripped) has one
+entry per provider that rate-limited during the run:
+
+```jsonc
+{
+  "provider": "shortcuts:apple-pro",
+  "reason": "Error: You have reached the usage limit for this model. Please try again later.",
+  "after_calls": 93, "skipped_trials": 240,
+  "at": "2026-09-30T12:03:00Z"
+}
+```
 
 ## `grades.jsonl` schema (one object per grade, append-only)
 

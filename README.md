@@ -46,12 +46,14 @@ $ shelp -p fm,shortcuts:apple-pro list 5 recent commits # explicit fallback chai
 $ shelp --template v2 -v print yesterday as YYYY-MM-DD  # -v: provider+latency on stderr
 $ shelp providers                                       # what works on this machine
 $ shelp providers --json                                # same, machine-readable
+$ shelp providers --reset-cooldowns                     # clear recorded rate-limit cooldowns
 $ shelp setup shortcuts                                 # install the Apple Shortcuts this needs
 ```
 
 Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
 config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
-`--json`, `-v`/`--verbose`. Run `shelp -h` for the full usage.
+`--json`, `-v`/`--verbose`, `--force` (call a provider even if it's
+currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
 
 ## Providers
 
@@ -86,6 +88,11 @@ template = "v1"
 # they leave the machine once a cloud provider is in the chain. Default:
 # ["os", "shell"].
 context = ["os", "shell"]
+
+# How long a provider is skipped for after it reports a rate limit / usage
+# limit / quota error (see "Rate limits and cooldowns" below). Any
+# time.ParseDuration string. Default: "30m".
+cooldown = "30m"
 
 # Hosted, key-authenticated OpenAI-compatible endpoints. `preset` fills in
 # base_url + api_key_env for a well-known host; set them yourself for
@@ -140,9 +147,45 @@ make bench-build
 ./bin/shelp-bench report --readme README.md
 ```
 
+If a provider rate-limits mid-run, the runner trips a circuit breaker for
+it: remaining trials for that provider are skipped (not written, so a
+later `--resume <dir>` fills them in) instead of hammering it hundreds
+more times. `--min-interval <duration>` paces consecutive calls to the
+same provider to help stay under a rate limit in the first place. See
+[bench/README.md](bench/README.md) for details and the `run.json`/
+`results.jsonl` schema.
+
 <!-- bench:start -->
 _Results pending._
 <!-- bench:end -->
+
+## Rate limits and cooldowns
+
+Any provider can be rate-limited or out of quota, not just missing or
+offline -- Apple's Shortcuts "Use Model" backends, OpenAI-compatible
+endpoints (HTTP 429), and the agent CLIs (`claude`, `gemini`, `codex`,
+`copilot`) all report this distinctly from a plain failure. When shelp
+sees one, it remembers: the provider ID goes into a small cooldown store
+(`$XDG_CACHE_HOME/shelp/cooldown.json`, `~/.cache/shelp/` by default) for
+30 minutes by default (the `cooldown` config key, or the backend's own
+`Retry-After` when it gives one), and the fallback chain skips it --
+without calling it again -- until the cooldown expires. This matters most
+for Apple Shortcuts: **every failed Shortcuts run posts a macOS
+notification**, so retrying a rate-limited shortcut on every `shelp`
+invocation would spam notifications on top of wasting the call.
+
+```console
+$ shelp -v -p shortcuts:apple-pro,fm list 5 recent commits
+shelp: shortcuts:apple-pro rate-limited until 14:32 (usage limit); skipping
+shelp: fm in 0.7s
+git log --oneline -5
+```
+
+`shelp providers` shows a cooled-down provider as STATUS `cooldown` with
+the reason and expiry time, without probing it. `shelp providers
+--reset-cooldowns` clears the whole store. `--force` calls a provider even
+while it's cooled down -- including when it's the only ID you named with
+`-p`, which is otherwise still skipped by default.
 
 ## Privacy
 

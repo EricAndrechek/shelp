@@ -30,6 +30,9 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 - `internal/shellinit/` — `shelp init zsh|bash|fish` scripts (embedded).
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
+- `internal/cooldown/` — the rate-limit cooldown store
+  (`$XDG_CACHE_HOME/shelp/cooldown.json`) `provider.Chain` and `shelp
+  providers` read/write; see "Rate limits and cooldowns" below.
 - `internal/bench/` — benchmark harness core: `case.go` (`Case`,
   `LoadCases`), `select.go` (`--cases`/`--templates` selection), `context.go`
   (synthetic os/shell `Context`, never the runner's real host),
@@ -199,6 +202,61 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   background regardless (observed version drift across a few minutes of
   local testing); `Detect` doesn't hard-fail on an unexpected version
   string, just reports it.
+
+## Rate limits and cooldowns
+
+A provider can be rate-limited or out of quota, not just missing/offline.
+Real incident (2026-09-30): Apple Intelligence Pro (`shortcuts:apple-pro`)
+hit "Error: You have reached the usage limit for this model. Please try
+again later." after ~93 calls in ~2.5 minutes of shelp-bench benchmarking
+(reset window unknown), and the benchmark kept dispatching ~240 more
+calls -- each one a Shortcuts run that failed the same way. **Every
+failed Shortcuts run posts a macOS notification**, so the user was
+flooded. `shelp`'s own CLI has the identical exposure: each call tries
+the rate-limited shortcut first (another notification) before falling
+through to the next provider in the chain.
+
+Classification per family: shortcuts.go treats stdout/stderr containing
+"usage limit" or "try again later" (case-insensitive, checked regardless
+of exit code -- a rate-limited "Use Model" run typically still exits 0
+with the error text as its output) as a rate limit; openai.go treats an
+HTTP 429 as one, parsing `Retry-After` (seconds or an HTTP-date) when
+present; agentcli.go's parse funcs treat "rate limit", "quota", "usage
+limit", "429", or "resource exhausted" in a failed call's stderr/stdout
+(case-insensitive, non-zero exit) as one. All three construct
+`provider.RateLimitedError` via `provider.RateLimited(id, retryAfter,
+format, args...)`, which still satisfies `errors.As(err,
+&*UnavailableError)` (via `Unwrap`), so every existing "is this provider
+unavailable" check keeps working unchanged; `provider.Chain` and the
+bench runner additionally recognize it specifically via `errors.As`.
+
+Cooldown: a rate limit is persisted to `internal/cooldown`'s store,
+`$XDG_CACHE_HOME/shelp/cooldown.json` (`~/.cache/shelp/` by default):
+provider ID -> until (now + the error's `RetryAfter` when it specified
+one, else the top-level `cooldown` config key, default 30m) + reason.
+Reads/writes are failure-tolerant (a missing/corrupt file just means "no
+cooldowns") and writes are atomic (a uniquely-named temp file + rename).
+`provider.Chain` skips a cooled-down provider without calling it at all
+(reported through the usual `-v` fallback callback, e.g. "shelp:
+shortcuts:apple-pro rate-limited until 14:32 (usage limit); skipping"),
+unless `--force` is passed -- which applies even when the cooled-down
+provider is the only one explicitly named with `-p`. A successful call
+never clears a cooldown; cooldowns just expire. `shelp providers` shows a
+cooled-down provider as STATUS "cooldown" without probing it (same
+reasoning as the CLI itself never calling Detect); `shelp providers
+--reset-cooldowns` clears the whole store.
+
+Benchmark circuit breaker: `internal/bench`'s runner trips a per-provider
+breaker on that provider's first RateLimitedError and stops dispatching
+its remaining trials for the rest of the run -- they are never written to
+results.jsonl, so a later `--resume <dir>` fills them in once the
+underlying issue has cleared. `run.json`'s `breaker_trips` records which
+providers tripped, when, after how many calls, and how many trials were
+skipped; each trial's `results.jsonl` line gets `rate_limited: true` when
+it hit one (in addition to the existing `unavailable: true`). `shelp-bench
+run --min-interval <duration>` paces consecutive calls to the SAME
+provider at least that far apart, to help a future run stay under a rate
+limit instead of tripping the breaker at all.
 
 ## Conventions
 
