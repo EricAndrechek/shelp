@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/ericandrechek/shelp/internal/config"
 )
 
@@ -43,17 +44,24 @@ import (
 //     resolves on its own) rather than inventing a model id.
 //   - `codex exec` has no -a/--ask-for-approval flag (that only exists on
 //     the top-level `codex` command); -s read-only plus the account's
-//     approval default is enough to avoid edits/hangs. --ignore-user-config
-//     was tried and rejected: it drops the user's configured default model,
-//     and this ChatGPT-plan account 400s on the CLI's own hardcoded
-//     fallback model ("gpt-5-codex") and on a second guessed name
-//     ("gpt-5.1-codex-mini") alike ("model ... is not supported when using
-//     Codex with a ChatGPT account") -- so codex:default deliberately keeps
-//     the user's config (and eats the resulting MCP-server-connect
-//     latency/errors from servers configured there; they fail fast and are
-//     harmless, just noise on stderr). Output is read from
-//     --output-last-message, not stdout, since stdout carries a banner,
-//     warnings and any MCP errors.
+//     approval default is enough to avoid edits/hangs. Plain
+//     --ignore-user-config is rejected outright: it drops the user's
+//     configured default model, and this ChatGPT-plan account 400s on the
+//     CLI's own hardcoded fallback model ("gpt-5-codex") and on a second
+//     guessed name ("gpt-5.1-codex-mini") alike ("model ... is not
+//     supported when using Codex with a ChatGPT account"). Loading the
+//     full config to avoid that measured 5.5s p50 (outliers ~9s) --
+//     connecting to every configured MCP server on every single call, not
+//     just the first cold one. Fix: codexArgs peeks ONLY the top-level
+//     `model` (and `model_reasoning_effort`, if present) key out of
+//     $CODEX_HOME/config.toml (see readCodexUserModel) and, when found,
+//     passes --ignore-user-config together with an explicit -m/-c using
+//     that same model -- so the model never actually changes, but the MCP
+//     server connections are skipped. No model key -> today's original
+//     behavior (full config load, no -m, no --ignore-user-config). See
+//     CLAUDE.md for measured before/after latency. Output is read from
+//     --output-last-message (-o), not stdout, since stdout carries a
+//     banner, warnings and any MCP errors.
 //   - copilot's --no-auto-update flag corrupts its own argument parser when
 //     combined with -p and -C on the installed 1.0.x build (fails with
 //     "error: unknown option '-C'"; reproduced repeatedly, order-independent
@@ -464,10 +472,72 @@ func codexArgs(dir, model, outFile string, req Request) []string {
 		"-o", outFile,
 	}
 	if model != "" {
+		// A shelp-config override (e.g. `[agentcli.codex] models = [...]`)
+		// already names a real model, so today's plain -m behavior is
+		// unaffected by the codex:default speed fix below.
 		args = append(args, "-m", model)
+	} else if u := readCodexUserModel(); u.Model != "" {
+		// codex:default: skip loading the account's whole config.toml
+		// (which otherwise connects to every configured MCP server on
+		// every call) by passing --ignore-user-config, but keep using the
+		// SAME model the account has configured -- codex's own hardcoded
+		// fallback model is rejected outright on a ChatGPT-plan account
+		// ("model ... is not supported when using Codex with a ChatGPT
+		// account"), so --ignore-user-config alone is not safe; -m with
+		// the account's real model is what makes it safe. See
+		// readCodexUserModel for what is and isn't read from that file.
+		args = append(args, "--ignore-user-config", "-m", u.Model)
+		if u.ModelReasoningEffort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+u.ModelReasoningEffort)
+		}
 	}
 	args = append(args, req.System+"\n\n"+req.Prompt)
 	return args
+}
+
+// codexUserModel is the sliver of $CODEX_HOME/config.toml (or
+// ~/.codex/config.toml, codex's own fallback when $CODEX_HOME is unset)
+// that codexArgs needs. config.toml can hold API keys, MCP server
+// commands/env, and other secrets; decoding into a struct that names only
+// these two keys means BurntSushi/toml simply skips every other key while
+// parsing, so nothing else the file contains is ever read into memory
+// under a name this package can reach, let alone logged, printed, or
+// passed to codex on the command line.
+type codexUserModel struct {
+	Model                string `toml:"model"`
+	ModelReasoningEffort string `toml:"model_reasoning_effort"`
+}
+
+// readCodexUserModel best-effort reads codexUserModel from the account's
+// own codex config. Any failure (no $CODEX_HOME and no home dir, missing
+// file, unparseable TOML, no top-level model key) yields the zero value,
+// which callers treat exactly like "nothing configured": codexArgs falls
+// back to today's behavior (no -m, no --ignore-user-config, codex loads
+// its full config as before).
+func readCodexUserModel() codexUserModel {
+	path := codexConfigPath()
+	if path == "" {
+		return codexUserModel{}
+	}
+	var cfg codexUserModel
+	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+		return codexUserModel{}
+	}
+	return cfg
+}
+
+// codexConfigPath mirrors codex's own config-file resolution: $CODEX_HOME/
+// config.toml, or ~/.codex/config.toml when $CODEX_HOME is unset. Returns
+// "" only when neither is resolvable (no $CODEX_HOME and no home dir).
+func codexConfigPath() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return filepath.Join(home, "config.toml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "config.toml")
 }
 
 func codexParse(id string, res CmdResult, outFile string) (string, error) {
