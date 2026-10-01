@@ -263,6 +263,13 @@ def raw_cases(tmpdir, text_prefix=None):
         ("glob with match present", "compress all *.log files"),
         ("dollar HOME literal", "print $HOME please"),
         ("backslashes", r"escape this: C:\Users\eric\thing"),
+        ("pipe", 'test | echo "test"'),
+        ("and-and", 'print hi && echo "hi"'),
+        ("semicolon", "list files; then count them"),
+        ("redirect", "save the date > today.txt"),
+        ("command substitution", "show $(whoami) and `date`"),
+        ("trailing ampersand", "run sleep 5 &"),
+        ("hash comment", "find big files # in my home dir"),
     ]
 
 
@@ -337,7 +344,7 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
 
         # history has the original typed line
         s.buf = ""
-        s.send("fc -ln -30\r")
+        s.send("fc -ln -80\r")
         s.expect(r"TESTPROMPT% \r?$", timeout=6)
         results.check(f"{label}: history has original apostrophe line",
                        "shelp what's my ip" in strip_ansi(s.buf), s.buf[-500:])
@@ -456,7 +463,7 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         # pushes it explicitly, since bash's own auto-history doesn't record
         # the macro-submitted rewritten line)
         s.buf = ""
-        s.send("history 30\r")
+        s.send("history 80\r")
         s.expect(r"TESTPROMPT\$ \r?$", timeout=6)
         results.check("bash: history has original apostrophe line",
                        "shelp what's my ip" in strip_ansi(s.buf), s.buf[-600:])
@@ -618,7 +625,9 @@ def run_fish(tmpdir, results, real_linux_bin):
         # dirs/files are created on the host (in `home`, bind-mounted at
         # /root), but the task text must reference the container path.
         cwd_cases = raw_cases(home, text_prefix="/root")
-        for name, raw in cwd_cases[:6]:  # skip filesystem-dependent glob case (host-created files aren't in the container)
+        for name, raw in cwd_cases:
+            # skip the filesystem-dependent glob case (host-created files
+            # aren't in the container's cwd)
             if name == "glob with match present":
                 continue
             ok, detail = fish_suggest_roundtrip(s, raw)
