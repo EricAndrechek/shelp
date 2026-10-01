@@ -382,3 +382,32 @@ limit instead of tripping the breaker at all.
 - `make vet test build`. Keep `shelp` startup < 10ms: no work in init()
   beyond registration.
 - Commits: one change per commit; this repo has no remote.
+
+## Benchmarking etiquette (learned the hard way, 2026-09-30)
+
+- Find a backend's quota before sending it hundreds of calls: a 255-call
+  `codex exec` run exhausted a free ChatGPT plan's monthly Codex allowance,
+  and ~93 rapid calls tripped Apple Intelligence Pro's usage limit (still
+  limited 1.5h+ later). Run a small batch first; the run's rate-limit
+  breaker (`internal/bench/runner.go`) stops a provider at its first limit.
+- Never call an installed `shortcuts:*` provider in tests or smoke checks:
+  every failed Shortcuts run posts a macOS notification. Use `Detect`,
+  fakes, or `shortcuts sign` (which imports nothing).
+- Never `open` a `.shortcut` file or run `shelp setup shortcuts` from an
+  agent: the import dialog needs the user's click.
+
+## Open items (2026-10-01)
+
+- Unverified with a human: re-importing an outdated shortcut. The user's
+  hand-made "Ask AI" (format v1, 2 actions) can test it:
+  `SHELP_CONFIG=<toml with [shortcuts] names = {"apple-pro" = "Ask AI"},
+  install = ["apple-pro"]> shelp setup shortcuts`, then click "Replace".
+  Afterwards the user deletes "Ask AI" by hand (no delete API exists) and
+  runs `shelp setup shortcuts` for "shelp · Apple Intelligence Pro".
+- Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
+  chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
+  them (`--min-interval`) to stay under the limit.
+- Codex is quota-locked until 2026-10-30; it's dropped anyway.
+- The repo is local-only; the Homebrew tap points at this folder
+  (`Formula/shelp.rb` uses a file:// git URL). Publishing means a remote,
+  a release tarball URL in the formula, and a real tap repo.
