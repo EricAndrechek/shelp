@@ -21,6 +21,9 @@ class Shelp < Formula
     <<~EOS
       Hook shelp into your shell so suggestions land on your prompt line:
         shelp setup shell
+      Add --bind ^G (any key) for a key that turns the text you've typed on
+      the command line into a command in place:
+        shelp setup shell --bind ^G
 
       (or by hand -- shelp setup shell prints the exact line to add if your
       rc file is managed by chezmoi or another dotfiles tool instead):
