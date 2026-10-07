@@ -213,8 +213,24 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	if mode == provider.Explain && !asJSON && style.For(stdout).On() {
 		hl = newExplainHighlighter(stdout, style.For(stdout), input)
 	}
+	// The thinking spinner (stderr, terminal only) must be stopped before
+	// anything else is written; spMu guards it because OnChunk and the
+	// fallback callback may run on provider goroutines.
+	var spMu sync.Mutex
+	var sp *style.Spinner
+	stopSpinner := func() {
+		spMu.Lock()
+		defer spMu.Unlock()
+		sp.Stop()
+		sp = nil
+	}
+	if !asJSON {
+		sp = style.StartSpinner(stderr, "thinking…")
+	}
+	defer stopSpinner()
 	if mode == provider.Explain && !asJSON {
 		req.OnChunk = func(s string) {
+			stopSpinner()
 			streamed = true
 			if hl != nil {
 				hl.Write(s)
@@ -228,6 +244,15 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		if !verbose {
 			return
 		}
+		stopSpinner()
+		if !asJSON {
+			// Keep animating while the next provider runs.
+			defer func() {
+				spMu.Lock()
+				sp = style.StartSpinner(stderr, "thinking…")
+				spMu.Unlock()
+			}()
+		}
 		var cse *provider.CooldownSkippedError
 		if errors.As(err, &cse) {
 			// The error text already ends in "; skipping" -- no need for
@@ -238,6 +263,7 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		}
 		fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %v; trying next provider", err)))
 	})
+	stopSpinner()
 	if err != nil {
 		return err
 	}
