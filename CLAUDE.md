@@ -55,7 +55,17 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   every 80ms via `zselect`, and on Ctrl-C hands the typed line back. Its
   pty tests (`scripts/test-shell-integration.py`) run zsh with
   `Session(..., ctty=True)`: without a controlling tty, ^C is a plain
-  byte, never SIGINT, so a Ctrl-C test proves nothing.
+  byte, never SIGINT, so a Ctrl-C test proves nothing. Raw-mode explain
+  prints under `zle -I` and must NOT `zle reset-prompt` afterwards: zle
+  doesn't know about the output, so it moves up to its old prompt position
+  (1 + extra prompt lines) and redraws over the blank line and, under
+  p10k's two-line prompt, the explanation's last line; `zle -I` already
+  draws a fresh prompt below. fish's `commandline -f repaint` has the same
+  blind spot, hence the `count (fish_prompt) - 1` newlines first. The
+  suite renders sessions with pyte (40x120 pty; re-runs itself under `uv
+  run --with pyte` when missing, byte-stream fallback otherwise) and
+  checks every explanation line plus exactly one blank line before the
+  next prompt, with one- and two-line prompts.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
 - `internal/cooldown/` — the rate-limit cooldown store
