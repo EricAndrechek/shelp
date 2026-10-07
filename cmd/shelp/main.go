@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/clean"
@@ -23,6 +22,7 @@ import (
 	"github.com/ericandrechek/shelp/internal/prompt"
 	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
+	"github.com/ericandrechek/shelp/internal/style"
 )
 
 var version = "dev"
@@ -68,7 +68,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "shelp:", err)
+		fmt.Fprintln(os.Stderr, style.For(os.Stderr).Err("shelp:"), err)
 		var ue usageError
 		if errors.As(err, &ue) {
 			os.Exit(2)
@@ -207,9 +207,23 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	chain := chainFor(provFlag, cfg)
 	// Explain output streams straight to the terminal when possible.
 	var streamed bool
-	if mode == provider.Explain && !asJSON {
-		req.OnChunk = func(s string) { streamed = true; fmt.Fprint(stdout, s) }
+	// On a terminal, explain gets a header and a highlighter; otherwise the
+	// text goes out untouched, byte for byte.
+	var hl *explainHighlighter
+	if mode == provider.Explain && !asJSON && style.For(stdout).On() {
+		hl = newExplainHighlighter(stdout, style.For(stdout), input)
 	}
+	if mode == provider.Explain && !asJSON {
+		req.OnChunk = func(s string) {
+			streamed = true
+			if hl != nil {
+				hl.Write(s)
+				return
+			}
+			fmt.Fprint(stdout, s)
+		}
+	}
+	errPal := style.For(stderr)
 	res, err := provider.Chain(ctx, cfg, chain, req, force, func(id string, err error) {
 		if !verbose {
 			return
@@ -219,10 +233,10 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 			// The error text already ends in "; skipping" -- no need for
 			// the generic "; trying next provider" suffix below, and the
 			// provider was never actually called.
-			fmt.Fprintf(stderr, "shelp: %v\n", err)
+			fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %v", err)))
 			return
 		}
-		fmt.Fprintf(stderr, "shelp: %v; trying next provider\n", err)
+		fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %v; trying next provider", err)))
 	})
 	if err != nil {
 		return err
@@ -238,13 +252,23 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		text = clean.Command(res.Text)
 	}
 	if verbose {
-		fmt.Fprintf(stderr, "shelp: %s in %s\n", res.ProviderID, res.Latency.Round(10*time.Millisecond))
+		fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %s in %s", res.ProviderID, res.Latency.Round(10*time.Millisecond))))
 	}
 	if asJSON {
 		return json.NewEncoder(stdout).Encode(map[string]any{
 			"text": text, "provider": res.ProviderID, "latency_ms": res.Latency.Milliseconds(),
 			"first_chunk_ms": res.FirstChunk.Milliseconds(),
 		})
+	}
+	if hl != nil {
+		if !streamed {
+			hl.Write(text + "\n")
+		}
+		hl.Flush()
+		if streamed && !strings.HasSuffix(res.Text, "\n") {
+			fmt.Fprintln(stdout)
+		}
+		return nil
 	}
 	if streamed {
 		if !strings.HasSuffix(res.Text, "\n") {
@@ -356,12 +380,12 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PROVIDER\tKIND\tSTATUS\tDETAILS")
+	pal := style.For(stdout)
+	table := [][]string{providerHeader(pal)}
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.ID, r.Kind, r.Status, r.Reason)
+		table = append(table, providerRow(pal, r.ID, r.Kind, r.Status, r.Reason))
 	}
-	return tw.Flush()
+	return writeTable(stdout, table)
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -386,7 +410,7 @@ func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			continue
 		}
 		ran = true
-		fmt.Fprintf(stdout, "== %s: %s\n", s.Name, s.Help)
+		fmt.Fprintln(stdout, style.For(stdout).Bold(style.For(stdout).Accent(fmt.Sprintf("== %s: %s", s.Name, s.Help))))
 		if err := s.Run(ctx, cfg, stdout, stderr); err != nil {
 			return fmt.Errorf("setup %s: %w", s.Name, err)
 		}
@@ -419,6 +443,17 @@ func runSetupShell(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, res.Message)
+	fmt.Fprintln(stdout, setupShellMessage(style.For(stdout), res, dryRun))
 	return nil
+}
+
+// setupShellMessage colors `shelp setup shell`'s summary by outcome.
+func setupShellMessage(p style.Palette, res shellinit.SetupResult, dryRun bool) string {
+	switch {
+	case dryRun && (res.Action == "added" || res.Action == "updated"):
+		return p.Dim(res.Message)
+	case res.Action == "manual" || res.Action == "already-manual":
+		return p.Warn(res.Message)
+	}
+	return p.OK(res.Message)
 }
