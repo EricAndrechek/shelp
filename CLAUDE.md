@@ -30,6 +30,11 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 - `internal/prompt/` — prompt `Template`s (named, versioned; `Default`) and
   environment `Context` detection (os, shell, opt-in cwd/tools).
 - `internal/clean/` — strips fences/backticks/prompt signs from replies.
+- `internal/style/` — terminal colors for human-facing output only
+  (`style.For(w)`: a terminal, no `NO_COLOR`, not `TERM=dumb`; forced by
+  `CLICOLOR_FORCE`), brand gradient, 24-bit/256/16 fallback, `PadRight`
+  for colored table cells (tabwriter counts escape codes as text). Never
+  for suggest's command, `--json`, or `shelp init`.
 - `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode,
   `--bind`; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
   `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,
