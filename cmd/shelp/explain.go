@@ -22,10 +22,14 @@ var warningWords = map[string]bool{
 	"unrecoverable": true,
 }
 
-// explainHighlighter colors an explanation as it streams in. Text is cut
-// into whitespace-separated words; a partial word is held back until
+// explainHighlighter colors and lays out an explanation as it streams
+// in: a "$ command" header, a blank line, then the text indented and
+// word-wrapped to explainMaxWidth (or the terminal, if narrower), so the
+// terminal never breaks a word across lines. Text is cut into
+// whitespace-separated words; a partial word is held back until
 // whitespace or Flush, so a chunk boundary never splits a styled token and
-// the output is the same however the text is chunked.
+// the output is the same however the text is chunked. Newlines in the
+// text are kept; other whitespace runs become single spaces.
 type explainHighlighter struct {
 	w     io.Writer
 	p     style.Palette
@@ -34,10 +38,26 @@ type explainHighlighter struct {
 	tail  string          // an incomplete UTF-8 sequence from the last chunk
 	begun bool
 	input string
+	width int  // wrap column; 0: don't wrap
+	col   int  // visible column of the current line
+	space bool // a space is owed before the next word on this line
 }
 
-func newExplainHighlighter(w io.Writer, p style.Palette, command string) *explainHighlighter {
+// explainMaxWidth caps the wrap column on a wide terminal: long lines are
+// hard to read.
+const explainMaxWidth = 90
+
+const explainIndent = "  "
+
+// newExplainHighlighter lays text out for a terminal termWidth columns
+// wide (0 if unknown: indent, but don't wrap).
+func newExplainHighlighter(w io.Writer, p style.Palette, command string, termWidth int) *explainHighlighter {
 	h := &explainHighlighter{w: w, p: p, cmd: map[string]bool{}, input: command}
+	if termWidth > 0 {
+		// one column spare: a line that exactly fills the terminal makes
+		// some terminals wrap before the newline arrives
+		h.width = min(termWidth-1, explainMaxWidth)
+	}
 	for _, f := range strings.Fields(command) {
 		if len(f) >= 2 {
 			h.cmd[f] = true
@@ -52,7 +72,26 @@ func (h *explainHighlighter) Header() {
 		return
 	}
 	h.begun = true
-	io.WriteString(h.w, h.p.Bold(h.p.Accent(h.input))+"\n")
+	io.WriteString(h.w, h.p.Dim("$ ")+h.p.Bold(h.p.Accent(h.input))+"\n\n")
+}
+
+// emit lays out one finished word.
+func (h *explainHighlighter) emit(out *strings.Builder, tok string) {
+	n := utf8.RuneCountInString(tok)
+	switch {
+	case h.col == 0:
+		out.WriteString(explainIndent)
+		h.col = len(explainIndent)
+	case h.space && h.width > 0 && h.col+1+n > h.width:
+		out.WriteString("\n" + explainIndent)
+		h.col = len(explainIndent)
+	case h.space:
+		out.WriteByte(' ')
+		h.col++
+	}
+	out.WriteString(h.word(tok))
+	h.col += n
+	h.space = false
 }
 
 // Write feeds a chunk of explanation. Subprocess output arrives in raw
@@ -63,15 +102,20 @@ func (h *explainHighlighter) Write(s string) {
 	s, h.tail = splitIncomplete(h.tail + s)
 	var out strings.Builder
 	for _, r := range s {
-		if unicode.IsSpace(r) {
-			if h.buf.Len() > 0 {
-				out.WriteString(h.word(h.buf.String()))
-				h.buf.Reset()
-			}
-			out.WriteRune(r)
+		if !unicode.IsSpace(r) {
+			h.buf.WriteRune(r)
 			continue
 		}
-		h.buf.WriteRune(r)
+		if h.buf.Len() > 0 {
+			h.emit(&out, h.buf.String())
+			h.buf.Reset()
+		}
+		if r == '\n' {
+			out.WriteByte('\n')
+			h.col, h.space = 0, false
+		} else if h.col > 0 {
+			h.space = true
+		}
 	}
 	if out.Len() > 0 {
 		io.WriteString(h.w, out.String())
@@ -97,7 +141,9 @@ func (h *explainHighlighter) Flush() {
 	h.buf.WriteString(h.tail)
 	h.tail = ""
 	if h.buf.Len() > 0 {
-		io.WriteString(h.w, h.word(h.buf.String()))
+		var out strings.Builder
+		h.emit(&out, h.buf.String())
+		io.WriteString(h.w, out.String())
 		h.buf.Reset()
 	}
 }

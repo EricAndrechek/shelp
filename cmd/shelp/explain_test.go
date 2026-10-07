@@ -10,9 +10,11 @@ import (
 
 const sampleExplain = "lsof lists open files. -n and -P skip lookups, (-iTCP:8080) selects TCP port 8080; it permanently Deletes nothing.\nBe careful with rm: it removes files.\n"
 
+const testWidth = 40
+
 func highlight(p style.Palette, chunks []string) string {
 	var b bytes.Buffer
-	h := newExplainHighlighter(&b, p, "lsof -nP -iTCP:8080")
+	h := newExplainHighlighter(&b, p, "lsof -nP -iTCP:8080", testWidth+1)
 	for _, c := range chunks {
 		h.Write(c)
 	}
@@ -73,23 +75,65 @@ func TestExplainStyling(t *testing.T) {
 	if strings.Contains(out, p.Accent("rm")) {
 		t.Error("rm is not in the command; must not be accented")
 	}
-	if style.Strip(out) != highlightPlainBody(sampleExplain) {
-		t.Error("stripping colors should give the original text plus header")
+	got := strings.Join(strings.Fields(style.Strip(out)), " ")
+	want := strings.Join(strings.Fields("$ lsof -nP -iTCP:8080 "+sampleExplain), " ")
+	if got != want {
+		t.Errorf("stripped words = %q\nwant %q", got, want)
 	}
 }
 
-func highlightPlainBody(s string) string { return "lsof -nP -iTCP:8080\n" + s }
+// The body is indented and word-wrapped: no line is wider than the wrap
+// column, no word is split, and the text's own newlines are kept.
+func TestExplainWraps(t *testing.T) {
+	out := style.Strip(highlight(style.Forced(style.TrueColor), []string{sampleExplain}))
+	lines := strings.Split(out, "\n")
+	if lines[0] != "$ lsof -nP -iTCP:8080" || lines[1] != "" {
+		t.Fatalf("header = %q, %q; want the command, then a blank line", lines[0], lines[1])
+	}
+	body := lines[2:]
+	for _, l := range body {
+		if l == "" {
+			continue
+		}
+		if !strings.HasPrefix(l, explainIndent) || strings.HasPrefix(l, explainIndent+" ") {
+			t.Errorf("line %q: want exactly the indent", l)
+		}
+		if n := style.Width(l); n > testWidth {
+			t.Errorf("line %q is %d wide, want <= %d", l, n, testWidth)
+		}
+	}
+	if len(body) < 4 {
+		t.Errorf("want the text wrapped over several lines at width %d:\n%s", testWidth, out)
+	}
+	// "...nothing." ends the text's first line; "Be careful" starts a new one.
+	found := false
+	for i, l := range body {
+		if strings.HasSuffix(l, "nothing.") && i+1 < len(body) && strings.HasPrefix(body[i+1], explainIndent+"Be careful") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the text's own newline was lost:\n%s", out)
+	}
+}
+
+func TestExplainLongWordNotBroken(t *testing.T) {
+	long := strings.Repeat("x", testWidth+10)
+	out := style.Strip(highlight(style.Forced(style.Color16), []string{"see " + long + " there"}))
+	if !strings.Contains(out, explainIndent+long+"\n") && !strings.Contains(out, explainIndent+long+" ") {
+		t.Errorf("a word wider than the line must go out whole on its own line:\n%s", out)
+	}
+}
 
 func TestExplainPlainParity(t *testing.T) {
 	var b bytes.Buffer
-	h := newExplainHighlighter(&b, style.Plain(), "lsof -nP")
+	h := newExplainHighlighter(&b, style.Plain(), "lsof -nP", 0)
 	h.Write("a -l remov")
 	h.Write("e it")
 	h.Flush()
-	// Header is only written by the caller when colored; a plain palette
-	// would still emit it here, so the caller must not use the highlighter
-	// at all -- but the body must be untouched.
-	if got := strings.TrimPrefix(b.String(), "lsof -nP\n"); got != "a -l remove it" {
+	// The caller only uses the highlighter on a terminal; with a plain
+	// palette and no width it still lays out, just without color or wrap.
+	if got := b.String(); got != "$ lsof -nP\n\n  a -l remove it" {
 		t.Errorf("got %q", got)
 	}
 }

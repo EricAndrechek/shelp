@@ -211,7 +211,7 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	// text goes out untouched, byte for byte.
 	var hl *explainHighlighter
 	if mode == provider.Explain && !asJSON && style.For(stdout).On() {
-		hl = newExplainHighlighter(stdout, style.For(stdout), input)
+		hl = newExplainHighlighter(stdout, style.For(stdout), input, style.TermWidth(stdout))
 	}
 	// The thinking spinner (stderr, terminal only) must be stopped before
 	// anything else is written; spMu guards it because OnChunk and the
