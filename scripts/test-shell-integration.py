@@ -667,7 +667,7 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
         # `shelp providers` (excluded subcommand) still runs normally
         s.buf = ""
         s.send("shelp providers\r")
-        ok = s.expect(r"PROVIDER", timeout=8)
+        ok = s.expect(r"Local servers", timeout=8)
         results.check(f"{label}: shelp providers runs normally (not raw-mode)", ok, s.buf[-400:])
 
         # a normal command still runs (wait for the providers table to
@@ -790,7 +790,7 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         # shelp providers still runs normally
         s.buf = ""
         s.send("shelp providers\r")
-        ok = s.expect(r"PROVIDER", timeout=8)
+        ok = s.expect(r"Local servers", timeout=8)
         results.check("bash: shelp providers runs normally (not raw-mode)", ok, s.buf[-400:])
 
         # plain command
@@ -967,7 +967,7 @@ def run_fish(tmpdir, results, real_linux_bin):
 
         s.buf = ""
         s.send("shelp providers\r")
-        ok = s.expect(r"PROVIDER", timeout=8)
+        ok = s.expect(r"Local servers", timeout=8)
         results.check("fish: shelp providers runs normally (not raw-mode)", ok, s.buf[-400:])
 
         s.expect(r"TESTPROMPT% \r?$", timeout=15)
