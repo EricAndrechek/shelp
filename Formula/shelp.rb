@@ -7,7 +7,7 @@
 class Shelp < Formula
   desc "Turn a task into a shell command, or explain one, with the model you have"
   homepage "https://github.com/ericandrechek/shelp"
-  url "file:///Users/eric/Code/public-projects/shelp", using: :git, tag: "v0.2.5"
+  url "file:///Users/eric/Code/public-projects/shelp", using: :git, tag: "v0.2.6"
   license "MIT"
   head "file:///Users/eric/Code/public-projects/shelp", using: :git, branch: "main"
 
