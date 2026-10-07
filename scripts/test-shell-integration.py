@@ -20,6 +20,12 @@ Usage:
 
 Exit status is nonzero if any case failed. Requires `make test-shell`'s
 build step to have produced ./bin/shelp, or builds it itself.
+
+The explain screen checks render each session's byte stream with pyte (a
+VT100 emulator) to see what is actually left on screen. pyte is a dev-only
+dependency: when it isn't importable and `uv` is on PATH, the suite re-runs
+itself under `uv run --with pyte`; with neither, those checks fall back to
+byte-stream assertions (see explain_screen_check).
 """
 from __future__ import annotations
 
@@ -31,12 +37,23 @@ import re
 import select
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import termios
 import textwrap
 import time
+
+try:
+    import pyte
+except ImportError:
+    pyte = None
+    if shutil.which("uv") and not os.environ.get("SHELP_TEST_UV_REEXEC"):
+        _uv = ["uv", "run", "--quiet", "--no-project", "--with", "pyte", "python3"]
+        if subprocess.run(_uv + ["-c", "import pyte"], capture_output=True).returncode == 0:
+            os.environ["SHELP_TEST_UV_REEXEC"] = "1"
+            os.execvp("uv", _uv + [os.path.abspath(__file__)] + sys.argv[1:])
 
 ANSI_RE = re.compile(
     r'\x1b\][^\x07\x1b]*(\x07|\x1b\\)'  # OSC (e.g. window-title setting), terminated by BEL or ST
@@ -52,6 +69,8 @@ def strip_ansi(s):
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERBOSE = False
+# Every Session's window size (see Session).
+ROWS, COLS = 40, 120
 
 
 def vprint(*a):
@@ -70,10 +89,18 @@ class Session:
     TIOCSCTTY), the way a terminal emulator starts a shell. Without it the
     shell has no controlling tty, so ^C reaches it as a plain byte instead
     of SIGINT -- fine for most cases, but a Ctrl-C test then never
-    interrupts anything for real."""
+    interrupts anything for real.
+
+    The pty gets a fixed ROWS x COLS window, so the shell lays out its
+    output for the same screen a test renders it on (screen()). raw keeps
+    every byte read, never reset (unlike buf)."""
 
     def __init__(self, argv, env, cwd=None, ctty=False):
         self.master_fd, slave_fd = pty.openpty()
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+        self.raw = bytearray()
+        self._screen = self._stream = None
+        self._fed = 0
         preexec = None
         if ctty:
             def preexec():
@@ -104,6 +131,7 @@ class Session:
                     break
                 if not data:
                     break
+                self.raw += data
                 self.buf += data.decode("utf-8", "replace")
                 got = True
                 end = time.time() + 0.1
@@ -132,7 +160,20 @@ class Session:
                     return
                 if not data:
                     return
+                self.raw += data
                 self.buf += data.decode("utf-8", "replace")
+
+    def screen(self):
+        """The screen as the terminal would show it now (pyte), as a list
+        of right-stripped rows; None without pyte. Fed incrementally."""
+        if pyte is None:
+            return None
+        if self._screen is None:
+            self._screen = pyte.Screen(COLS, ROWS)
+            self._stream = pyte.ByteStream(self._screen)
+        self._stream.feed(bytes(self.raw[self._fed:]))
+        self._fed = len(self.raw)
+        return [row.rstrip() for row in self._screen.display]
 
     def send(self, s):
         os.write(self.master_fd, s.encode())
@@ -272,7 +313,20 @@ STUB_SOURCE = textwrap.dedent(
         # it, not against the echo builtin's own escape processing).
         print("printf '%s\\\\n' " + shlex.quote(raw))
     else:
+        # Shaped like the real explain on a terminal: a spinner on stderr
+        # that clears itself, then a header, a blank line and the
+        # explanation, ending in a newline (no trailing blank line).
+        if sys.stderr.isatty():
+            for f in "|/-\\\\":
+                sys.stderr.write("\\r" + f + " stub-spinner\\x1b[K")
+                sys.stderr.flush()
+                time.sleep(0.02)
+            sys.stderr.write("\\r\\x1b[K")
+            sys.stderr.flush()
         print("SHELP_EXPLAIN:" + raw)
+        print()
+        for i in range(1, 7):
+            print("  EXPLAIN-L%d: line %d of 6 of the stub explanation" % (i, i))
     sys.exit(0)
     '''
 )
@@ -336,6 +390,77 @@ def raw_cases(tmpdir, text_prefix=None):
 
 
 # --------------------------------------------------------------------
+# Explain screen checks (every shell)
+# --------------------------------------------------------------------
+
+# the stub's explanation rows (see STUB_SOURCE)
+EXPLAIN_ROWS = ["  EXPLAIN-L%d: line %d of 6 of the stub explanation" % (i, i) for i in range(1, 7)]
+# vertical cursor motion: newline, CUD/CNL (down), CUU/CPL (up), reverse
+# index (up), CUP (absolute: unknown)
+VMOVE = re.compile(rb"\n|\x1b\[([\d;]*)([ABEFH])|\x1bM")
+
+
+def net_rows(b):
+    """Net rows the cursor moves down over the bytes b (None if they
+    position it absolutely). For the no-pyte fallback only."""
+    n = 0
+    for m in VMOVE.finditer(b):
+        if m.group(0) == b"\n":
+            n += 1
+        elif m.group(0) == b"\x1bM":
+            n -= 1
+        elif m.group(2) == b"H":
+            return None
+        else:
+            k = int(m.group(1).split(b";")[0] or b"1")
+            n += k if m.group(2) in (b"B", b"E") else -k
+    return n
+
+
+def last_row(rows, text):
+    """Index of the last screen row equal to text, or None."""
+    hits = [i for i, r in enumerate(rows) if r == text]
+    return hits[-1] if hits else None
+
+
+def explain_screen_check(s, results, label, start, after_rows):
+    """What a raw-mode explain left on screen: the stub's header, blank
+    line and all six explanation rows, then exactly ONE blank row, then
+    rows starting with after_rows (the next prompt). start is len(s.raw)
+    from before the explain line was typed.
+
+    The bug this guards against: zsh's `zle reset-prompt` after output
+    printed under `zle -I` moved up to where zle last drew its prompt and
+    redrew it there, over the blank line and, with a two-line prompt, the
+    explanation's last line. With pyte this reads the rendered screen;
+    without it, the cursor must move down exactly two rows (net) between
+    the end of the explanation and the first prompt text drawn after it:
+    the explanation's own newline plus the blank line."""
+    rows = s.screen()
+    if rows is None:
+        seg = bytes(s.raw[start:])
+        end_row = EXPLAIN_ROWS[-1].encode()
+        ok = all(r.encode() in seg for r in EXPLAIN_ROWS)
+        results.check(f"{label}: explain leaves every line on screen (bytes)", ok, repr(seg[-400:]))
+        tail = seg[seg.rfind(end_row) + len(end_row):] if ok else b""
+        at = tail.find(after_rows[0].encode())
+        between = tail[:at] if at >= 0 else tail
+        ok = at >= 0 and net_rows(between) == 2
+        results.check(f"{label}: explain then one blank line, then the prompt (bytes)", ok,
+                      f"net rows={net_rows(between)} bytes={between[:300]!r}")
+        return
+    last = last_row(rows, EXPLAIN_ROWS[-1])
+    view = "\n".join(f"  |{r}" for r in rows if r) if last is None else \
+        "\n".join(f"  |{r}" for r in rows[max(0, last - 9):last + 2 + len(after_rows)])
+    ok = (last is not None and last >= 7 and rows[last - 7].startswith("SHELP_EXPLAIN:")
+          and rows[last - 6] == "" and rows[last - 5:last + 1] == EXPLAIN_ROWS)
+    results.check(f"{label}: explain leaves every line on screen", ok, "screen:\n" + view)
+    ok = (last is not None and last + 1 + len(after_rows) < len(rows) and rows[last + 1] == ""
+          and all(rows[last + 2 + j].startswith(p) for j, p in enumerate(after_rows)))
+    results.check(f"{label}: explain then one blank line, then the prompt", ok, "screen:\n" + view)
+
+
+# --------------------------------------------------------------------
 # zsh
 # --------------------------------------------------------------------
 
@@ -385,6 +510,57 @@ def zsh_suggest_roundtrip(s, raw):
     s.send("\r")
     got_echo = s.expect(re.escape(raw), timeout=8)
     return got_echo, ("" if got_echo else f"echoed output missing; buf={s.buf[-400:]!r}")
+
+
+def zsh_explain(s):
+    """Type a raw-mode explain and wait for the prompt to come back;
+    returns len(s.raw) from before it (for explain_screen_check)."""
+    start = len(s.raw)
+    s.buf = ""
+    s.send("shelp explain ls -la\r")
+    s.expect(re.escape(EXPLAIN_ROWS[-1]), timeout=8)
+    s.expect(r"TESTPROMPT% \r?$", timeout=8)
+    s.read_available(0.3)
+    return start
+
+
+def zsh_explain_screen_checks(s, results, label):
+    """Raw-mode explain as rendered on screen: with the one-line test
+    prompt, with a two-line prompt (powerlevel10k-style, where the old
+    `zle reset-prompt` drew over the explanation's last line), and when
+    shelp fails (its error, a blank line, then the typed line back)."""
+    start = zsh_explain(s)
+    explain_screen_check(s, results, label, start, ["TESTPROMPT%"])
+
+    s.send("PS1=$'TESTTOP\\nTESTPROMPT%% '\r")
+    s.read_available(0.5)
+    start = zsh_explain(s)
+    explain_screen_check(s, results, f"{label} two-line prompt", start, ["TESTTOP", "TESTPROMPT%"])
+    s.send("PS1='TESTPROMPT%% '\r")
+    s.read_available(0.5)
+
+    s.send("export SHELP_STUB_FAIL=1\r")
+    s.read_available(0.5)
+    s.buf = ""
+    s.send("shelp explain ls -la\r")
+    s.expect(r"TESTPROMPT% shelp explain ls -la", timeout=8)
+    s.read_available(0.3)
+    rows = s.screen()
+    if rows is None:
+        ok = "stub forced failure" in strip_ansi(s.buf)
+        results.check(f"{label}: failed explain shows the error, keeps the line", ok, s.buf[-300:])
+    else:
+        at = last_row(rows, "shelp: stub forced failure")
+        ok = (at is not None and at + 2 < len(rows) and rows[at + 1] == ""
+              and rows[at + 2].startswith("TESTPROMPT% shelp explain ls -la"))
+        end = max((i for i, r in enumerate(rows) if r), default=0)
+        view = "\n".join(f"  |{r}" for r in rows[max(0, end - 6):end + 1])
+        results.check(f"{label}: failed explain shows the error, a blank line, the line back",
+                      ok, "screen:\n" + view)
+    s.send("\x15")
+    s.read_available(0.3)
+    s.send("unset SHELP_STUB_FAIL\r")
+    s.read_available(0.5)
 
 
 # The zsh status spinner: `  <frame> shelp: thinking…` after the line.
@@ -670,6 +846,8 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
         results.check(f"{label}: explain prints raw command", ok, s.buf[-300:])
         ok = s.expect(r"TESTPROMPT% \r?$", timeout=8)
         results.check(f"{label}: explain returns to empty prompt", ok, s.buf[-300:])
+        s.read_available(0.3)
+        zsh_explain_screen_checks(s, results, label)
 
         # history has the original typed line
         s.buf = ""
@@ -716,6 +894,8 @@ def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, after_lines):
             return
         ok2, detail = zsh_suggest_roundtrip(s, "what's my ip")
         results.check(f"{label}: raw suggest works", ok2, detail)
+        s.read_available(0.3)
+        zsh_explain_screen_checks(s, results, label)
         zsh_anim_checks(s, results, label, os.path.join(home, "anim"))
     finally:
         s.close()
@@ -786,11 +966,14 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
 
         # explain
         s.buf = ""
+        start = len(s.raw)
         s.send("shelp explain ls -la\r")
         ok = s.expect(re.escape("SHELP_EXPLAIN:ls -la"), timeout=8)
         results.check("bash: explain prints raw command", ok, s.buf[-300:])
         ok = s.expect(r"TESTPROMPT\$ \r?$", timeout=8)
         results.check("bash: explain returns to empty prompt", ok, s.buf[-300:])
+        s.read_available(0.3)
+        explain_screen_check(s, results, "bash", start, ["TESTPROMPT$"])
 
         # history has the original typed line (see MERGE NOTES: __shelp_preaccept
         # pushes it explicitly, since bash's own auto-history doesn't record
@@ -967,11 +1150,28 @@ def run_fish(tmpdir, results, real_linux_bin):
             results.check(f"fish: raw suggest -- {name}", ok, detail)
 
         s.buf = ""
+        start = len(s.raw)
         s.send("shelp explain ls -la\r")
         ok = s.expect(re.escape("SHELP_EXPLAIN:ls -la"), timeout=8)
         results.check("fish: explain prints raw command", ok, s.buf[-300:])
         ok = s.expect(r"TESTPROMPT% \r?$", timeout=8)
         results.check("fish: explain returns to empty prompt", ok, s.buf[-300:])
+        s.read_available(0.3)
+        explain_screen_check(s, results, "fish", start, ["TESTPROMPT%"])
+
+        # the same under a two-line prompt (fish redraws it with
+        # `commandline -f repaint` after the output)
+        s.send("function fish_prompt; printf 'TESTTOP\\nTESTPROMPT%% '; end\r")
+        s.read_available(0.8)
+        s.buf = ""
+        start = len(s.raw)
+        s.send("shelp explain ls -la\r")
+        s.expect(re.escape(EXPLAIN_ROWS[-1]), timeout=8)
+        s.expect(r"TESTPROMPT% \r?$", timeout=8)
+        s.read_available(0.3)
+        explain_screen_check(s, results, "fish two-line prompt", start, ["TESTTOP", "TESTPROMPT%"])
+        s.send("function fish_prompt; printf 'TESTPROMPT%% '; end\r")
+        s.read_available(0.8)
 
         s.buf = ""
         s.send("history search --contains -- \"shelp what's my ip\"\r")
