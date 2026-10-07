@@ -52,10 +52,12 @@ func mustGenericJSON(t *testing.T, data []byte) any {
 }
 
 // TestBuildWorkflowMatchesReference checks buildWorkflow's JSON shape
-// against testdata/shortcuts/reference.json, which is the "Ask AI"
-// shortcut's plist (WFLLMModel "Apple Intelligence Pro", web search off)
-// as reverse-engineered on macOS 27.0 -- see CLAUDE.md. UUIDs are
-// normalized away since buildWorkflow generates a fresh one every call.
+// against testdata/shortcuts/reference.json (WFLLMModel "Apple
+// Intelligence Pro", web search off). Its Use Model + Stop and Output pair
+// is the "Ask AI" shortcut's plist as reverse-engineered on macOS 27.0;
+// its If block follows the If actions stored in a real Shortcuts library
+// (see conditionalParams). UUIDs are normalized away since buildWorkflow
+// generates a fresh one every call.
 func TestBuildWorkflowMatchesReference(t *testing.T) {
 	refBytes, err := os.ReadFile("testdata/shortcuts/reference.json")
 	if err != nil {
@@ -129,8 +131,8 @@ func TestBuildWorkflowVariants(t *testing.T) {
 		if ifParams.WFConditionalActionString != shortcutVersionMarker {
 			t.Errorf("%s/web=%v: If WFConditionalActionString = %q, want %q", tc.model, tc.web, ifParams.WFConditionalActionString, shortcutVersionMarker)
 		}
-		if ifParams.WFInput == nil || ifParams.WFInput.Value.Type != "ExtensionInput" {
-			t.Errorf("%s/web=%v: If WFInput = %#v, want a WFTextTokenAttachment referencing ExtensionInput", tc.model, tc.web, ifParams.WFInput)
+		if in := ifParams.WFInput; in == nil || in.Type != "Variable" || in.Variable.WFSerializationType != "WFTextTokenAttachment" || in.Variable.Value.Type != "ExtensionInput" {
+			t.Errorf("%s/web=%v: If WFInput = %#v, want a Variable wrapping a WFTextTokenAttachment referencing ExtensionInput", tc.model, tc.web, ifParams.WFInput)
 		}
 		if ifParams.GroupingIdentifier == "" {
 			t.Errorf("%s/web=%v: If GroupingIdentifier is empty", tc.model, tc.web)

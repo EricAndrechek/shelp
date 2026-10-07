@@ -15,8 +15,11 @@
         "WFCondition": 4,
         "WFConditionalActionString": "__shelp_shortcut_version__",
         "WFInput": {
-          "WFSerializationType": "WFTextTokenAttachment",
-          "Value": { "Type": "ExtensionInput" }
+          "Type": "Variable",
+          "Variable": {
+            "WFSerializationType": "WFTextTokenAttachment",
+            "Value": { "Type": "ExtensionInput" }
+          }
         }
       }
     },
@@ -26,7 +29,7 @@
         "WFOutput": {
           "WFSerializationType": "WFTextTokenString",
           "Value": {
-            "string": "shelp-shortcut 2",
+            "string": "shelp-shortcut 3",
             "attachmentsByRange": {}
           }
         }

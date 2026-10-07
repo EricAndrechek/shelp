@@ -61,10 +61,22 @@ type wfTextToken struct {
 // macOS 27's Gallery.bundle/DocumentReview.wflow, whose "Choose from Menu"
 // branches reference a file/URL the same way, e.g.
 // "WFFile": {"Value": {"Type": "Ask"}, "WFSerializationType": "WFTextTokenAttachment"}.
-// Used here for the version-check conditional's WFInput (Shortcut Input).
 type wfTextTokenAttachment struct {
 	WFSerializationType string       `json:"WFSerializationType"`
 	Value               wfAttachment `json:"Value"`
+}
+
+// wfConditionInput is the If action's WFInput: unlike WFFile and the like,
+// it wraps the WFTextTokenAttachment in a {"Type": "Variable", "Variable":
+// ...} envelope. Every If action stored in a real Shortcuts library has
+// this shape (checked against 20 on macOS 27, one of them testing Shortcut
+// Input exactly as buildWorkflow does). Format 2 put the bare attachment
+// here instead; Shortcuts imported it without complaint but treated the
+// input as unset, so every run failed at the If with "Please choose a
+// value for each parameter in this action." before reaching Use Model.
+type wfConditionInput struct {
+	Type     string                `json:"Type"`
+	Variable wfTextTokenAttachment `json:"Variable"`
 }
 
 // askLLMParams is WFWorkflowActionParameters for is.workflow.actions.askllm.
@@ -92,24 +104,20 @@ type outputParams struct {
 // this generator -- matches the pattern of every WFControlFlowMode-based
 // action observed, e.g. DocumentReview.wflow's repeat/choosefrommenu ends).
 //
-// Shape verified two ways (no conditional action exists in any macOS 27
-// Gallery.bundle *.wflow to lift directly -- see MERGE NOTES):
-//  1. macOS 27's Gallery.bundle/DocumentReview.wflow, which confirms the
-//     general WFControlFlowMode 0/1/2 + shared GroupingIdentifier + only the
-//     end boundary carries UUID pattern via is.workflow.actions.choosefrommenu
-//     and is.workflow.actions.repeat.count (both real, on-disk examples).
-//  2. github.com/electrikmilk/cherri (an actively maintained, real Shortcuts
-//     compiler) -- shortcutgen.go's makeConditionalAction builds exactly
-//     this shape for is.workflow.actions.conditional, and shortcut.go's
-//     `conditions` map gives the WFCondition codes (see WFConditionIsEquals
-//     below).
+// No macOS 27 Gallery.bundle *.wflow contains a conditional action, so the
+// shape comes from the If actions stored in a real Shortcuts library
+// (~/Library/Shortcuts/Shortcuts.sqlite, ZSHORTCUTACTIONS.ZDATA, read from
+// a copy): WFCondition 4 with a literal WFConditionalActionString is how
+// "<text> is <string>" is stored, and WFInput is a wfConditionInput.
+// DocumentReview.wflow's repeat.count/choosefrommenu actions confirm the
+// shared WFControlFlowMode 0/1/2 + GroupingIdentifier scaffold.
 type conditionalParams struct {
-	GroupingIdentifier        string                 `json:"GroupingIdentifier"`
-	WFControlFlowMode         int                    `json:"WFControlFlowMode"`
-	UUID                      string                 `json:"UUID,omitempty"`
-	WFCondition               int                    `json:"WFCondition,omitempty"`
-	WFConditionalActionString string                 `json:"WFConditionalActionString,omitempty"`
-	WFInput                   *wfTextTokenAttachment `json:"WFInput,omitempty"`
+	GroupingIdentifier        string            `json:"GroupingIdentifier"`
+	WFControlFlowMode         int               `json:"WFControlFlowMode"`
+	UUID                      string            `json:"UUID,omitempty"`
+	WFCondition               int               `json:"WFCondition,omitempty"`
+	WFConditionalActionString string            `json:"WFConditionalActionString,omitempty"`
+	WFInput                   *wfConditionInput `json:"WFInput,omitempty"`
 }
 
 // WFControlFlowMode values for a control-flow action group (conditional,
@@ -126,12 +134,9 @@ const (
 )
 
 // conditionIsEquals is the WFCondition code for "Is" (equals) on a text
-// input. Verified against github.com/electrikmilk/cherri's shortcut.go,
-// which maps its `Is` token to 4 in the `conditions` map used to build
-// is.workflow.actions.conditional's WFCondition parameter -- Cherri is a
-// real, actively maintained compiler that produces genuinely importable/
-// runnable .shortcut files, so this is the value real Shortcuts app
-// releases accept for this action.
+// input: a real library's "If Type is Safari web page" stores WFCondition
+// 4 with WFConditionalActionString "Safari web page", and
+// github.com/electrikmilk/cherri's `conditions` map agrees.
 const conditionIsEquals = 4
 
 // ShortcutFormatVersion is the current generated shortcut's plist format.
@@ -139,8 +144,10 @@ const conditionIsEquals = 4
 // that changes currentShortcutActionCount() or otherwise requires an
 // installed shortcut to be regenerated (see shortcuts.go's outdated-version
 // detection). 1 was the original marker-less, 2-action (Use Model + Stop
-// and Output) shape; 2 adds the leading version-marker If block below.
-const ShortcutFormatVersion = 2
+// and Output) shape; 2 added the leading version-marker If block below but
+// stored its WFInput in a shape Shortcuts can't use, so a v2 shortcut fails
+// on every run (see wfConditionInput); 3 fixes that WFInput.
+const ShortcutFormatVersion = 3
 
 // shortcutVersionMarker is the literal Shortcut Input value that asks a
 // generated shortcut to report its own format version instead of calling
@@ -220,9 +227,12 @@ func buildWorkflow(model string, web bool) workflow {
 	groupID := newUUID()
 	endUUID := newUUID()
 
-	extensionInput := &wfTextTokenAttachment{
-		WFSerializationType: "WFTextTokenAttachment",
-		Value:               wfAttachment{Type: "ExtensionInput"},
+	shortcutInput := &wfConditionInput{
+		Type: "Variable",
+		Variable: wfTextTokenAttachment{
+			WFSerializationType: "WFTextTokenAttachment",
+			Value:               wfAttachment{Type: "ExtensionInput"},
+		},
 	}
 
 	return workflow{
@@ -241,7 +251,7 @@ func buildWorkflow(model string, web bool) workflow {
 					WFControlFlowMode:         wfControlFlowStart,
 					WFCondition:               conditionIsEquals,
 					WFConditionalActionString: shortcutVersionMarker,
-					WFInput:                   extensionInput,
+					WFInput:                   shortcutInput,
 				},
 			},
 			{ // Stop and Output "shelp-shortcut <N>" (no model call)
