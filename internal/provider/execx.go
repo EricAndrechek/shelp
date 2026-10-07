@@ -33,6 +33,11 @@ type CmdOpts struct {
 	Stdin io.Reader
 	// OnChunk, when non-nil, receives stdout as it streams.
 	OnChunk func(string)
+	// NewProcessGroup runs the subprocess in its own process group (so it
+	// is never the terminal's foreground job) and makes ctx cancellation
+	// kill the whole group. Stdin must stay nil: a background group that
+	// reads the tty would get SIGTTIN. No-op on non-unix platforms.
+	NewProcessGroup bool
 }
 
 // RunCmd runs name with args, feeding stdin (nil means /dev/null), and
@@ -56,6 +61,9 @@ func RunCmdOpts(ctx context.Context, opts CmdOpts, name string, args ...string) 
 	cmd.Dir = opts.Dir
 	cmd.Env = opts.Env
 	cmd.Stdin = opts.Stdin
+	if opts.NewProcessGroup {
+		isolate(cmd)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	var out strings.Builder
