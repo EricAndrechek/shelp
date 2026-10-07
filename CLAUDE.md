@@ -118,14 +118,11 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
 
 - **fm** takes no `[fm]` table — there is nothing to configure beyond
   whether Apple Intelligence is enabled and licensed.
-- **shortcuts**: `[shortcuts]` has `names` (a map from variant key —
-  `apple`, `apple-web`, `apple-pro`, `apple-pro-web`, `chatgpt`,
-  `chatgpt-web` — to a shortcut name, to reuse an already-installed
-  shortcut like "Ask AI" instead of the generated `shelp · <Model>[ +
-  Web]` name) and `install` (the variant keys `shelp setup shortcuts`
-  creates; default `["apple-pro"]`). `$SHELP_SHORTCUTS` (`all` or a comma
-  list of variant keys) overrides `install` at runtime without editing
-  config.
+- **shortcuts**: `[shortcuts]` has one key, `name`: the shortcut every
+  `shortcuts:*` provider runs and `shelp setup shortcuts` installs
+  (default `"shelp"`). The old `names`/`install` keys and
+  `$SHELP_SHORTCUTS` are gone (one shortcut per model, formats 1-4) and
+  are silently ignored.
 - **openai**: `[[openai.endpoint]]` is a repeatable table for hosted,
   key-authenticated endpoints — `name`, `preset` (one of `openai`,
   `openrouter`, `groq`, `gemini`, `anthropic`, `xai`, `mistral`,
@@ -167,11 +164,22 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   the `fm` family unless the OpenAI wire format is specifically needed.
 
 ### Shortcuts "Use Model" (Apple cloud / ChatGPT)
+- **One shortcut, six providers** (format 5): `shelp setup shortcuts`
+  installs a single shortcut, `shelp` (`[shortcuts] name`), and all six
+  `shortcuts:*` IDs (`apple`, `apple-web`, `apple-pro`, `apple-pro-web`,
+  `chatgpt`, `chatgpt-web`) run it; the request says which model. The
+  ChatGPT ones also need the ChatGPT extension (System Settings › Siri).
+  Formats 1-4 were one shortcut per variant, `shelp · <Model>[ + Web]`;
+  those names (and `<name> N` copies) are "legacy": setup, a `shelp
+  providers` note, and the runtime hint list them for the user to delete
+  (`legacyShortcuts`, names from `shortcuts list` only) and nothing ever
+  runs them -- an old one may fail, with a notification, every run.
 - Action `is.workflow.actions.askllm`. Params: `WFLLMModel` one of
   `"Apple Intelligence"`, `"Apple Intelligence Pro"`, `"ChatGPT"`;
   `WFAllowWebSearch` (UI: "Use Broad World Knowledge"); `FollowUp` false;
-  `WFGenerativeResultType` "Text"; `WFLLMPrompt` a WFTextTokenString whose
-  attachment is `{"Type":"ExtensionInput"}` (Shortcut Input). Output via
+  `WFGenerativeResultType` "Text"; `WFLLMPrompt` a WFTextTokenString with
+  one attachment (formats 1-4: `{"Type":"ExtensionInput"}`, Shortcut
+  Input; 5: the "prompt" Dictionary Value). Output via
   `is.workflow.actions.output` with `WFOutput` -> ActionOutput "Response".
   Format lifted from WorkflowKit's `Gallery.bundle/.../Haiku.wflow`; enum
   values from the dyld shared cache.
@@ -182,10 +190,13 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   name comes from the `.shortcut` file's basename at import time, so the
   generator writes `"<name>.shortcut"` verbatim rather than embedding a
   name anywhere in the plist.
-- Run: `printf '%s' "$prompt" | shortcuts run NAME -o - --output-type public.plain-text`
+- Run: `printf '%s' "$input" | shortcuts run NAME -o - --output-type public.plain-text`
   (default output is RTF; `public.text` crashes). ~1.2-1.7s. Missing
-  shortcut: exit 1, "Couldn't find shortcut". The prompt has no separate
-  system field: send `system + "\n\n" + prompt`.
+  shortcut: exit 1, "Couldn't find shortcut". Format 5's input is JSON,
+  `{"model":"<variant key>","prompt":"<system>\n\n<prompt>"}`
+  (`shortcutRequestBody`; Use Model has no separate system field). An
+  unknown model answers `shelp-shortcut-error: unknown model <key>` (exit
+  0, no model call), which `Generate` turns into an Unavailable.
 - "Apple Intelligence Pro" verified in logs as
   `instruct_server_v2.shortcuts_use_model_pro` via `privatecloudcomputed`.
   Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
@@ -199,14 +210,37 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   above. **2** (0.2.0-0.2.1) added a leading version-marker `If` block
   and **3** (0.2.2) fixed its `WFInput` wrapper, but both fail EVERY run,
   real prompts included, at the If with "Please choose a value for each
-  parameter in this action." (+ a notification). **4** (0.2.3, current)
+  parameter in this action." (+ a notification). **4** (0.2.3-0.2.6)
   is the first one verified live (2026-10-07: marker -> `shelp-shortcut
   4`, a real prompt -> a command): "Text: Shortcut Input. If Text is
   `__shelp_shortcut_version__`, Stop and Output the text `shelp-shortcut
-  4` (no model call); Otherwise, `<the v1 pair>`; End If" -- 7 actions
-  (`currentShortcutActionCount()`). The reply has no trailing newline, so
-  when checking it by hand pipe it through `od -c`: an interactive prompt
-  can draw over it and make it look empty.
+  4` (no model call); Otherwise, `<the v1 pair>`; End If" -- 7 actions.
+  **5** (current; NOT yet verified live) is one shortcut for every model,
+  40 actions (`currentShortcutActionCount()`; `buildWorkflow`'s doc
+  comment draws it): v4's marker block unchanged, then in its Otherwise
+  Get Dictionary from Input (on the Text), Get Dictionary Value "model"
+  and "prompt", Text holding the model value, and six If/Otherwise
+  branches nested one inside the next ("If model-Text is `<key>`: Use
+  Model (that model, web flag) on the prompt value; Stop and Output its
+  Response"), the innermost Otherwise a Stop and Output of
+  `shelp-shortcut-error: unknown model <model-Text>`, then seven End Ifs.
+  The reply has no trailing newline, so when checking it by hand pipe it
+  through `od -c`: an interactive prompt can draw over it and make it
+  look empty.
+- Format 5's action shapes, each copied from a stored one (sources cited
+  in `shortcutgen.go`): `is.workflow.actions.detect.dictionary` `{UUID,
+  WFInput: <WFTextTokenAttachment of a Text output>}`, output
+  "Dictionary" (library: "XML To Dictionary" #8, "Wolfram Alpha 2
+  Clipboard" #5); `is.workflow.actions.getvalueforkey` `{UUID,
+  WFDictionaryKey, WFInput: <WFTextTokenAttachment of the Dictionary>}`,
+  output "Dictionary Value", no `WFGetDictionaryValueType` (Wolfram
+  #6-10); a "Dictionary Value" inside a WFTextTokenString (Wolfram #11's
+  URL); a mid-string attachment keyed by its U+FFFC's UTF-16 offset
+  (Wolfram #3, `{44, 1}`); If nested in Otherwise, inner End If first
+  (PDFtoolkit #6-21, Set Alarms #8-15); Use Model's prompt as an
+  ActionOutput (viticci EXAMPLES.md "AI Query", VARIABLES.md). macOS
+  27's "Otherwise If" (mode 1 + condition fields, per viticci
+  CONTROL_FLOW.md) is in no library shortcut, so v5 nests instead.
 - The `is.workflow.actions.conditional` action (`If`/`Otherwise`/`End If`)
   repeats one identifier three times, sharing a `GroupingIdentifier` and
   varying `WFControlFlowMode` (`0` If, `1` Otherwise, `2` End If, which
@@ -246,43 +280,59 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Model); count 0 or >= 6 -> run it with the marker as input and parse
   `shelp-shortcut N` (`shortcutMarkerVersionCmd`); anything else -> not a
   shelp format. Any failure (Shortcuts Events down, a v2/v3 that fails
-  every run) is "unknown", never outdated. `Detect` reports an outdated
-  shortcut as available with a `Reason` (`outdated shortcut (format vN,
-  current vM): run \`shelp setup shortcuts\` to update`), which `shelp
-  providers` appends to the "ok" row.
-- **Update flow** (`shelp setup shortcuts`): each variant in the install
-  list -- plus any `shortcutVariants` entry already installed, so an
-  upgrade covers everything the user has -- is *missing* (generate, sign,
-  open, user clicks "Add Shortcut", poll `shortcuts list`), *outdated*
-  (regenerate, sign, open, poll -- see below), *current/newer* (skip), or
-  *unknown version* (left alone, with a note to delete a broken one by
-  hand and rerun -- replacing it would mean polling a shortcut that fails
-  every run, one notification per poll). Copies named `<name> N` that
-  already exist are pointed out and never run.
+  every run) is "unknown", never outdated. `Detect` reports a provider
+  available only when the shortcut is listed and answers v5 or newer
+  (an older one would hand the JSON to the model as the prompt);
+  outdated (`outdated shortcut (format vN, current vM)`) and unknown are
+  unavailable with Fix "run `shelp setup shortcuts`". The version check
+  runs once per process for all six providers (`cachedShortcutVersion`).
+- **Update flow** (`shelp setup shortcuts`, `runShortcutsSetup`): the one
+  shortcut is *missing* (generate, sign, open, user clicks "Add
+  Shortcut", `waitForNewShortcut`), *outdated* (DELETE FIRST: generate
+  and sign, then ask the user to delete the old one -- right-click ›
+  Delete -- and poll `shortcuts list`, running nothing, until the name
+  is gone (`waitForShortcutGone`); only then open the new one, so the
+  import is a plain "Add Shortcut" with no conflict, and wait as for a
+  missing one), *current/newer* (skip), or *unknown version* (left
+  alone, with a note to delete a broken one by hand and rerun --
+  replacing it would mean polling a shortcut that fails every run, one
+  notification per poll). The wait confirms the marker version and asks
+  at most 3 times (`maxMarkerErrors`) before giving up, so a broken new
+  format can't post a notification every second. Polls run every 1s.
+  Legacy shortcuts and existing `<name> N` copies are pointed out and
+  never run.
 - **Importing over an existing name** (verified with Eric, macOS 27,
   2026-10-07): the dialog says "Add Shortcut" (not "Replace"); clicking
   it asks "Replace" or "Keep Both", and NEITHER deletes anything. Replace:
   the new shortcut takes the name, the old one is renamed `<name> 1`.
-  Keep Both: the new one is `<name> 1`. There is no delete or rename API
-  (Shortcuts Events and `shortcuts` can only list/run/view/sign), so
-  `waitForShortcutUpdate` tells each case apart on every poll -- name
-  answers the new version (Replace; then it asks the user to delete the
-  new `<name> N` copy and waits), or a copy that appeared during the wait
-  answers it (Keep Both; it asks the user to delete the old one and
-  rename the copy) -- and only ever runs the marker on the name and on
-  copies that appeared during the wait. A shortcut imported from a file
-  gets a cached action count once Shortcuts modifies it (the renamed
-  copy's count went 0 -> 7).
+  Keep Both: the new one is `<name> 1`. N can skip numbers (names of
+  deleted shortcuts still count). Between "Add Shortcut" and the
+  Replace/Keep Both answer, BOTH shortcuts carry the name (`shortcuts
+  list` prints it twice) and `shortcuts run <name>` may reach the new one
+  -- v4's wait took that for success and missed the leftover copy. There
+  is no delete or rename API (Shortcuts Events and `shortcuts` can only
+  list/run/view/sign), hence delete-first. `waitForNewShortcut` still
+  copes if the name is taken anyway: it counts raw `shortcuts list`
+  lines and, while the name appears more than once, runs nothing and
+  never finishes; then name answering the new version means Replace (it
+  asks the user to delete the new `<name> N` copy and waits), and a copy
+  that appeared during the wait answering it means Keep Both (it asks the
+  user to delete the old one and rename the copy). It only ever runs the
+  marker on the name and on copies that appeared during the wait. A
+  shortcut imported from a file gets a cached action count once
+  Shortcuts modifies it (the renamed copy's count went 0 -> 7).
 - **Runtime hint**: a normal `shelp suggest`/`explain` call whose resolved
   provider chain names a `shortcuts:*` provider runs a best-effort,
   once-per-shelp-binary-version check (`provider.CheckShortcutsFreshness`,
   wired into `cmd/shelp/main.go` via `defer` right after the real
   `provider.Chain` call succeeds, so it only ever runs after the answer
   is already printed and never delays or fails the real command) and
-  prints one line to stderr if any installed shelp shortcut turns out to
-  be outdated:
+  prints one line to stderr (`shortcutsFreshnessHint`) if the shortcut is
+  outdated, or not installed while legacy ones are (the first run after
+  upgrading to format 5):
   ```
-  shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them
+  shelp: your Apple Shortcut is from an older shelp; run `shelp setup shortcuts` to update it
+  shelp: shelp now uses one Apple Shortcut for every shortcuts:* provider; run `shelp setup shortcuts` to install it (and delete the old ones)
   ```
   Its version check is a marker run (see Detection), so on a v2 it fails
   once per binary version, posting one notification.
@@ -464,10 +514,15 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- Eric's "shelp · Apple Intelligence Pro" is a live-verified v4; "Ask AI"
-  is gone.
+- Format 5 (one `shelp` shortcut) is covered by scripted tests and an
+  interpreter test only: install it, check the marker (`printf
+  __shelp_shortcut_version__ | shortcuts run shelp -o - --output-type
+  public.plain-text | od -c`), one prompt each for apple-pro, apple and
+  chatgpt, and the delete-first update, before relying on it. Eric's
+  "shelp · Apple Intelligence Pro" (v4; a throwaway build once replaced
+  it claiming format 5) is now legacy: delete it once `shelp` works.
 - The Keep Both branch of the update wait is covered by scripted tests
-  only; Replace was run live (with a throwaway build claiming format 5).
+  only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
   chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
   them (`--min-interval`) to stay under the limit.
