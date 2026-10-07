@@ -414,6 +414,27 @@ run --min-interval <duration>` paces consecutive calls to the SAME
 provider at least that far apart, to help a future run stay under a rate
 limit instead of tripping the breaker at all.
 
+### Offline
+
+`Kind.NeedsNetwork()` is true for AppleCloud (Shortcuts), API and AgentCLI
+(claude); OnDevice (`fm`) and LocalServer are local. Before `provider.Chain`
+calls its first network provider it runs `Offline()` once per process
+(`internal/provider/offline.go`): a UDP `net.Dial` to documentation
+addresses (192.0.2.1, 2001:db8::1) that only consults the routing table --
+no packets -- and is offline only if neither IPv4 nor IPv6 has a route.
+`offlineCheck` is a package var so tests fake it. Offline, network providers
+are skipped without being called (`*OfflineSkippedError`, "shelp:
+shortcuts:apple-pro skipped: offline (no network route)"), which also avoids
+the Shortcuts failure notification; `--force` does NOT override it (it is for
+cooldowns). If nothing local was tried the final error adds "offline, and no
+local provider in the chain; add `fm` ...". An API provider failing with a
+clear network error (`IsNetworkError`: DNS failure, unreachable, no route,
+TLS handshake timeout; not connection refused) marks the rest of the chain
+offline; Shortcuts/claude free-text errors are deliberately not classified.
+Limit: Wi-Fi with no internet or a captive portal still has a route, so
+provider timeouts still apply. `shelp providers` appends "offline" to the
+chain line.
+
 ## Conventions
 
 - Go 1.27, stdlib first; deps so far: BurntSushi/toml, mvdan.cc/sh/v3

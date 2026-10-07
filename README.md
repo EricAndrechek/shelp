@@ -321,6 +321,14 @@ rubric names concrete pass/fail criteria and every disputed call was
 tested; the Linux cases are graded on the command's correctness for the
 stated OS, not executed on Linux.
 
+## Offline
+
+If the machine has no network route, shelp skips network providers
+(Shortcuts, hosted APIs, `claude`) without calling them and goes straight to
+local ones (`fm`, LM Studio, Ollama...); keep one in your chain. `--force`
+does not override this. A connected-but-no-internet network is not detected
+and falls back to normal provider timeouts.
+
 ## Rate limits and cooldowns
 
 Any provider can be rate-limited or out of quota, not just missing or
