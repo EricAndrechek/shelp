@@ -38,10 +38,12 @@ class Shelp < Formula
         shelp setup shortcuts   # Apple Intelligence Pro via Shortcuts (click "Add Shortcut")
         sudo fm license         # Apple's on-device model (macOS 27+)
 
-      After `brew upgrade shelp`, an already-installed Shortcuts wrapper
-      can be outdated (shelp will hint at this itself on its next normal
-      run) -- re-run `shelp setup shortcuts` to update it (click "Replace"
-      when Shortcuts asks).
+      After `brew upgrade shelp`, the installed "shelp" shortcut can be
+      outdated (shelp will hint at this itself on its next normal run) --
+      re-run `shelp setup shortcuts`: it asks you to delete the old one in
+      the Shortcuts app, then opens the new one (click "Add Shortcut").
+      Upgrading from 0.2.6 or earlier: those per-model "shelp · ..."
+      shortcuts are no longer used; setup lists them for you to delete.
     EOS
   end
 

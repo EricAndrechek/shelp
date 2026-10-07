@@ -63,7 +63,7 @@ $ shelp --template v2 -v print yesterday as YYYY-MM-DD  # -v: provider+latency o
 $ shelp providers                                       # what works on this machine
 $ shelp providers --json                                # same, machine-readable
 $ shelp providers --reset-cooldowns                     # clear recorded rate-limit cooldowns
-$ shelp setup shortcuts                                 # install the Apple Shortcuts this needs
+$ shelp setup shortcuts                                 # install the Apple Shortcut this needs
 ```
 
 **Raw line mode (default on).** Once hooked into your shell, pressing
@@ -137,7 +137,7 @@ your dotfiles yourself and exits cleanly.
 | ID pattern | kind | needs | setup |
 |---|---|---|---|
 | `fm` | on-device | macOS 27+, Apple Intelligence enabled | `sudo fm license` (once, machine-wide) |
-| `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI | `shelp setup shortcuts` generates and opens each `.shortcut`; click "Add Shortcut" once per shortcut (no import API exists) |
+| `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI; for the chatgpt ones, Apple's ChatGPT extension (System Settings › Siri) | `shelp setup shortcuts` generates and opens one `.shortcut`, "shelp", that serves all six; click "Add Shortcut" once (no import API exists) |
 | `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
 | `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
 | `claude:haiku`, `claude:sonnet` | agent-cli | `claude` installed and logged in | `claude /login` |
@@ -201,9 +201,10 @@ temperature = 0.2
 name = "fm-serve"
 base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
 
+# The one Apple Shortcut every shortcuts:* provider runs (the request
+# names the model), and that `shelp setup shortcuts` installs.
 [shortcuts]
-names = { "apple-pro" = "Ask AI" }   # reuse an already-installed shortcut
-install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` creates
+name = "shelp"   # the default
 
 # Headless AI CLIs: one optional sub-table per CLI (today, just claude --
 # see "Dropped backends" for why gemini/codex/Antigravity/Copilot CLI
@@ -432,29 +433,31 @@ through documented flags:
 - Apple's `fm` license forbids "programmatic access... except as expressly
   permitted," and Apple hasn't clarified whether third-party tools like
   shelp fall under that permission. Use at your own risk.
-- Each `shortcuts:*` provider needs its `.shortcut` imported by hand: one
-  click on "Add Shortcut" per shortcut. `shelp setup shortcuts` generates
-  and signs the shortcut and opens it for you, but can't click through
-  the import dialog itself — there's no API for that.
-- **Updating an installed shortcut**: when shelp changes the shortcut it
-  generates (a new `ShortcutFormatVersion`), an already-installed one
-  doesn't update itself. shelp notices on its own — `shelp providers`
-  shows an outdated shortcut as available but with a note (`outdated
-  shortcut (format v1, current v4): run \`shelp setup shortcuts\` to
-  update`), and a normal `shelp` call prints a one-line stderr hint the
-  first time it runs after a new shelp version if any shortcut it'd use
-  is outdated — so just re-run `shelp setup shortcuts`: it regenerates
-  and reopens each outdated shortcut for you, same as a fresh install,
-  except this time click **"Replace"** instead of "Add Shortcut" when
-  Shortcuts asks. (After a `brew upgrade shelp`, this is the same command
-  to reach for — see the Formula's caveats.)
-- **Shortcuts installed by shelp 0.2.0, 0.2.1 or 0.2.2 are broken**: their
-  version check (formats 2 and 3) was malformed, so every run fails with
-  "Please choose a value for each parameter in this action." and a
-  notification.
-  shelp can't ask a broken shortcut its version, so it won't replace one
-  for you: delete it in the Shortcuts app, then run `shelp setup
-  shortcuts` again.
+- The `shortcuts:*` providers all run one Apple Shortcut, "shelp", which
+  you import by hand: one click on "Add Shortcut". `shelp setup
+  shortcuts` generates and signs it and opens it for you, but can't click
+  through the import dialog itself — there's no API for that. Which model
+  answers (Apple Intelligence, Apple Intelligence Pro, ChatGPT, each with
+  or without web knowledge) is up to the provider you pick; the
+  `shortcuts:chatgpt*` ones also need Apple's ChatGPT extension.
+- **Updating the shortcut**: when shelp changes the shortcut it generates
+  (a new `ShortcutFormatVersion`), the installed one doesn't update
+  itself. shelp notices on its own — `shelp providers` shows the
+  `shortcuts:*` providers as unavailable with `outdated shortcut (format
+  vN, current vM)`, and a normal `shelp` call prints a one-line stderr
+  hint the first time it runs after a new shelp version — so re-run
+  `shelp setup shortcuts`. Shortcuts can't replace a shortcut in place
+  (importing over a name keeps both, whichever button you click), so
+  setup asks you to **delete the old "shelp" first** (right-click ›
+  Delete in the Shortcuts app), waits until it's gone, then opens the new
+  one for a plain "Add Shortcut". (After a `brew upgrade shelp`, this is
+  the same command to reach for — see the Formula's caveats.)
+- **Shortcuts from shelp 0.2.6 and earlier** were one per model, named
+  `shelp · <Model>` / `shelp · <Model> + Web`. They're no longer used:
+  `shelp setup shortcuts` and `shelp providers` list any you still have
+  so you can delete them in the Shortcuts app. shelp never runs them —
+  the ones from shelp 0.2.0-0.2.2 fail every run ("Please choose a value
+  for each parameter in this action.") with a notification.
 - The `claude` agent-cli provider spends your account's usage quota on
   every call, same as using the CLI directly (a paid subscription), and is
   noticeably slower than the other backends: about 1-2s per call even
