@@ -62,7 +62,7 @@ Claude Code
 `
 
 func TestRenderProvidersPlain(t *testing.T) {
-	got := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0)
+	got := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0, false)
 	if got != wantSample {
 		t.Errorf("plain view mismatch:\n%s\nwant:\n%s", got, wantSample)
 	}
@@ -70,7 +70,7 @@ func TestRenderProvidersPlain(t *testing.T) {
 
 func TestRenderProvidersColorStripsToPlain(t *testing.T) {
 	for _, d := range []style.Depth{style.Color16, style.Color256, style.TrueColor} {
-		got := renderProviders(style.Forced(d), sampleRows(), sampleChain, "config", false, 0)
+		got := renderProviders(style.Forced(d), sampleRows(), sampleChain, "config", false, 0, false)
 		if got == wantSample {
 			t.Fatal("forced palette produced no color")
 		}
@@ -87,7 +87,7 @@ func TestRenderProvidersChainColors(t *testing.T) {
 		{ID: "c", Kind: "on-device", Status: "unavailable", Reason: "not found"},
 	}
 	p := style.Forced(style.Color16)
-	got := renderProviders(p, rows, []string{"a", "b", "c", "nope"}, "$SHELP_PROVIDER", false, 0)
+	got := renderProviders(p, rows, []string{"a", "b", "c", "nope"}, "$SHELP_PROVIDER", false, 0, false)
 	first := strings.SplitN(got, "\n", 2)[0]
 	for _, want := range []string{p.Bold("a"), p.Warn("b"), p.Dim("c"), p.Err("nope"), p.Dim(" → ")} {
 		if !strings.Contains(first, want) {
@@ -118,24 +118,24 @@ AI CLIs
   ✓ claude:a  a
   ✓ other     o
 `
-	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0); got != want {
+	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestRenderProvidersAllShowsDetail(t *testing.T) {
-	got := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", true, 0)
+	got := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", true, 0, false)
 	if !strings.Contains(got, "  · llamacpp                 not running (127.0.0.1:8080)\n      not reachable at http://127.0.0.1:8080/v1: connection refused\n") {
 		t.Errorf("--all view lacks the detail line:\n%s", got)
 	}
-	if strings.Contains(renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0), "connection refused") {
+	if strings.Contains(renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0, false), "connection refused") {
 		t.Error("default view must not show details")
 	}
 }
 
 func TestRenderProvidersTruncates(t *testing.T) {
 	for _, p := range []style.Palette{style.Plain(), style.Forced(style.Color16)} {
-		got := renderProviders(p, sampleRows(), sampleChain, "config", false, 60)
+		got := renderProviders(p, sampleRows(), sampleChain, "config", false, 60, false)
 		for _, l := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
 			if w := style.Width(l); w > 59 {
 				t.Errorf("line %q is %d wide, want <= 59", style.Strip(l), w)
@@ -163,5 +163,16 @@ func TestProviderRowJSON(t *testing.T) {
 	}
 	if m["Reason"] != "not installed" || m["Fix"] != siriFix || !strings.Contains(m["Detail"].(string), "not found") {
 		t.Errorf("unexpected JSON values: %s", b)
+	}
+}
+
+func TestRenderProviders_OfflineNote(t *testing.T) {
+	on := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0, true)
+	off := renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0, false)
+	if !strings.Contains(on, "(config)  offline") {
+		t.Errorf("offline note missing:\n%s", on)
+	}
+	if strings.Contains(off, "offline") {
+		t.Errorf("unexpected offline note:\n%s", off)
 	}
 }

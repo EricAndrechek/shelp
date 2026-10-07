@@ -107,7 +107,7 @@ func statusRank(s string) int {
 // unavailable row's raw Detail on a dim line below it. width > 0 truncates
 // every line to width-1 columns. With a plain palette the output has no
 // color codes and the same layout.
-func renderProviders(p style.Palette, rows []providerRow, chain []string, source string, all bool, width int) string {
+func renderProviders(p style.Palette, rows []providerRow, chain []string, source string, all bool, width int, offline bool) string {
 	var out strings.Builder
 	line := func(s string) {
 		if width > 0 {
@@ -140,7 +140,7 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 				ids[i] = p.Err(id)
 			}
 		}
-		line(p.Dim("chain") + "  " + strings.Join(ids, p.Dim(" → ")) + "   " + p.Dim("("+source+")"))
+		line(p.Dim("chain") + "  " + strings.Join(ids, p.Dim(" → ")) + "   " + p.Dim("("+source+")") + offlineNote(p, offline))
 	}
 
 	// Group by kind, kinds in display order.
@@ -202,4 +202,12 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 		}
 	}
 	return out.String()
+}
+
+// offlineNote flags the chain line when the machine has no network route.
+func offlineNote(p style.Palette, offline bool) string {
+	if !offline {
+		return ""
+	}
+	return "  " + p.Warn("offline")
 }
