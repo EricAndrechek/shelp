@@ -334,6 +334,9 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("providers", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "")
 	resetCooldowns := fs.Bool("reset-cooldowns", false, "")
+	all := fs.Bool("all", false, "")
+	fs.BoolVar(all, "verbose", false, "")
+	fs.BoolVar(all, "v", false, "")
 	if err := fs.Parse(args); err != nil {
 		return usageError{err}
 	}
@@ -370,48 +373,15 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	wg.Wait()
 
-	type row struct {
-		ID, Kind, Description, Status, Reason, Version string
-		Available                                      bool
-	}
-	rows := make([]row, len(ps))
-	for i, p := range ps {
-		if e, ok := cooldown.Active(cds, p.ID()); ok {
-			rows[i] = row{
-				ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
-				Status: "cooldown",
-				Reason: fmt.Sprintf("until %s: %s", e.Until.Local().Format("15:04"), e.Reason),
-			}
-			continue
-		}
-		st := "ok"
-		reason := p.Description()
-		if !sts[i].Available {
-			st, reason = "unavailable", sts[i].Reason
-		} else if sts[i].Reason != "" {
-			// Available but Detect still has something to say (e.g.
-			// shortcuts.go's outdated-shortcut note): show it alongside the
-			// description rather than dropping it, since an "ok" row
-			// otherwise only ever prints Description.
-			reason = fmt.Sprintf("%s -- %s", p.Description(), sts[i].Reason)
-		}
-		rows[i] = row{
-			ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
-			Status: st, Reason: reason, Version: sts[i].Version, Available: sts[i].Available,
-		}
-	}
+	rows := buildProviderRows(ps, sts, cds)
 
 	if *asJSON {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
-	pal := style.For(stdout)
-	table := [][]string{providerHeader(pal)}
-	for _, r := range rows {
-		table = append(table, providerRow(pal, r.ID, r.Kind, r.Status, r.Reason))
-	}
-	return writeTable(stdout, table)
+	_, err = io.WriteString(stdout, renderProviders(style.For(stdout), rows, chainFor("", cfg), chainSource(cfg), *all, style.TermWidth(stdout)))
+	return err
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
