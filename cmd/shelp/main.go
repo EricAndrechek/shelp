@@ -254,7 +254,8 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 			}()
 		}
 		var cse *provider.CooldownSkippedError
-		if errors.As(err, &cse) {
+		var ose *provider.OfflineSkippedError
+		if errors.As(err, &cse) || errors.As(err, &ose) {
 			// The error text already ends in "; skipping" -- no need for
 			// the generic "; trying next provider" suffix below, and the
 			// provider was never actually called.
@@ -378,7 +379,7 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
-	_, err = io.WriteString(stdout, renderProviders(style.For(stdout), rows, chainFor("", cfg), chainSource(cfg), *all, style.TermWidth(stdout)))
+	_, err = io.WriteString(stdout, renderProviders(style.For(stdout), rows, chainFor("", cfg), chainSource(cfg), *all, style.TermWidth(stdout), provider.Offline()))
 	return err
 }
 

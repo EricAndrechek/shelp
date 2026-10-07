@@ -282,6 +282,13 @@ func Call(ctx context.Context, p Provider, req Request) (Result, error) {
 // it specified one, else now + cfg's top-level `cooldown` key (default
 // cooldown.DefaultDuration). A successful call never clears a cooldown --
 // cooldowns just expire on their own.
+//
+// Offline awareness: before the first network-dependent provider (see
+// Kind.NeedsNetwork) is called, Chain consults Offline() once; when there
+// is no route, network providers are skipped with *OfflineSkippedError
+// (force does not override) and local ones still run. A clear network
+// error from an API provider marks the rest of the chain offline too. If
+// that leaves no local provider tried, the final error says so.
 func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, force bool, onFallback func(id string, err error)) (Result, error) {
 	var errs []error
 	cds := cooldown.Load()
@@ -291,6 +298,8 @@ func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, f
 			cdDur = d
 		}
 	}
+	netDown := "" // set once a network provider is known unreachable
+	triedLocal := false
 	for _, id := range ids {
 		if !force {
 			if e, ok := cooldown.Active(cds, id); ok {
@@ -303,7 +312,29 @@ func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, f
 			}
 		}
 		p, err := Get(cfg, id)
+		if err == nil && p.Kind().NeedsNetwork() {
+			// Offline skips are not bypassed by force (that is for
+			// cooldowns): the call cannot succeed.
+			reason := netDown
+			if reason == "" && Offline() {
+				reason = "no network route"
+			}
+			if reason != "" {
+				if netDown == "" {
+					netDown = reason
+				}
+				err = &OfflineSkippedError{ID: id, Reason: reason}
+				errs = append(errs, err)
+				if onFallback != nil {
+					onFallback(id, err)
+				}
+				continue
+			}
+		}
 		if err == nil {
+			if !p.Kind().NeedsNetwork() {
+				triedLocal = true
+			}
 			var res Result
 			res, err = Call(ctx, p, req)
 			if err == nil && strings.TrimSpace(res.Text) != "" {
@@ -311,6 +342,11 @@ func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, f
 			}
 			if err == nil {
 				err = Unavailable(id, "empty response")
+			}
+			// Only API errors are classified: their text comes from Go's
+			// net/http. Shortcuts and claude errors are free text.
+			if p.Kind() == API && IsNetworkError(err) {
+				netDown = "network error from " + id
 			}
 			var rle *RateLimitedError
 			if errors.As(err, &rle) {
@@ -331,6 +367,9 @@ func Chain(ctx context.Context, cfg *config.Config, ids []string, req Request, f
 	}
 	if len(errs) == 0 {
 		return Result{}, errors.New("no providers configured")
+	}
+	if netDown != "" && !triedLocal {
+		errs = append(errs, errors.New(offlineHint))
 	}
 	return Result{}, errors.Join(errs...)
 }
