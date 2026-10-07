@@ -39,6 +39,17 @@
 #                           writing to shared state (a record file, an env
 #                           var) that a race detector would flag.
 
+# SHELP_FAKE_TRACE: append one line per invocation (any mode): pgid, whether
+# the iTerm2 session vars are set, argv. SHELP_FAKE_GRANDCHILD: path; a
+# background `sleep 60` is started in the same group and its pid written there.
+if [ -n "$SHELP_FAKE_TRACE" ]; then
+  echo "PGID:$(ps -o pgid= -p $$ | tr -d ' ') ITERM:${ITERM_SESSION_ID-<unset>} TERMSESS:${TERM_SESSION_ID-<unset>} LCT:${LC_TERMINAL-<unset>} ARGS:$*" >>"$SHELP_FAKE_TRACE"
+fi
+if [ -n "$SHELP_FAKE_GRANDCHILD" ]; then
+  sleep 60 >/dev/null 2>&1 &
+  echo $! >"$SHELP_FAKE_GRANDCHILD"
+fi
+
 has_version=0
 has_help=0
 for a in "$@"; do

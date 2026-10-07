@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
@@ -185,11 +186,13 @@ func (agentCLIFamily) Providers(cfg *config.Config) []Provider {
 		if sub.Disabled {
 			continue
 		}
+		ident := &identMemo{identify: spec.identify}
 		for _, m := range spec.resolveModels(sub.Models) {
 			out = append(out, &agentcliProvider{
 				spec:     spec,
 				cliModel: m.cli,
 				id:       spec.name + ":" + m.id,
+				ident:    ident,
 			})
 		}
 	}
@@ -200,6 +203,20 @@ type agentcliProvider struct {
 	spec     cliSpec
 	cliModel string // "" means the CLI's own default; no -m/--model flag
 	id       string
+	ident    *identMemo // shared by this CLI's variants; nil means identify directly
+}
+
+// identMemo runs a CLI's identify once and shares the Status between its
+// model variants (they all share one binary).
+type identMemo struct {
+	identify func(ctx context.Context) Status
+	once     sync.Once
+	st       Status
+}
+
+func (m *identMemo) get(ctx context.Context) Status {
+	m.once.Do(func() { m.st = m.identify(ctx) })
+	return m.st
 }
 
 func (p *agentcliProvider) ID() string { return p.id }
@@ -231,7 +248,41 @@ func (p *agentcliProvider) Label() string {
 }
 
 func (p *agentcliProvider) Detect(ctx context.Context) Status {
+	if p.ident != nil {
+		return p.ident.get(ctx)
+	}
 	return p.spec.identify(ctx)
+}
+
+// iTermEnvVars identify the user's iTerm2 session. iTerm2's Claude Code
+// integration (auto-enter triggers plus a cc-status hook that reports state
+// by ITERM_SESSION_ID) pops a toolbar open and closed whenever a `claude`
+// process becomes the session's job, which makes the whole terminal view
+// jump on every shelp call. Stripping these keeps any hook that does run
+// from attaching to the user's session.
+var iTermEnvVars = []string{"ITERM_SESSION_ID", "TERM_SESSION_ID", "LC_TERMINAL", "LC_TERMINAL_VERSION"}
+
+// agentEnv returns os.Environ() minus the iTerm2 session identity, plus extra.
+func agentEnv(extra []string) []string {
+	var env []string
+outer:
+	for _, kv := range os.Environ() {
+		for _, name := range iTermEnvVars {
+			if strings.HasPrefix(kv, name+"=") {
+				continue outer
+			}
+		}
+		env = append(env, kv)
+	}
+	return append(env, extra...)
+}
+
+// agentCmdOpts is the shared subprocess setup for every agent-CLI call
+// (identify and Generate): scrubbed env, and its own process group so the
+// CLI never becomes the terminal's foreground job (see iTermEnvVars).
+// Stdin stays nil (/dev/null); a background group must not read the tty.
+func agentCmdOpts(dir string, onChunk func(string), extraEnv []string) CmdOpts {
+	return CmdOpts{Dir: dir, Env: agentEnv(extraEnv), OnChunk: onChunk, NewProcessGroup: true}
 }
 
 func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, error) {
@@ -253,12 +304,7 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 		onChunk = nil
 	}
 
-	var env []string
-	if len(p.spec.extraEnv) > 0 {
-		env = append(append([]string(nil), os.Environ()...), p.spec.extraEnv...)
-	}
-
-	res, err := RunCmdOpts(runCtx, CmdOpts{Dir: dir, Env: env, OnChunk: onChunk}, p.spec.name, args...)
+	res, err := RunCmdOpts(runCtx, agentCmdOpts(dir, onChunk, p.spec.extraEnv), p.spec.name, args...)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return "", Unavailable(p.id, "%s timed out (shelp caps each agent-CLI call at %s; a stale login can make some agent CLIs hang on an interactive re-auth/trust prompt in headless mode -- try running `%s` interactively once)", p.spec.name, generateTimeout, p.spec.name)
@@ -332,7 +378,10 @@ var claudeSpec = cliSpec{
 }
 
 func claudeIdentify(ctx context.Context) Status {
-	v, err := RunCmd(ctx, nil, nil, "claude", "--version")
+	// Neither subcommand accepts --setting-sources; the scrubbed env and
+	// own process group (agentCmdOpts) are what keep iTerm2 out of it.
+	opts := agentCmdOpts("", nil, nil)
+	v, err := RunCmdOpts(ctx, opts, "claude", "--version")
 	if err != nil {
 		return Status{Reason: "not found", Fix: "install Claude Code", Detail: err.Error()}
 	}
@@ -340,7 +389,7 @@ func claudeIdentify(ctx context.Context) Status {
 	if v.ExitCode != 0 || !strings.Contains(line, "Claude Code") {
 		return Status{Reason: "not Claude Code", Detail: line}
 	}
-	st, err := RunCmd(ctx, nil, nil, "claude", "auth", "status")
+	st, err := RunCmdOpts(ctx, opts, "claude", "auth", "status")
 	if err != nil || st.ExitCode != 0 {
 		// auth status is a best-effort extra; version alone is enough.
 		return Status{Available: true, Version: line}
