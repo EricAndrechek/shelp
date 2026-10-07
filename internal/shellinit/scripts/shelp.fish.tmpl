@@ -59,6 +59,13 @@ function _shelp_raw_dispatch
         command shelp explain --shell fish -- $body
         set -l rc $status
         echo
+        # `commandline -f repaint` doesn't know about the output: it starts
+        # the prompt as many lines above the cursor as the prompt has extra
+        # lines, so a multi-line prompt would be drawn over the blank line
+        # (and more). Give it those lines first, as fish's own
+        # __fish_list_current_token does.
+        set -l extra (math (count (fish_prompt)) - 1)
+        test $extra -gt 0; and string repeat -N \n --count=$extra
         if test $rc -eq 0
             _shelp_history_add $orig
             commandline -r -- ''
