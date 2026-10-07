@@ -221,6 +221,15 @@ func (p *agentcliProvider) Description() string {
 	return label + ", model " + m + " (headless, no tools)"
 }
 
+// Label is "<model> · headless, no tools".
+func (p *agentcliProvider) Label() string {
+	m := p.cliModel
+	if m == "" {
+		m = "default"
+	}
+	return m + " · headless, no tools"
+}
+
 func (p *agentcliProvider) Detect(ctx context.Context) Status {
 	return p.spec.identify(ctx)
 }
@@ -325,11 +334,11 @@ var claudeSpec = cliSpec{
 func claudeIdentify(ctx context.Context) Status {
 	v, err := RunCmd(ctx, nil, nil, "claude", "--version")
 	if err != nil {
-		return Status{Reason: err.Error()}
+		return Status{Reason: "not found", Fix: "install Claude Code", Detail: err.Error()}
 	}
 	line := FirstLine(v.Stdout)
 	if v.ExitCode != 0 || !strings.Contains(line, "Claude Code") {
-		return Status{Reason: "not Claude Code: " + line}
+		return Status{Reason: "not Claude Code", Detail: line}
 	}
 	st, err := RunCmd(ctx, nil, nil, "claude", "auth", "status")
 	if err != nil || st.ExitCode != 0 {
@@ -343,7 +352,7 @@ func claudeIdentify(ctx context.Context) Status {
 	}
 	if json.Unmarshal([]byte(st.Stdout), &parsed) == nil {
 		if !parsed.LoggedIn {
-			return Status{Reason: "claude not logged in: run `claude /login` (or `claude setup-token`)"}
+			return Status{Reason: "not logged in", Fix: "run `claude /login` (or `claude setup-token`)"}
 		}
 		if parsed.Email != "" {
 			line += " (" + parsed.Email + ", " + parsed.SubscriptionType + ")"

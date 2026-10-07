@@ -235,6 +235,14 @@ func (p *openaiProvider) Description() string {
 	}
 }
 
+// Label is the model name; a bare local server has none yet, so it says so.
+func (p *openaiProvider) Label() string {
+	if p.model == "" {
+		return "first loaded model"
+	}
+	return p.model
+}
+
 func hostOf(raw string) string {
 	if u, err := url.Parse(raw); err == nil && u.Host != "" {
 		return u.Host
@@ -248,13 +256,16 @@ func (p *openaiProvider) Detect(ctx context.Context) Status {
 			return Status{Available: true}
 		}
 		if os.Getenv(p.apiKeyEnv) == "" {
-			return Status{Reason: fmt.Sprintf("set $%s to use %s", p.apiKeyEnv, p.id)}
+			return Status{Reason: "no API key", Fix: "set $" + p.apiKeyEnv}
 		}
 		return Status{Available: true}
 	}
 	models, err := listModels(ctx, localClient, p.baseURL)
 	if err != nil {
-		return Status{Reason: describeLocalError(p.baseURL, err)}
+		return Status{
+			Reason: "not running (" + hostOf(p.baseURL) + ")",
+			Detail: describeLocalError(p.baseURL, err),
+		}
 	}
 	_ = writeLocalModelCache(p.label, p.baseURL, models)
 	v := ""

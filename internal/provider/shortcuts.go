@@ -175,17 +175,27 @@ func (p *shortcutsProvider) Description() string {
 	return fmt.Sprintf("%s (shortcut %q)", d, p.name)
 }
 
+// Label is the short display name: the model, plus " + web search" for the
+// web variants.
+func (p *shortcutsProvider) Label() string {
+	l := p.variant.model
+	if p.variant.web {
+		l += " + web search"
+	}
+	return l
+}
+
 func (p *shortcutsProvider) Detect(ctx context.Context) Status {
 	set, err := installedShortcuts(ctx)
 	if err != nil {
-		return Status{Reason: fmt.Sprintf("shortcuts list failed: %v", err)}
+		return Status{Reason: "can't list shortcuts", Detail: err.Error()}
 	}
 	if !set[p.name] {
-		reason := fmt.Sprintf("shortcut %q not installed: run `shelp setup shortcuts`", p.name)
+		reason := "not installed"
 		if p.variant.model == "ChatGPT" {
-			reason += " (also needs the ChatGPT extension enabled in System Settings > Siri)"
+			reason += "; needs the ChatGPT extension (System Settings › Siri)"
 		}
-		return Status{Reason: reason}
+		return Status{Reason: reason, Fix: "run `shelp setup shortcuts`", Detail: fmt.Sprintf("shortcut %q not found", p.name)}
 	}
 	// Installed and still callable either way, so Available stays true even
 	// when outdated -- see outdatedShortcutNote's doc comment for why this
@@ -193,6 +203,7 @@ func (p *shortcutsProvider) Detect(ctx context.Context) Status {
 	st := Status{Available: true, Version: p.variant.model}
 	if note := outdatedShortcutNote(ctx, p.name); note != "" {
 		st.Reason = note
+		st.Fix = "run `shelp setup shortcuts` to update"
 	}
 	return st
 }
@@ -330,7 +341,7 @@ func outdatedShortcutNote(ctx context.Context, name string) string {
 	if err != nil || v >= ShortcutFormatVersion {
 		return ""
 	}
-	return fmt.Sprintf("outdated shortcut (format v%d, current v%d): run `shelp setup shortcuts` to update", v, ShortcutFormatVersion)
+	return fmt.Sprintf("outdated shortcut (format v%d, current v%d)", v, ShortcutFormatVersion)
 }
 
 func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, error) {

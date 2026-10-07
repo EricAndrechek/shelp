@@ -50,7 +50,7 @@ func ProviderManifestOf(ctx context.Context, p provider.Provider) ProviderManife
 	st := p.Detect(c)
 	return ProviderManifest{
 		ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
-		Available: st.Available, Reason: st.Reason, Version: st.Version,
+		Available: st.Available, Reason: joinReasonFix(st), Version: st.Version,
 	}
 }
 
@@ -74,9 +74,22 @@ func detectAvailable(ctx context.Context, cfg *config.Config) ([]provider.Provid
 		if sts[i].Available {
 			ps = append(ps, p)
 		} else {
-			skipped = append(skipped, Skipped{ID: p.ID(), Reason: sts[i].Reason})
+			skipped = append(skipped, Skipped{ID: p.ID(), Reason: joinReasonFix(sts[i])})
 		}
 	}
 	sort.Slice(skipped, func(i, j int) bool { return skipped[i].ID < skipped[j].ID })
 	return ps, skipped, nil
+}
+
+// joinReasonFix renders a Status's short reason plus its fix, e.g.
+// "not installed: run `shelp setup shortcuts`", for skipped-provider
+// messages.
+func joinReasonFix(st provider.Status) string {
+	switch {
+	case st.Reason != "" && st.Fix != "":
+		return st.Reason + ": " + st.Fix
+	case st.Reason == "":
+		return st.Fix
+	}
+	return st.Reason
 }

@@ -177,7 +177,7 @@ func TestOutdatedShortcutNoteV1(t *testing.T) {
 		return shortcutV1ActionCount, nil
 	})
 	got := outdatedShortcutNote(context.Background(), "Ask AI")
-	for _, want := range []string{"outdated", "format v1", "shelp setup shortcuts"} {
+	for _, want := range []string{"outdated", "format v1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("outdatedShortcutNote() = %q, want it to contain %q", got, want)
 		}
@@ -206,7 +206,7 @@ func TestOutdatedShortcutNoteSameCountOlderVersion(t *testing.T) {
 		return ShortcutFormatVersion - 1, nil
 	})
 	got := outdatedShortcutNote(context.Background(), "shelp · Apple Intelligence Pro")
-	for _, want := range []string{"outdated", fmt.Sprintf("format v%d", ShortcutFormatVersion-1), "shelp setup shortcuts"} {
+	for _, want := range []string{"outdated", fmt.Sprintf("format v%d", ShortcutFormatVersion-1)} {
 		if !strings.Contains(got, want) {
 			t.Errorf("outdatedShortcutNote() = %q, want it to contain %q", got, want)
 		}
@@ -327,7 +327,7 @@ func TestShortcutsProviderDetectReportsOutdated(t *testing.T) {
 	if !st.Available {
 		t.Fatalf("Detect() Available = false, want true (an outdated shortcut still works): %+v", st)
 	}
-	if !strings.Contains(st.Reason, "outdated") || !strings.Contains(st.Reason, "shelp setup shortcuts") {
+	if !strings.Contains(st.Reason, "outdated") || !strings.Contains(st.Fix, "shelp setup shortcuts") {
 		t.Errorf("Detect() Reason = %q, want it to mention the shortcut is outdated and how to update", st.Reason)
 	}
 }

@@ -57,11 +57,40 @@ const (
 // Status is the result of probing a provider.
 type Status struct {
 	Available bool
-	// Reason explains unavailability and how to fix it, e.g.
-	// "fm license not accepted: run `sudo fm license`".
-	Reason  string
+	// Reason is a SHORT, human-facing explanation shown on one line of
+	// `shelp providers`: why it is unavailable ("not installed", "not
+	// running (127.0.0.1:8080)", "license not accepted", "no API key") or,
+	// for an available provider, a note worth surfacing (e.g. an outdated
+	// shortcut). It never carries remedies or raw errors.
+	Reason string
+	// Fix is how to make an unavailable provider work, e.g. "run `sudo fm
+	// license`" or "set $OPENAI_API_KEY". Empty when there is nothing to do.
+	Fix string
+	// Detail is the optional raw underlying error (a Go error string, a
+	// command's output line), shown only by `shelp providers --all` and in
+	// --json.
+	Detail  string
 	Version string // backend version string when cheaply known
 }
+
+// Labeler is an optional interface a Provider implements to supply a short
+// display label for `shelp providers` ("Apple Intelligence Pro", "haiku ·
+// headless, no tools"). Use LabelOf to read it.
+type Labeler interface{ Label() string }
+
+// LabelOf returns p's short label, falling back to its Description.
+func LabelOf(p Provider) string {
+	if l, ok := p.(Labeler); ok {
+		if s := l.Label(); s != "" {
+			return s
+		}
+	}
+	return p.Description()
+}
+
+// KindRank orders kinds for display: AppleCloud, OnDevice, API,
+// LocalServer, AgentCLI, then anything else.
+func KindRank(k Kind) int { return kindRank(k) }
 
 // Provider is one callable model route.
 type Provider interface {

@@ -670,3 +670,20 @@ func equalUnordered(a, b []string) bool {
 	}
 	return true
 }
+
+func TestDetectShortReasonAndFix(t *testing.T) {
+	t.Setenv("SHELP_TEST_KEY_UNSET", "")
+	p := &openaiProvider{id: "x:m", kind: API, baseURL: "https://api.example.com/v1", apiKeyEnv: "SHELP_TEST_KEY_UNSET", model: "m"}
+	st := p.Detect(context.Background())
+	if st.Available || st.Reason != "no API key" || st.Fix != "set $SHELP_TEST_KEY_UNSET" {
+		t.Errorf("Detect() = %+v", st)
+	}
+	if LabelOf(p) != "m" {
+		t.Errorf("LabelOf = %q", LabelOf(p))
+	}
+	local := &openaiProvider{id: "lms", kind: LocalServer, baseURL: "http://127.0.0.1:1/v1", label: "lms"}
+	st = local.Detect(context.Background())
+	if st.Available || st.Reason != "not running (127.0.0.1:1)" || !strings.Contains(st.Detail, "not reachable at http://127.0.0.1:1/v1") {
+		t.Errorf("local Detect() = %+v", st)
+	}
+}

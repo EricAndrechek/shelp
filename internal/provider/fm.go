@@ -39,21 +39,23 @@ func (*fmProvider) ID() string          { return "fm" }
 func (*fmProvider) Kind() Kind          { return OnDevice }
 func (*fmProvider) Description() string { return "Apple on-device model (fm CLI, macOS 27+)" }
 
+func (*fmProvider) Label() string { return "Apple on-device model" }
+
 func (p *fmProvider) Detect(ctx context.Context) Status {
 	lic, err := RunCmd(ctx, nil, nil, "fm", "license", "--status")
 	if err != nil {
-		return Status{Reason: err.Error()}
+		return Status{Reason: "fm failed to run", Detail: err.Error()}
 	}
 	if lic.ExitCode != 0 {
-		return Status{Reason: "Apple's fm terms not accepted: run `sudo fm license`"}
+		return Status{Reason: "license not accepted", Fix: "run `sudo fm license`"}
 	}
 	av, err := RunCmd(ctx, nil, nil, "fm", "available", "--model", "system")
 	if err != nil {
-		return Status{Reason: err.Error()}
+		return Status{Reason: "fm failed to run", Detail: err.Error()}
 	}
 	line := FirstLine(stripANSI(av.Stdout + av.Stderr))
 	if av.ExitCode != 0 || !strings.Contains(strings.ToLower(line), "available") || strings.Contains(strings.ToLower(line), "not available") || strings.Contains(strings.ToLower(line), "unavailable") {
-		return Status{Reason: "on-device model not available: " + line + " (is Apple Intelligence enabled?)"}
+		return Status{Reason: "model not available", Fix: "enable Apple Intelligence in System Settings", Detail: line}
 	}
 	return Status{Available: true, Version: FirstLine(lic.Stdout)}
 }
