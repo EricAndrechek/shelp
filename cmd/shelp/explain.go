@@ -6,6 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/ericandrechek/shelp/internal/markdown"
 	"github.com/ericandrechek/shelp/internal/style"
 )
 
@@ -22,25 +23,28 @@ var warningWords = map[string]bool{
 	"unrecoverable": true,
 }
 
-// explainHighlighter colors and lays out an explanation as it streams
-// in: a "$ command" header, a blank line, then the text indented and
-// word-wrapped to explainMaxWidth (or the terminal, if narrower), so the
-// terminal never breaks a word across lines. Text is cut into
-// whitespace-separated words; a partial word is held back until
-// whitespace or Flush, so a chunk boundary never splits a styled token and
-// the output is the same however the text is chunked. Newlines in the
-// text are kept; other whitespace runs become single spaces.
+// explainHighlighter renders an explanation for a terminal as it streams
+// in: a "$ command" header (command words link to their man pages), a
+// blank line, then the model's Markdown -- bullets, `code`, **bold**,
+// *emphasis*, links, headings -- laid out indented and word-wrapped to
+// explainMaxWidth (or the terminal, if narrower) with hanging indents on
+// list items, then a dim "man:" footer. The text is processed one line at
+// a time: a partial line is held back until "\n" or Flush, so a chunk
+// boundary never splits a styled token and the output is the same however
+// the text is chunked. A model that ignores the Markdown format still
+// renders as wrapped text.
 type explainHighlighter struct {
 	w     io.Writer
 	p     style.Palette
 	cmd   map[string]bool // words of the explained command
-	buf   strings.Builder // the partial word
+	line  strings.Builder // the partial line
 	tail  string          // an incomplete UTF-8 sequence from the last chunk
 	begun bool
 	input string
-	width int  // wrap column; 0: don't wrap
-	col   int  // visible column of the current line
-	space bool // a space is owed before the next word on this line
+	width int // wrap column; 0: don't wrap
+	blank int // blank lines held back until more text follows
+	wrote bool
+	out   strings.Builder // scratch for one rendered line
 }
 
 // explainMaxWidth caps the wrap column on a wide terminal: long lines are
@@ -66,32 +70,23 @@ func newExplainHighlighter(w io.Writer, p style.Palette, command string, termWid
 	return h
 }
 
-// Header prints the explained command once, before any explanation.
+// Header prints the explained command once, before any explanation. Each
+// command word that starts a pipeline segment links to its man page.
 func (h *explainHighlighter) Header() {
 	if h.begun {
 		return
 	}
 	h.begun = true
-	io.WriteString(h.w, h.p.Dim("$ ")+h.p.Bold(h.p.Accent(h.input))+"\n\n")
-}
-
-// emit lays out one finished word.
-func (h *explainHighlighter) emit(out *strings.Builder, tok string) {
-	n := utf8.RuneCountInString(tok)
-	switch {
-	case h.col == 0:
-		out.WriteString(explainIndent)
-		h.col = len(explainIndent)
-	case h.space && h.width > 0 && h.col+1+n > h.width:
-		out.WriteString("\n" + explainIndent)
-		h.col = len(explainIndent)
-	case h.space:
-		out.WriteByte(' ')
-		h.col++
+	var b strings.Builder
+	b.WriteString(h.p.Dim("$ "))
+	for _, c := range splitCommand(h.input) {
+		s := h.p.Bold(h.p.Accent(c.text))
+		if c.cmd && h.p.On() {
+			s = hyperlink(manURL(c.text), s)
+		}
+		b.WriteString(s)
 	}
-	out.WriteString(h.word(tok))
-	h.col += n
-	h.space = false
+	io.WriteString(h.w, b.String()+"\n\n")
 }
 
 // Write feeds a chunk of explanation. Subprocess output arrives in raw
@@ -100,26 +95,195 @@ func (h *explainHighlighter) emit(out *strings.Builder, tok string) {
 func (h *explainHighlighter) Write(s string) {
 	h.Header()
 	s, h.tail = splitIncomplete(h.tail + s)
-	var out strings.Builder
-	for _, r := range s {
-		if !unicode.IsSpace(r) {
-			h.buf.WriteRune(r)
+	for {
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			break
+		}
+		h.line.WriteString(s[:i])
+		h.finishLine()
+		s = s[i+1:]
+	}
+	h.line.WriteString(s)
+}
+
+// finishLine renders the buffered line. Blank lines are held back so that
+// leading and trailing ones never reach the output.
+func (h *explainHighlighter) finishLine() {
+	line := h.line.String()
+	h.line.Reset()
+	if strings.TrimSpace(line) == "" {
+		if h.wrote {
+			h.blank++
+		}
+		return
+	}
+	h.render(line)
+}
+
+// Flush renders the held-back partial line, ends the output with exactly
+// one newline, and prints the man-page footer.
+func (h *explainHighlighter) Flush() {
+	h.Header()
+	h.line.WriteString(h.tail)
+	h.tail = ""
+	h.finishLine()
+	words := commandWords(h.input)
+	if len(words) == 0 {
+		return
+	}
+	links := make([]string, len(words))
+	for i, w := range words {
+		links[i] = w
+		if h.p.On() {
+			links[i] = hyperlink(manURL(w), w)
+		}
+	}
+	sep := "\n"
+	if !h.wrote {
+		sep = ""
+	}
+	io.WriteString(h.w, sep+explainIndent+h.p.Dim("man: ")+h.dimJoin(links)+"\n")
+}
+
+func (h *explainHighlighter) dimJoin(links []string) string {
+	return strings.Join(links, h.p.Dim(" · "))
+}
+
+// piece is a run of identically styled text inside a word.
+type piece struct {
+	text string
+	sp   markdown.Span
+}
+
+// render lays out one non-blank source line.
+func (h *explainHighlighter) render(line string) {
+	b := markdown.ParseBlock(line)
+	if b.Kind == markdown.Fence {
+		return
+	}
+	var first, cont string
+	extra := strings.Repeat(" ", min(b.Indent, 8))
+	switch b.Kind {
+	case markdown.Bullet:
+		first = explainIndent + extra + h.p.Accent("•") + " "
+		cont = explainIndent + extra + "  "
+	case markdown.Ordered:
+		first = explainIndent + extra + h.p.Dim(b.Marker) + " "
+		cont = explainIndent + extra + strings.Repeat(" ", len(b.Marker)+1)
+	default:
+		first, cont = explainIndent, explainIndent
+	}
+	spans := markdown.ParseInline(b.Text)
+	warn := b.Kind == markdown.Paragraph && len(spans) > 0 && spans[0].Bold &&
+		strings.HasPrefix(strings.ToLower(spans[0].Text), "warning")
+	words := splitWords(spans)
+	if len(words) == 0 {
+		return
+	}
+
+	o := &h.out
+	o.Reset()
+	o.WriteString(strings.Repeat("\n", h.blank))
+	h.blank = 0
+	h.wrote = true
+	o.WriteString(first)
+	prefixW := utf8.RuneCountInString(style.Strip(first))
+	col := prefixW
+	for i, w := range words {
+		n := 0
+		var s strings.Builder
+		for _, pc := range w {
+			n += utf8.RuneCountInString(pc.text)
+			s.WriteString(h.style(pc, b.Kind == markdown.Heading, warn))
+		}
+		switch {
+		case i == 0:
+		case h.width > 0 && col+1+n > h.width:
+			o.WriteString("\n" + cont)
+			col = utf8.RuneCountInString(cont)
+		default:
+			o.WriteByte(' ')
+			col++
+		}
+		o.WriteString(s.String())
+		col += n
+	}
+	o.WriteByte('\n')
+	io.WriteString(h.w, o.String())
+}
+
+// splitWords cuts spans into words (runs without whitespace). A code span
+// is never split, so `du -sh` stays together when wrapping.
+func splitWords(spans []markdown.Span) [][]piece {
+	var words [][]piece
+	var cur []piece
+	end := func() {
+		if len(cur) > 0 {
+			words = append(words, cur)
+			cur = nil
+		}
+	}
+	for _, sp := range spans {
+		if sp.Code {
+			cur = append(cur, piece{strings.Join(strings.Fields(sp.Text), " "), sp})
 			continue
 		}
-		if h.buf.Len() > 0 {
-			h.emit(&out, h.buf.String())
-			h.buf.Reset()
+		start := -1
+		for i, r := range sp.Text {
+			if unicode.IsSpace(r) {
+				if start >= 0 {
+					cur = append(cur, piece{sp.Text[start:i], sp})
+					start = -1
+				}
+				end()
+			} else if start < 0 {
+				start = i
+			}
 		}
-		if r == '\n' {
-			out.WriteByte('\n')
-			h.col, h.space = 0, false
-		} else if h.col > 0 {
-			h.space = true
+		if start >= 0 {
+			cur = append(cur, piece{sp.Text[start:], sp})
 		}
 	}
-	if out.Len() > 0 {
-		io.WriteString(h.w, out.String())
+	end()
+	return words
+}
+
+// sgr wraps s in an SGR sequence when the palette colors.
+func (h *explainHighlighter) sgr(code, s string) string {
+	if !h.p.On() || s == "" {
+		return s
 	}
+	return "\x1b[" + code + "m" + s + "\x1b[0m"
+}
+
+// style renders one piece.
+func (h *explainHighlighter) style(pc piece, heading, warn bool) string {
+	sp := pc.sp
+	var s string
+	switch {
+	case sp.Code:
+		s = h.p.Accent(pc.text)
+	case heading:
+		s = h.p.Bold(h.p.Accent(pc.text))
+	case warn:
+		s = h.p.Warn(pc.text)
+		if sp.Bold {
+			s = h.p.Bold(s)
+		}
+	default:
+		s = h.word(pc.text)
+		if sp.Bold {
+			s = h.p.Bold(s)
+		}
+	}
+	if sp.Em {
+		s = h.sgr("3", s)
+	}
+	if sp.URL != "" && h.p.On() {
+		s = hyperlink(sp.URL, h.sgr("4", s))
+	}
+	return s
 }
 
 // splitIncomplete splits s into its complete UTF-8 prefix and an
@@ -134,18 +298,6 @@ func splitIncomplete(s string) (string, string) {
 		}
 	}
 	return s, ""
-}
-
-// Flush writes the held-back partial word.
-func (h *explainHighlighter) Flush() {
-	h.buf.WriteString(h.tail)
-	h.tail = ""
-	if h.buf.Len() > 0 {
-		var out strings.Builder
-		h.emit(&out, h.buf.String())
-		io.WriteString(h.w, out.String())
-		h.buf.Reset()
-	}
 }
 
 const (

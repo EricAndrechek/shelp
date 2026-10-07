@@ -290,10 +290,8 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		if !streamed {
 			hl.Write(text + "\n")
 		}
+		// Flush ends the output with exactly one newline.
 		hl.Flush()
-		if streamed && !strings.HasSuffix(res.Text, "\n") {
-			fmt.Fprintln(stdout)
-		}
 		return nil
 	}
 	if streamed {
