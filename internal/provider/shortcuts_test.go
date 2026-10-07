@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
+	"github.com/ericandrechek/shelp/internal/style"
 )
 
 func TestDefaultShortcutName(t *testing.T) {
@@ -874,5 +876,156 @@ names = { "apple-pro" = "Ask AI" }
 			max = 4000
 		}
 		t.Logf("VerifyBackend raw output (first %d bytes):\n%s", max, raw[:max])
+	}
+}
+
+// --- The update wait: Replace, Keep Both, old copies (scripted fakes) ---
+
+// shortcutState is one moment of the user's library during an update: the
+// names `shortcuts list` prints and what each one's marker answers
+// (missing: the run fails).
+type shortcutState struct {
+	names    []string
+	versions map[string]int
+}
+
+// scriptShortcuts fakes `shortcuts list` and the version probes from
+// states: each list call moves to the next state, and the last one
+// repeats. It returns the names whose marker was run, in order.
+func scriptShortcuts(t *testing.T, states []shortcutState) *[]string {
+	t.Helper()
+	var mu sync.Mutex
+	i := -1
+	var probed []string
+	origList, origInterval, origTimeout := shortcutsListCmd, shortcutsPollInterval, shortcutsPollTimeout
+	t.Cleanup(func() {
+		shortcutsListCmd, shortcutsPollInterval, shortcutsPollTimeout = origList, origInterval, origTimeout
+	})
+	shortcutsPollInterval, shortcutsPollTimeout = time.Millisecond, 200*time.Millisecond
+	cur := func() shortcutState { return states[min(max(i, 0), len(states)-1)] }
+	shortcutsListCmd = func(ctx context.Context) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		i++
+		return strings.Join(cur().names, "\n"), nil
+	}
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return 0, nil // imported from a file: Shortcuts never cached a count
+	})
+	installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		probed = append(probed, name)
+		if v, ok := cur().versions[name]; ok {
+			return v, nil
+		}
+		return 0, errors.New("shortcuts run exited 1: Error: Please choose a value for each parameter in this action.")
+	})
+	return &probed
+}
+
+const updName = "shelp · Apple Intelligence Pro"
+
+func TestWaitForShortcutUpdateReplaceLeavesCopy(t *testing.T) {
+	copy1 := updName + " 1"
+	probed := scriptShortcuts(t, []shortcutState{
+		{[]string{updName}, map[string]int{updName: 4}},                  // dialog still open
+		{[]string{updName, copy1}, map[string]int{updName: 5, copy1: 4}}, // "Replace": old renamed
+		{[]string{updName, copy1}, map[string]int{updName: 5, copy1: 4}}, // still there
+		{[]string{updName}, map[string]int{updName: 5}},                  // user deleted the copy
+	})
+	var out strings.Builder
+	ok, err := waitForShortcutUpdate(context.Background(), updName, 5, map[string]bool{updName: true}, &out, style.Plain())
+	if err != nil || !ok {
+		t.Fatalf("got %v, %v; want success\n%s", ok, err, out.String())
+	}
+	if n := strings.Count(out.String(), "also kept a copy"); n != 1 {
+		t.Errorf("leftover message printed %d times, want 1:\n%s", n, out.String())
+	}
+	if !strings.Contains(out.String(), strconv.Quote(copy1)) {
+		t.Errorf("output should name the copy %q:\n%s", copy1, out.String())
+	}
+	for _, p := range *probed {
+		if p == copy1 {
+			t.Errorf("the old copy's marker was run; only the name needs asking after a Replace")
+		}
+	}
+}
+
+func TestWaitForShortcutUpdateKeepBoth(t *testing.T) {
+	copy1 := updName + " 1"
+	scriptShortcuts(t, []shortcutState{
+		{[]string{updName}, map[string]int{updName: 4}},
+		{[]string{updName, copy1}, map[string]int{updName: 4, copy1: 5}}, // "Keep Both"
+		{[]string{updName, copy1}, map[string]int{updName: 4, copy1: 5}},
+		{[]string{copy1}, map[string]int{copy1: 5}},     // deleted the old one
+		{[]string{updName}, map[string]int{updName: 5}}, // renamed the copy
+	})
+	var out strings.Builder
+	ok, err := waitForShortcutUpdate(context.Background(), updName, 5, map[string]bool{updName: true}, &out, style.Plain())
+	if err != nil || !ok {
+		t.Fatalf("got %v, %v; want success\n%s", ok, err, out.String())
+	}
+	got := out.String()
+	if n := strings.Count(got, `"Keep Both"`); n != 1 {
+		t.Errorf("Keep Both message printed %d times, want 1:\n%s", n, got)
+	}
+	for _, want := range []string{"delete the old " + strconv.Quote(updName), "rename " + strconv.Quote(copy1)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// A copy that existed before the dialog opened may be a broken format: it
+// is never run, and it doesn't count as this update's leftover.
+func TestWaitForShortcutUpdateNeverRunsOlderCopies(t *testing.T) {
+	old := updName + " 1"
+	probed := scriptShortcuts(t, []shortcutState{
+		{[]string{updName, old}, map[string]int{updName: 4}}, // dialog never answered
+	})
+	var out strings.Builder
+	ok, err := waitForShortcutUpdate(context.Background(), updName, 5, map[string]bool{updName: true, old: true}, &out, style.Plain())
+	if err != nil || ok {
+		t.Fatalf("got %v, %v; want a timeout", ok, err)
+	}
+	for _, p := range *probed {
+		if p == old {
+			t.Fatalf("ran the marker on %q, a copy that predates this update", old)
+		}
+	}
+	if strings.Contains(out.String(), "Keep Both") || strings.Contains(out.String(), "kept a copy") {
+		t.Errorf("an older copy was taken for this update's:\n%s", out.String())
+	}
+}
+
+func TestConflictCopies(t *testing.T) {
+	list := map[string]bool{updName: true, updName + " 1": true, updName + " 12": true, updName + " + Web": true, updName + " 1a": true, "Other 1": true}
+	got := conflictCopies(list, updName)
+	want := []string{updName + " 1", updName + " 12"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("conflictCopies = %q, want %q", got, want)
+	}
+}
+
+func TestRunShortcutsSetupNotesOlderCopyWithoutRunningIt(t *testing.T) {
+	probed := scriptShortcuts(t, []shortcutState{
+		{[]string{"Ask AI", "Ask AI 1"}, map[string]int{"Ask AI": ShortcutFormatVersion}},
+	})
+	cfg, err := config.Parse("[shortcuts]\nnames = { \"apple-pro\" = \"Ask AI\" }\ninstall = [\"apple-pro\"]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	if err := runShortcutsSetup(context.Background(), cfg, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"Ask AI 1"`) || !strings.Contains(stdout.String(), "up to date") {
+		t.Errorf("want the older copy noted and the shortcut up to date:\n%s", stdout.String())
+	}
+	for _, p := range *probed {
+		if p == "Ask AI 1" {
+			t.Fatal("ran the marker on an older copy")
+		}
 	}
 }

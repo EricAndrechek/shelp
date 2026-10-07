@@ -25,10 +25,12 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ericandrechek/shelp/internal/config"
 	"github.com/ericandrechek/shelp/internal/style"
@@ -544,27 +546,112 @@ func waitForShortcut(ctx context.Context, name string, progress io.Writer) (bool
 	}
 }
 
-// waitForShortcutUpdate polls name's installed format version (see
-// installedShortcutVersion) until it reaches wantVersion, printing one "."
-// per attempt, up to shortcutsPollTimeout. It checks immediately before
-// sleeping, like waitForShortcut. Used after re-opening an already
-// installed, outdated shortcut for the user to click "Replace": the name
-// exists throughout, so only the version changing can tell an accepted
-// replace from a declined or never-opened import dialog. A failed check
-// mid-poll (the shortcut is briefly missing while Shortcuts swaps it) is
-// retried, not fatal.
-func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, progress io.Writer) (bool, error) {
+// conflictCopies returns the names in list that Shortcuts gives a
+// shortcut imported over an existing name -- "<name> 1", "<name> 2", ...
+// -- sorted. Neither button in the import's "Replace"/"Keep Both" prompt
+// deletes anything (verified on macOS 27, 2026-10-07): "Replace" gives the
+// new shortcut the name and renames the old one "<name> 1"; "Keep Both"
+// names the new one "<name> 1".
+func conflictCopies(list map[string]bool, name string) []string {
+	var out []string
+	for n := range list {
+		if rest, ok := strings.CutPrefix(n, name+" "); ok && rest != "" && strings.Trim(rest, "0123456789") == "" {
+			out = append(out, n)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteAll(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = strconv.Quote(n)
+	}
+	return strings.Join(q, ", ")
+}
+
+// waitForShortcutUpdate runs after the update's import dialog opens. The
+// dialog asks "Add Shortcut", then "Replace" or "Keep Both" (the name is
+// taken), and every poll it works out which one happened:
+//
+//   - Replace: name answers wantVersion. Done -- unless the old shortcut
+//     was kept as "<name> 1" (it always is, on macOS 27), in which case it
+//     says to delete that copy and waits for it to go; Ctrl-C there is
+//     harmless, the update has already worked.
+//   - Keep Both: name still answers the old version while a copy that
+//     appeared during this wait answers wantVersion. It says to delete the
+//     old one and rename the copy, then waits for name to answer
+//     wantVersion with no copy left over.
+//
+// before is the shortcut list from just before the dialog opened. Only
+// copies that appeared since are ever asked their version (they are this
+// import or the old shortcut, which just answered its own), so an older
+// leftover -- perhaps a broken v2 that would fail and post a notification
+// -- is never run. Each new instruction restarts the shortcutsPollTimeout
+// clock, since the user has something new to do. out gets one "." per
+// poll after the caller's "waiting..." line, which this function ends.
+// Returns false on timeout.
+func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, before map[string]bool, out io.Writer, pal style.Palette) (bool, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
+	midLine := true
+	say := func(msg string) {
+		if midLine {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, pal.Warn(msg))
+		midLine = false
+		deadline = time.Now().Add(shortcutsPollTimeout)
+	}
+	finish := func(ok bool) (bool, error) {
+		if midLine {
+			fmt.Fprintln(out)
+		}
+		return ok, nil
+	}
+	var toldCopies, toldKeptBoth string
 	for {
-		if v, err := installedShortcutVersion(ctx, name); err == nil && v >= wantVersion {
-			return true, nil
+		if raw, err := shortcutsListCmd(ctx); err == nil {
+			list := parseShortcutsList(raw)
+			var fresh []string
+			for _, c := range conflictCopies(list, name) {
+				if !before[c] {
+					fresh = append(fresh, c)
+				}
+			}
+			current := false
+			if list[name] {
+				v, err := installedShortcutVersion(ctx, name)
+				current = err == nil && v >= wantVersion
+			}
+			switch {
+			case current && len(fresh) == 0:
+				return finish(true)
+			case current:
+				if q := quoteAll(fresh); q != toldCopies {
+					toldCopies = q
+					say(fmt.Sprintf("updated -- but Shortcuts also kept a copy, %s: delete it in the Shortcuts app (shelp can't delete shortcuts). Waiting for that; Ctrl-C is fine too, the update itself is done.", q))
+				}
+			default:
+				for _, c := range fresh {
+					if v, err := installedShortcutVersion(ctx, c); err == nil && v >= wantVersion {
+						if c != toldKeptBoth {
+							toldKeptBoth = c
+							say(fmt.Sprintf("that was \"Keep Both\", so the update is %q: in the Shortcuts app, delete the old %q, then rename %q to %q. Waiting for that...", c, name, c, name))
+						}
+						break
+					}
+				}
+			}
 		}
 		if !time.Now().Before(deadline) {
-			return false, nil
+			return finish(false)
 		}
-		fmt.Fprint(progress, ".")
+		fmt.Fprint(out, ".")
+		midLine = true
 		select {
 		case <-ctx.Done():
+			finish(false)
 			return false, ctx.Err()
 		case <-time.After(shortcutsPollInterval):
 		}
@@ -649,6 +736,11 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			continue
 		}
 		name := resolveName(v, sc)
+		// Never run: an old copy may be a broken format that fails (and
+		// posts a notification) on every run.
+		if copies := conflictCopies(installed, name); len(copies) > 0 {
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %s look(s) like a copy left by an earlier update; delete it in the Shortcuts app if you don't use it", v.id, quoteAll(copies))))
+		}
 
 		if !installed[name] {
 			fmt.Fprintf(stdout, "shortcuts: %s: generating %q...\n", v.id, name)
@@ -697,13 +789,16 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 		if err != nil {
 			return fmt.Errorf("%s: generate: %w", v.id, err)
 		}
-		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s to update %q\n", v.id, out.Bold("\"Replace\""), name)
+		before := installed
+		if raw, err := shortcutsListCmd(ctx); err == nil {
+			before = parseShortcutsList(raw)
+		}
+		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s, then %s, to update %q\n", v.id, out.Bold("\"Add Shortcut\""), out.Bold("\"Replace\""), name)
 		if err := openCmd(ctx, path); err != nil {
 			return fmt.Errorf("%s: open: %w", v.id, err)
 		}
 		fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to replace it (up to %s) ", v.id, shortcutsPollTimeout)
-		updated, err := waitForShortcutUpdate(ctx, name, ShortcutFormatVersion, stdout)
-		fmt.Fprintln(stdout)
+		updated, err := waitForShortcutUpdate(ctx, name, ShortcutFormatVersion, before, stdout, out)
 		if err != nil {
 			return fmt.Errorf("%s: %w", v.id, err)
 		}
@@ -715,13 +810,18 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	}
 
 	fmt.Fprintln(stdout, "shortcuts: status:")
+	idW, nameW := 0, 0
+	for _, v := range shortcutVariants {
+		idW = max(idW, len(v.id))
+		nameW = max(nameW, utf8.RuneCountInString(resolveName(v, sc)))
+	}
 	for _, v := range shortcutVariants {
 		name := resolveName(v, sc)
 		status := out.Dim("not installed")
 		if installed[name] {
 			status = out.OK("installed")
 		}
-		fmt.Fprintf(stdout, "  %-24s %-32s %s\n", v.id, name, status)
+		fmt.Fprintf(stdout, "  %s  %s  %s\n", style.PadRight(v.id, idW), style.PadRight(name, nameW), status)
 	}
 	return nil
 }

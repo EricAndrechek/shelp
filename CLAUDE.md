@@ -233,12 +233,25 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   list -- plus any `shortcutVariants` entry already installed, so an
   upgrade covers everything the user has -- is *missing* (generate, sign,
   open, user clicks "Add Shortcut", poll `shortcuts list`), *outdated*
-  (regenerate, sign, open, user clicks **"Replace"**, poll the version
-  until it's current: the name doesn't change, so presence can't tell),
-  *current/newer* (skip), or *unknown version* (left alone, with a note
-  to delete a broken one by hand and rerun -- replacing it would mean
-  polling a shortcut that fails every run, one notification per poll).
-  **The "Replace" dialog is unverified with a human.**
+  (regenerate, sign, open, poll -- see below), *current/newer* (skip), or
+  *unknown version* (left alone, with a note to delete a broken one by
+  hand and rerun -- replacing it would mean polling a shortcut that fails
+  every run, one notification per poll). Copies named `<name> N` that
+  already exist are pointed out and never run.
+- **Importing over an existing name** (verified with Eric, macOS 27,
+  2026-10-07): the dialog says "Add Shortcut" (not "Replace"); clicking
+  it asks "Replace" or "Keep Both", and NEITHER deletes anything. Replace:
+  the new shortcut takes the name, the old one is renamed `<name> 1`.
+  Keep Both: the new one is `<name> 1`. There is no delete or rename API
+  (Shortcuts Events and `shortcuts` can only list/run/view/sign), so
+  `waitForShortcutUpdate` tells each case apart on every poll -- name
+  answers the new version (Replace; then it asks the user to delete the
+  new `<name> N` copy and waits), or a copy that appeared during the wait
+  answers it (Keep Both; it asks the user to delete the old one and
+  rename the copy) -- and only ever runs the marker on the name and on
+  copies that appeared during the wait. A shortcut imported from a file
+  gets a cached action count once Shortcuts modifies it (the renamed
+  copy's count went 0 -> 7).
 - **Runtime hint**: a normal `shelp suggest`/`explain` call whose resolved
   provider chain names a `shortcuts:*` provider runs a best-effort,
   once-per-shelp-binary-version check (`provider.CheckShortcutsFreshness`,
@@ -411,11 +424,8 @@ limit instead of tripping the breaker at all.
 
 - Eric's "shelp · Apple Intelligence Pro" is a live-verified v4; "Ask AI"
   is gone.
-- Still unverified with a human: the "Replace" re-import. Testing it
-  needs a throwaway build with `ShortcutFormatVersion` bumped past the
-  installed one; the replace poll runs the installed shortcut's marker
-  every 2s, so only test it over a shortcut whose marker already works
-  (Eric's v4 now qualifies).
+- The Keep Both branch of the update wait is covered by scripted tests
+  only; Replace was run live (with a throwaway build claiming format 5).
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
   chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
   them (`--min-interval`) to stay under the limit.
