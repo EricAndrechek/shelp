@@ -34,7 +34,11 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   (`style.For(w)`: a terminal, no `NO_COLOR`, not `TERM=dumb`; forced by
   `CLICOLOR_FORCE`), brand gradient, 24-bit/256/16 fallback, `PadRight`
   for colored table cells (tabwriter counts escape codes as text). Never
-  for suggest's command, `--json`, or `shelp init`.
+  for suggest's command, `--json`, or `shelp init`. `logo.go`: `Logo(p)`,
+  the Braille "shelp" wordmark in the brand gradient, shown by `shelp
+  version`/`--help` on a terminal. Its consumers in `cmd/shelp/`:
+  `table.go` (colored `providers` table), `explain.go` (streaming explain
+  highlighter), `banner.go` (version/usage with the logo).
 - `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode,
   `--bind`; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
   `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,

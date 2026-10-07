@@ -220,6 +220,14 @@ bind = "^G"           # keybinding for shelp-widget; --bind on `shelp init` wins
 line_mode = true      # raw-line Enter interception; default true
 ```
 
+### Colors
+
+shelp colors its human-facing output only on a terminal: the providers
+status, setup progress, explain highlighting, the logo on `shelp version`
+and `--help`, and the shell integration's "thinking" status.
+`NO_COLOR=1` turns it off; `CLICOLOR_FORCE=1` forces it on. The suggested
+command, `--json`, and `shelp init` output are never colored.
+
 ## Benchmark
 
 shelp ships a benchmark harness, `shelp-bench` (see
