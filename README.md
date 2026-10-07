@@ -76,7 +76,9 @@ exactly as typed — the line is never left dangling on an open quote. The
 suggested command replaces the line in place (cursor at the end, not
 executed — press Enter again to run it) and the line you actually typed
 is added to history; explaining streams the answer below the prompt and
-returns you to an empty line. Everything else — `shelp providers`, `shelp
+returns you to an empty line. In zsh a spinner (`⠋ shelp: thinking…`)
+runs after the line while shelp works, and Ctrl-C cancels the call and
+leaves the line you typed in place to edit. Everything else — `shelp providers`, `shelp
 -p fm task`, and running `shelp task` from a script or `zsh -c` — behaves
 exactly as before.
 

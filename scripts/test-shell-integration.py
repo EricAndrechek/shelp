@@ -24,6 +24,7 @@ build step to have produced ./bin/shelp, or builds it itself.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import pty
 import re
@@ -33,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import termios
 import textwrap
 import time
 
@@ -62,13 +64,24 @@ def vprint(*a):
 # --------------------------------------------------------------------
 
 class Session:
-    """A shell (or `docker run` client) attached to a pty."""
+    """A shell (or `docker run` client) attached to a pty.
 
-    def __init__(self, argv, env, cwd=None):
+    ctty=True makes the pty the child's controlling terminal (setsid +
+    TIOCSCTTY), the way a terminal emulator starts a shell. Without it the
+    shell has no controlling tty, so ^C reaches it as a plain byte instead
+    of SIGINT -- fine for most cases, but a Ctrl-C test then never
+    interrupts anything for real."""
+
+    def __init__(self, argv, env, cwd=None, ctty=False):
         self.master_fd, slave_fd = pty.openpty()
+        preexec = None
+        if ctty:
+            def preexec():
+                fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         self.proc = subprocess.Popen(
             argv, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
             env=env, cwd=cwd, start_new_session=True, close_fds=True,
+            preexec_fn=preexec,
         )
         os.close(slave_fd)
         self.buf = ""
@@ -98,17 +111,47 @@ class Session:
                 break
         return got
 
+    def read_for(self, seconds):
+        """Drain output for exactly `seconds`. Unlike read_available, a
+        steady stream (the zsh spinner redraws every 80ms) can't stretch
+        it -- use this to act at a given moment while output keeps
+        flowing."""
+        end = time.time() + seconds
+        while True:
+            left = end - time.time()
+            if left <= 0:
+                return
+            try:
+                r, _, _ = select.select([self.master_fd], [], [], left)
+            except (OSError, ValueError):
+                return
+            if self.master_fd in r:
+                try:
+                    data = os.read(self.master_fd, 65536)
+                except OSError:
+                    return
+                if not data:
+                    return
+                self.buf += data.decode("utf-8", "replace")
+
     def send(self, s):
         os.write(self.master_fd, s.encode())
 
-    def expect(self, pattern, timeout=8.0):
+    def expect(self, pattern, timeout=8.0, bounded=False):
+        """Wait for pattern (matched against the ANSI-stripped buffer).
+        bounded=True never reads past timeout even while output keeps
+        flowing (see read_for)."""
         end = time.time() + timeout
         rx = re.compile(pattern) if isinstance(pattern, str) else pattern
         while time.time() < end:
             if rx.search(strip_ansi(self.buf)):
                 return True
-            self.read_available(timeout=min(0.2, max(0.01, end - time.time())))
-        return False
+            step = min(0.2, max(0.01, end - time.time()))
+            if bounded:
+                self.read_for(min(0.05, step))
+            else:
+                self.read_available(timeout=step)
+        return bool(rx.search(strip_ansi(self.buf)))
 
     def close(self):
         try:
@@ -165,16 +208,26 @@ STUB_SOURCE = textwrap.dedent(
     '''\
     #!/usr/bin/env python3
     """Deterministic stub for `shelp`. init/version/providers/setup delegate
-    to the real built binary (SHELP_REAL_BIN). suggest/explain never touch a
-    real model: they answer purely from their own arguments, so a test can
-    assert the exact raw text the shell integration sent."""
+    to the real built binary (SHELP_REAL_BIN), with PATH pointed at nothing
+    so `shelp providers` never finds -- let alone runs -- `shortcuts`,
+    `osascript`, `fm` or an agent CLI (it still probes the localhost
+    OpenAI-compatible ports, which is harmless). suggest/explain never
+    touch a real model: they answer purely from their own arguments, so a
+    test can assert the exact raw text the shell integration sent.
+
+    Test knobs (env): SHELP_STUB_SLEEP=<seconds> sleeps first;
+    SHELP_STUB_PIDFILE=<path> gets this process's pid at start;
+    SHELP_STUB_MARKER=<path> is created after the sleep (so a killed stub
+    never creates it); SHELP_STUB_FAIL makes it fail."""
     import os, shlex, sys, time
 
     args = sys.argv[1:]
     real = os.environ.get("SHELP_REAL_BIN")
 
     def delegate():
-        os.execv(real, [real] + args)
+        env = dict(os.environ)
+        env["PATH"] = "/nonexistent-shelp-test-path"
+        os.execve(real, [real] + args, env)
 
     if not args or args[0] not in ("suggest", "explain"):
         delegate()
@@ -191,12 +244,21 @@ STUB_SOURCE = textwrap.dedent(
     if raw is None:
         raw = " ".join(rest)
 
+    pidfile = os.environ.get("SHELP_STUB_PIDFILE")
+    if pidfile:
+        with open(pidfile, "w") as f:
+            f.write(str(os.getpid()))
+
     sleep_s = os.environ.get("SHELP_STUB_SLEEP")
     if sleep_s:
         try:
             time.sleep(float(sleep_s))
         except KeyboardInterrupt:
             sys.exit(130)
+
+    marker = os.environ.get("SHELP_STUB_MARKER")
+    if marker:
+        open(marker, "w").close()
 
     if os.environ.get("SHELP_STUB_FAIL"):
         sys.stderr.write("shelp: stub forced failure\\n")
@@ -277,7 +339,9 @@ def raw_cases(tmpdir, text_prefix=None):
 # zsh
 # --------------------------------------------------------------------
 
-def zsh_home(tmpdir, plugin_lines=""):
+def zsh_home(tmpdir, plugin_lines="", after_lines=""):
+    """A throwaway ZDOTDIR whose .zshrc loads shelp's integration, with
+    plugin_lines sourced before it and after_lines after it."""
     d = os.path.join(tmpdir, "zsh-home")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, ".zshrc"), "w") as f:
@@ -286,12 +350,17 @@ def zsh_home(tmpdir, plugin_lines=""):
         f.write("HISTSIZE=200\nSAVEHIST=200\n")
         f.write(plugin_lines + "\n")
         f.write('eval "$(command shelp init zsh)"\n')
+        f.write(after_lines + "\n")
         # test-only widgets: ^Y seeds a foreign region_highlight entry, ^T
-        # reports region_highlight/POSTDISPLAY (used by the status checks)
+        # reports BUFFER/region_highlight/POSTDISPLAY (used by the status
+        # checks), ^X^G runs shelp-widget (what `--bind` binds). The two
+        # probes are kept out of zsh-autosuggestions' reach, which would
+        # otherwise blank POSTDISPLAY before ^T could report it.
         f.write("_t_seed() { region_highlight=('0 5 bold'); }\n")
-        f.write("_t_rh() { zle -I; print -r -- \"RH=<${(j:|:)region_highlight}> PD=<$POSTDISPLAY>\"; }\n")
+        f.write("_t_rh() { zle -I; print -r -- \"BUF=<$BUFFER> RH=<${(j:|:)region_highlight}> PD=<$POSTDISPLAY>\"; }\n")
         f.write("zle -N _t_seed; zle -N _t_rh\n")
-        f.write("bindkey '^Y' _t_seed; bindkey '^T' _t_rh\n")
+        f.write("ZSH_AUTOSUGGEST_IGNORE_WIDGETS+=(_t_seed _t_rh)\n")
+        f.write("bindkey '^Y' _t_seed; bindkey '^T' _t_rh; bindkey '^X^G' shelp-widget\n")
     return d
 
 
@@ -318,6 +387,246 @@ def zsh_suggest_roundtrip(s, raw):
     return got_echo, ("" if got_echo else f"echoed output missing; buf={s.buf[-400:]!r}")
 
 
+# The zsh status spinner: `  <frame> shelp: thinking…` after the line.
+BRAILLE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+STATUS_TEXT = "shelp: thinking…"
+STATUS_LEN = 4 + len(STATUS_TEXT)  # 2 spaces + frame + space + text
+# an SGR right before a frame or the text: the status is colored
+SGR_BEFORE_STATUS = re.compile(r"\x1b\[[0-9;]*m(?=[" + BRAILLE + r"]| " + STATUS_TEXT + ")")
+# what job control would print for a background job: "[1] 12345",
+# "[1]  + done ...", "terminated", ...
+JOB_NOISE = re.compile(r"\[\d+\]|\b(done|terminated|killed|interrupt|running|suspended)\b")
+
+
+def frames_in(raw):
+    return {c for c in strip_ansi(raw) if c in BRAILLE}
+
+
+def status_entries(rep, buflen):
+    """The spinner's own region_highlight entries (by range) still present
+    in a ^T report for a BUFFER of length buflen."""
+    m = re.search(r"RH=<(.*?)> PD=<", rep)
+    if not m:
+        return ["<no RH in report>"]
+    starts = (f"{buflen + 2} {buflen + 3} ", f"{buflen + 3} {buflen + STATUS_LEN} ")
+    return [e for e in m.group(1).split("|") if e.startswith(starts)]
+
+
+def zsh_report(s):
+    s.buf = ""
+    s.send("\x14")
+    s.expect(r"PD=<[^>\r\n]*>", timeout=4)
+    s.read_available(0.2)
+    return strip_ansi(s.buf)
+
+
+def wait_for_file(s, path, timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return True
+        s.read_for(0.05)
+    return False
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def zsh_anim_checks(s, results, label, scratch):
+    """The animated in-progress status: shelp runs in the background while
+    the frame spins; afterwards the line holds the suggestion and the
+    status and its highlights are gone (a foreign region_highlight entry
+    survives); no job-control chatter; Ctrl-C kills the background shelp
+    and hands the original line back; NO_COLOR keeps the spin but drops
+    the color; a plain command runs normally right after."""
+    os.makedirs(scratch, exist_ok=True)
+    pidfile = os.path.join(scratch, "stub.pid")
+    marker = os.path.join(scratch, "stub.marker")
+    seen = ""   # everything printed from here on, for the job-noise check
+    pids = []
+
+    def run(line, wait=0.5):
+        nonlocal seen
+        s.buf = ""
+        s.send(line + "\r")
+        s.read_available(wait)
+        seen += s.buf
+
+    def fresh_pidfile():
+        if os.path.exists(pidfile):
+            os.remove(pidfile)
+
+    def note_pid():
+        try:
+            with open(pidfile) as f:
+                pids.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            pass
+
+    run("unset NO_COLOR COLORTERM SHELP_STUB_MARKER; export SHELP_STUB_SLEEP=1.5 SHELP_STUB_PIDFILE="
+        + shlex.quote(pidfile))
+    task = "anim probe"
+    buflen = len("shelp " + task)
+    modes = (
+        ("256-color", "unset NO_COLOR COLORTERM", r"\x1b\[36m"),
+        ("truecolor", "export COLORTERM=truecolor", r"\x1b\[38;2;0;196;180m"),
+        ("NO_COLOR", "unset COLORTERM; export NO_COLOR=1", None),
+    )
+    for tag, setup, frame_sgr in modes:
+        run(setup)
+        fresh_pidfile()
+        s.send("shelp " + task)
+        s.read_available(0.3)
+        s.send("\x19")  # seed a foreign highlight entry
+        s.read_available(0.2)
+        s.buf = ""
+        s.send("\r")
+        got = s.expect(re.escape(suggest_cmd(task)), timeout=8)
+        during = s.buf
+        seen += during
+        note_pid()
+        fr = frames_in(during)
+        results.check(f"{label}: spinner animates while shelp runs ({tag})",
+                      got and len(fr) >= 2 and STATUS_TEXT in during,
+                      f"suggestion={got} frames={sorted(fr)} tail={during[-300:]!r}")
+        if frame_sgr is None:
+            m = SGR_BEFORE_STATUS.search(during)
+            results.check(f"{label}: NO_COLOR status has no color", m is None,
+                          repr(during[max(0, m.start() - 60):m.end() + 20]) if m else "")
+        else:
+            ok = (re.search(frame_sgr + "[" + BRAILLE + "]", during) is not None
+                  and re.search(r"\x1b\[90m " + STATUS_TEXT, during) is not None)
+            results.check(f"{label}: frame cyan, text gray ({tag})", ok, repr(during[:400]))
+        s.read_available(0.4)
+        rep = zsh_report(s)
+        seen += s.buf
+        left = status_entries(rep, buflen)
+        ok = (f"BUF=<{suggest_cmd(task)}>" in rep and "PD=<>" in rep
+              and "RH=<0 5 bold" in rep and not left and "thinking" not in rep)
+        results.check(f"{label}: line holds the suggestion, status cleared, foreign highlight kept ({tag})",
+                      ok, f"leftover={left} rep={rep[-300:]!r}")
+        s.send("\x15")  # kill the leftover suggestion line
+        s.read_available(0.3)
+
+    # shelp-widget (the --bind widget) animates the same way
+    run("unset NO_COLOR COLORTERM")
+    fresh_pidfile()
+    s.send("widget probe")
+    s.read_available(0.3)
+    s.buf = ""
+    s.send("\x18\x07")  # ^X^G
+    got = s.expect(re.escape(suggest_cmd("widget probe")), timeout=8)
+    during = s.buf
+    seen += during
+    note_pid()
+    fr = frames_in(during)
+    rep = zsh_report(s)
+    seen += s.buf
+    results.check(f"{label}: shelp-widget animates and fills the line",
+                  got and len(fr) >= 2 and f"BUF=<{suggest_cmd('widget probe')}>" in rep
+                  and "PD=<>" in rep and "thinking" not in rep,
+                  f"frames={sorted(fr)} rep={rep[-300:]!r}")
+    s.send("\x15")
+    s.read_available(0.3)
+
+    # failure: the line comes back and shelp's stderr shows via `zle -M`
+    run("export SHELP_STUB_FAIL=1")
+    fresh_pidfile()
+    s.buf = ""
+    s.send("shelp fail probe\r")
+    got = s.expect(re.escape("shelp: shelp: stub forced failure"), timeout=8)
+    seen += s.buf
+    note_pid()
+    s.read_available(0.3)
+    rep = zsh_report(s)
+    seen += s.buf
+    results.check(f"{label}: failure shows shelp's error and keeps the line",
+                  got and "BUF=<shelp fail probe>" in rep and "PD=<>" in rep
+                  and "thinking" not in rep, f"msg={got} rep={rep[-300:]!r}")
+    s.send("\x15")
+    s.read_available(0.3)
+    run("unset SHELP_STUB_FAIL")
+
+    # Ctrl-C mid-run: the stub (sleep 1.5s, then create the marker) dies,
+    # the typed line comes back, editable, with no status or highlight left.
+    fresh_pidfile()
+    if os.path.exists(marker):
+        os.remove(marker)
+    run("export SHELP_STUB_MARKER=" + shlex.quote(marker))
+    line = "shelp what's my ip"
+    s.send(line)
+    s.read_available(0.3)
+    s.send("\x19")
+    s.read_available(0.2)
+    s.buf = ""
+    t0 = time.time()
+    s.send("\r")
+    started = (wait_for_file(s, pidfile, 5)
+               and s.expect(re.escape(STATUS_TEXT), timeout=1, bounded=True))
+    s.read_for(0.3)  # a few frames
+    early = time.time() - t0 < 1.2  # the stub (1.5s) must still be running
+    s.send("\x03")
+    s.read_for(0.6)  # INT, then TERM after at most ~250ms
+    s.read_available(0.2)
+    after_enter = s.buf
+    seen += s.buf
+    note_pid()
+    pid = pids[-1] if pids else None
+    gone = pid is not None and not pid_alive(pid)
+    results.check(f"{label}: Ctrl-C kills the background shelp", started and early and gone,
+                  f"started={started} early={early} pid={pid} buf={s.buf[-300:]!r}")
+    rep = zsh_report(s)
+    seen += s.buf
+    left = status_entries(rep, len(line))
+    ok = (f"BUF=<{line}>" in rep and "PD=<>" in rep and "RH=<0 5 bold" in rep
+          and not left and "thinking" not in rep)
+    results.check(f"{label}: Ctrl-C restores original line, status cleared",
+                  ok, f"leftover={left} rep={rep[-300:]!r}")
+    s.send(" please")
+    s.read_available(0.3)
+    rep = zsh_report(s)
+    seen += s.buf
+    results.check(f"{label}: line still editable after Ctrl-C",
+                  f"BUF=<{line} please>" in rep, rep[-300:])
+    rest = t0 + 1.5 + 1.0 - time.time()  # well past when the stub would finish
+    if rest > 0:
+        s.read_available(rest)
+        seen += s.buf
+    results.check(f"{label}: Ctrl-C'd stub never finished (no marker)",
+                  not os.path.exists(marker), marker)
+    results.check(f"{label}: Ctrl-C did not execute the suggestion",
+                  suggest_cmd("what's my ip") not in strip_ansi(after_enter), after_enter[-300:])
+    s.send("\x15")
+    s.read_available(0.3)
+    run("unset NO_COLOR COLORTERM SHELP_STUB_SLEEP SHELP_STUB_PIDFILE SHELP_STUB_MARKER")
+
+    # a plain command still runs normally right after
+    s.buf = ""
+    s.send("echo anim-after-ok\r")
+    s.expect(r"TESTPROMPT% \r?$", timeout=8)
+    s.read_available(0.3)
+    seen += s.buf
+    lines = [l.strip("\r") for l in strip_ansi(s.buf).split("\n")]
+    results.check(f"{label}: plain command runs normally right after", "anim-after-ok" in lines,
+                  s.buf[-300:])
+
+    plain = strip_ansi(seen)
+    noise = JOB_NOISE.search(plain)
+    stray_pid = [p for p in pids if re.search(r"\b%d\b" % p, plain)]
+    results.check(f"{label}: no job-control output ([1] <pid>, done, ...)",
+                  noise is None and not stray_pid and len(pids) >= 6,
+                  f"match={noise.group(0) if noise else None!r} pids={pids} stray={stray_pid} "
+                  f"near={plain[max(0, noise.start() - 80):noise.end() + 40]!r}" if noise else
+                  f"pids={pids} stray={stray_pid}")
+
+
 def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
     label = "zsh" if not with_plugins else f"zsh+{with_plugins[0]}"
     cwd = os.path.join(tmpdir, "cwd-" + label.replace("/", "_"))
@@ -325,7 +634,7 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
     plugin_lines = with_plugins[1] if with_plugins else ""
     home = zsh_home(tmpdir + "-" + label.replace("/", "_"), plugin_lines)
     env = zsh_env(stub_dir, real_bin, home, cwd)
-    s = Session(["/bin/zsh", "-i"], env, cwd=cwd)
+    s = Session(["/bin/zsh", "-i"], env, cwd=cwd, ctty=True)
     try:
         ok = s.expect(r"TESTPROMPT% ", timeout=10)
         if not results.check(f"{label}: prompt ready", ok, s.buf[-300:]):
@@ -372,61 +681,28 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
         ok = "hi" in lines
         results.check(f"{label}: plain `echo hi` still runs", ok, s.buf[-300:])
 
-        # Ctrl-C while waiting restores the original line
-        env2 = dict(env)
-        s.buf = ""
-        s.send("export SHELP_STUB_SLEEP=3\r")
-        s.read_available(0.5)
-        s.buf = ""
-        s.send("shelp what's my ip\r")
-        s.read_available(0.6)  # let it get into the (3s) stub sleep before interrupting
-        s.send("\x03")
-        ok = s.expect(re.escape("shelp what's my ip"), timeout=6)
-        results.check(f"{label}: Ctrl-C restores original line", ok, s.buf[-500:])
-        # confirm it wasn't executed (no rewritten "echo ..." got submitted)
-        no_exec = suggest_cmd("what's my ip") not in strip_ansi(s.buf).split("shelp what's my ip")[-1]
-        results.check(f"{label}: Ctrl-C did not execute the suggestion", no_exec, s.buf[-500:])
-        s.send("\x03\r")
-        s.expect(r"TESTPROMPT% \r?$", timeout=6)
-        s.send("unset SHELP_STUB_SLEEP\r")
-        s.read_available(0.5)
-        # in-progress status: gray `shelp: thinking…` while shelp runs
-        # (POSTDISPLAY + region_highlight), gone afterwards, foreign
-        # region_highlight entries untouched; NO_COLOR drops the color.
-        s.send("export SHELP_STUB_SLEEP=2\r")
-        s.read_available(0.5)
-        for nc in (False, True):
-            tag = "NO_COLOR" if nc else "color"
-            s.send(("export NO_COLOR=1" if nc else "unset NO_COLOR") + "\r")
-            s.read_available(0.5)
-            s.buf = ""
-            s.send("shelp status probe")
-            s.read_available(0.3)
-            s.send("\x19")  # seed a foreign highlight entry
-            s.read_available(0.2)
-            s.buf = ""
-            s.send("\r")
-            seen = s.expect(r"shelp: thinking…", timeout=1.5)
-            during = s.buf
-            results.check(f"{label}: status shown while running ({tag})", seen, during[-300:])
-            if seen:
-                head = during[:during.index("shelp: thinking…")]
-                sgr = re.search(r"\x1b\[[0-9;]*m[^\x1b]*$", head) is not None
-                results.check(f"{label}: status is colored ({tag})" if not nc else
-                              f"{label}: NO_COLOR status has no color",
-                              (not sgr) if nc else sgr, repr(head[-120:]))
-            s.expect(re.escape(suggest_cmd("status probe")), timeout=8)
-            s.read_available(0.4)
-            s.buf = ""
-            s.send("\x14")  # report
-            s.expect(r"PD=<", timeout=4)
-            rep = strip_ansi(s.buf)
-            results.check(f"{label}: status cleared, region_highlight restored ({tag})",
-                          ("RH=<0 5 bold" in rep and "18 36" not in rep and "thinking" not in rep), rep[-300:])
-            s.send("\x15")  # kill the leftover suggestion line
-            s.read_available(0.3)
-        s.send("unset NO_COLOR SHELP_STUB_SLEEP\r")
-        s.read_available(0.5)
+        # the animated status, Ctrl-C, NO_COLOR, job-control silence
+        zsh_anim_checks(s, results, label, os.path.join(home, "anim"))
+    finally:
+        s.close()
+
+
+def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, after_lines):
+    """Plugins sourced AFTER `shelp init` (run_zsh's with_plugins sources
+    them before it)."""
+    label = "zsh+plugins-after"
+    home = zsh_home(os.path.join(tmpdir, "plugins-after"), after_lines=after_lines)
+    cwd = os.path.join(tmpdir, "cwd-plugins-after")
+    os.makedirs(cwd, exist_ok=True)
+    env = zsh_env(stub_dir, real_bin, home, cwd)
+    s = Session(["/bin/zsh", "-i"], env, cwd=cwd, ctty=True)
+    try:
+        ok = s.expect(r"TESTPROMPT% ", timeout=10)
+        if not results.check(f"{label}: prompt ready", ok, s.buf[-300:]):
+            return
+        ok2, detail = zsh_suggest_roundtrip(s, "what's my ip")
+        results.check(f"{label}: raw suggest works", ok2, detail)
+        zsh_anim_checks(s, results, label, os.path.join(home, "anim"))
     finally:
         s.close()
 
@@ -782,31 +1058,8 @@ def main():
             before = "\n".join(f"source '{p}'" for _, p in found)
             run_zsh(tmproot, results, real_bin, stub_dir,
                     with_plugins=("plugins-before", before))
-            after_lines = "\n".join(f"source '{p}'" for _, p in found)
-            # "after" variant: source plugins, THEN shelp init -- but our
-            # zsh_home() always appends `eval "$(shelp init zsh)"` last, so
-            # passing the plugin source lines as the "before" block IS the
-            # "sourced after shelp init" case when shelp init runs first;
-            # test the reverse order explicitly below.
-            d = os.path.join(tmproot, "zsh-home-plugins-after")
-            os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, ".zshrc"), "w") as f:
-                f.write("PS1='TESTPROMPT%% '\n")
-                f.write("HISTFILE=%s/.zsh_history\nHISTSIZE=200\nSAVEHIST=200\n" % d)
-                f.write('eval "$(command shelp init zsh)"\n')
-                f.write(after_lines + "\n")
-            cwd = os.path.join(tmproot, "cwd-plugins-after")
-            os.makedirs(cwd, exist_ok=True)
-            env = zsh_env(stub_dir, real_bin, d, cwd)
-            s = Session(["/bin/zsh", "-i"], env, cwd=cwd)
-            try:
-                ok = s.expect(r"TESTPROMPT% ", timeout=10)
-                results.check("zsh+plugins-after: prompt ready", ok, s.buf[-300:])
-                if ok:
-                    ok2, detail = zsh_suggest_roundtrip(s, "what's my ip")
-                    results.check("zsh+plugins-after: raw suggest works", ok2, detail)
-            finally:
-                s.close()
+            # and the reverse order: shelp init first, then the plugins
+            run_zsh_plugins_after(tmproot, results, real_bin, stub_dir, before)
         else:
             print("  (no Homebrew zsh-autosuggestions/zsh-syntax-highlighting found; skipping plugin-coexistence run)")
 

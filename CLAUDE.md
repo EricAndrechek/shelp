@@ -44,7 +44,14 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,
   `config.go`'s `[shell]` table) and `shelp setup shell`'s rc-file
   installer (`setup.go`: idempotent marked block, chezmoi/symlink
-  detection, the macOS `~/.bash_profile` note).
+  detection, the macOS `~/.bash_profile` note). zsh's suggest status is a
+  spinner: `_shelp_run_animated` runs `command shelp` as a background job
+  (`nomonitor`: no `[1] pid`/`done` chatter, and the job ignores SIGINT,
+  so a local INT trap kills it INT -> TERM -> KILL), redraws POSTDISPLAY
+  every 80ms via `zselect`, and on Ctrl-C hands the typed line back. Its
+  pty tests (`scripts/test-shell-integration.py`) run zsh with
+  `Session(..., ctty=True)`: without a controlling tty, ^C is a plain
+  byte, never SIGINT, so a Ctrl-C test proves nothing.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
 - `internal/cooldown/` — the rate-limit cooldown store

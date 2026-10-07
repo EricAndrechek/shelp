@@ -1,6 +1,7 @@
 package shellinit
 
 import (
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -104,5 +105,46 @@ func TestRender_InvalidBindPropagatesError(t *testing.T) {
 	_, err := Render("nope", Options{Bind: "^G"})
 	if err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// The zsh status spinner runs shelp in the background (so it can animate)
+// through one helper, for both the raw-line path and shelp-widget; the
+// pty suite (scripts/test-shell-integration.py) checks its behavior, this
+// just guards the shape and, when zsh is installed, the syntax.
+func TestRender_ZshAnimatedStatus(t *testing.T) {
+	for _, o := range []Options{{}, {LineMode: true}, {LineMode: true, Bind: "^G"}} {
+		got, err := Render("zsh", o)
+		if err != nil {
+			t.Fatalf("Render(zsh, %+v): %v", o, err)
+		}
+		for _, want := range []string{
+			"zmodload zsh/zselect",
+			"_shelp_run_animated() {",
+			"setopt localtraps nomonitor nonotify",
+			"trap 'intr=1' INT",
+			"SHELP_SHELL=zsh _shelp_run_animated suggest -- \"$BUFFER\"",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("zsh %+v: missing %q", o, want)
+			}
+		}
+		if o.LineMode && !strings.Contains(got, `_shelp_run_animated suggest --shell zsh -- "$body"`) {
+			t.Errorf("zsh %+v: raw-line suggest doesn't use the animated helper", o)
+		}
+		// the only blocking `$(command shelp ...)` left is the fallback
+		// for when no temp dir can be made
+		if n := strings.Count(got, "$(command shelp"); n != 1 {
+			t.Errorf("zsh %+v: %d blocking $(command shelp ...) calls, want 1 (the no-temp-dir fallback)", o, n)
+		}
+		zsh, err := exec.LookPath("zsh")
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(zsh, "-n")
+		cmd.Stdin = strings.NewReader(got)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("zsh -n %+v: %v\n%s", o, err, out)
+		}
 	}
 }

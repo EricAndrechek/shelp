@@ -22,47 +22,103 @@ shelp() {
 # script, a keybinding, or `zsh -c`.)
 alias shelp='noglob shelp'
 
-# In-progress status: drawn like zsh-autosuggestions' gray suggestion --
-# appended to the line via POSTDISPLAY and colored by one region_highlight
-# entry (offsets are relative to BUFFER, so the entry starts at $#BUFFER and
-# spans POSTDISPLAY; no `P` flag, which only matters when PREDISPLAY is
-# highlighted). `zle -R` repaints it BEFORE the blocking shelp call. The
-# prior POSTDISPLAY is saved and the one entry we added is removed by its
-# range, so other plugins' highlights survive. NO_COLOR skips the color.
-typeset -g _shelp_saved_post _shelp_status_entry _shelp_status_range
-_shelp_status_show() {
-  _shelp_saved_post=$POSTDISPLAY
-  _shelp_status_entry=''
-  _shelp_status_range=''
-  POSTDISPLAY='  shelp: thinking…'
+# In-progress status: a spinner drawn like zsh-autosuggestions' gray
+# suggestion -- `  ⠋ shelp: thinking…` appended to the line via POSTDISPLAY
+# and colored by two region_highlight entries, the frame cyan and the text
+# gray (offsets are relative to BUFFER, so they start at $#BUFFER and span
+# POSTDISPLAY; no `P` flag, which only matters when PREDISPLAY is
+# highlighted). Every frame is one character, so the ranges stay valid while
+# it spins. Afterwards the prior POSTDISPLAY is put back and only our two
+# entries are removed, by range, so other plugins' highlights survive.
+# NO_COLOR skips the color, not the animation. zsh/zselect sleeps between
+# frames without spawning a process (`sleep` only if it's missing).
+typeset -gi _shelp_zselect=0
+zmodload zsh/zselect 2>/dev/null && _shelp_zselect=1
+
+# _shelp_run_animated ARGS...: run `command shelp ARGS` in the background,
+# animating the status until it exits. Sets the caller's _shelp_out to its
+# stdout (trailing newlines stripped, as $(...) does) and _shelp_err to its
+# stderr, and returns its exit status -- or 130 when Ctrl-C cancelled it,
+# after making sure it is gone. Temp files are removed on every path.
+_shelp_run_animated() {
+  emulate -L zsh
+  # nomonitor/nonotify: no job-control chatter ([1] 12345, "done") and no
+  # new process group. That also makes the job ignore SIGINT -- the INT
+  # trap below stops it instead (shelp itself re-enables SIGINT, so Ctrl-C
+  # still reaches it the way it reaches a foreground command). nobgnice:
+  # same priority as a foreground command.
+  setopt localtraps nomonitor nonotify nobgnice noerrexit noerrreturn
+  _shelp_out='' _shelp_err=''
+  local text='shelp: thinking…' saved_post=$POSTDISPLAY tmpd pid sig t k
+  local -i rc=0 intr=0 i=0 n=$#BUFFER
+  local -a frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) hl
   if [[ -z ${NO_COLOR-} ]]; then
-    _shelp_status_range="$#BUFFER $(( $#BUFFER + $#POSTDISPLAY )) "
-    _shelp_status_entry="${_shelp_status_range}fg=8"
-    region_highlight+=("$_shelp_status_entry")
+    k='fg=6'
+    [[ ${COLORTERM-} == (truecolor|24bit) ]] && k='fg=#00c4b4'
+    hl=("$(( n + 2 )) $(( n + 3 )) $k" "$(( n + 3 )) $(( n + 4 + $#text )) fg=8")
   fi
+  tmpd=$(command mktemp -d "${TMPDIR:-/tmp}/shelp.XXXXXX" 2>/dev/null)
+  region_highlight+=("${hl[@]}")
+  POSTDISPLAY="  ${frames[1]} $text"
   zle -R
-}
-_shelp_status_clear() {
-  if [[ -n $_shelp_status_range ]]; then
+  if [[ -z $tmpd || ! -d $tmpd ]]; then
+    # nowhere to collect output: block, with the first frame standing still
+    _shelp_out=$(command shelp "$@" 2>/dev/null)
+    rc=$?
+  else
+    trap 'intr=1' INT
+    command shelp "$@" >|$tmpd/out 2>|$tmpd/err &
+    pid=$!
+    while :; do
+      if (( _shelp_zselect )); then zselect -t 8; else command sleep 0.08; fi
+      (( intr )) && break
+      kill -0 $pid 2>/dev/null || break
+      (( i++ ))
+      POSTDISPLAY="  ${frames[i % $#frames + 1]} $text"
+      zle -R
+    done
+    (( intr )) || wait $pid
+    rc=$?
+    if (( intr )); then
+      # Ctrl-C: give the line back at once, then make sure shelp is gone --
+      # INT first (it cancels its own model call), then TERM, then KILL.
+      POSTDISPLAY=$saved_post
+      for k in "${hl[@]}"; do
+        region_highlight=("${(@)region_highlight:#${k% *} *}")
+      done
+      hl=()
+      zle -R
+      for sig in INT TERM KILL; do
+        kill -$sig $pid 2>/dev/null || break
+        for t in 1 2 3 4 5; do
+          kill -0 $pid 2>/dev/null || break 2
+          if (( _shelp_zselect )); then zselect -t 5; else command sleep 0.05; fi
+        done
+      done
+      wait $pid 2>/dev/null
+      rc=130
+    else
+      [[ -r $tmpd/out ]] && _shelp_out=$(<$tmpd/out)
+      [[ -r $tmpd/err ]] && _shelp_err=$(<$tmpd/err)
+    fi
+    command rm -rf -- "$tmpd" 2>/dev/null
+  fi
+  POSTDISPLAY=$saved_post
+  for k in "${hl[@]}"; do
     # match by range, not full string: zsh rewrites the style of an entry
     # it can't render (e.g. fg=8 on an 8-color TERM becomes `none`)
-    region_highlight=("${(@)region_highlight:#${_shelp_status_range}*}")
-    _shelp_status_range=''
-  fi
-  _shelp_status_entry=''
-
-  POSTDISPLAY=$_shelp_saved_post
+    region_highlight=("${(@)region_highlight:#${k% *} *}")
+  done
+  return $rc
 }
 
 # Widget: turn the text on the command line into a command in place.
 {{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bindkey '^G' shelp-widget{{end}}
 shelp-widget() {
   [[ -z $BUFFER ]] && return
-  local cmd
-  _shelp_status_show
-  cmd=$(SHELP_SHELL=zsh command shelp suggest -- "$BUFFER" 2>/dev/null)
-  _shelp_status_clear
-  [[ -n $cmd ]] && BUFFER=$cmd && CURSOR=${#BUFFER}
+  local _shelp_out _shelp_err
+  SHELP_SHELL=zsh _shelp_run_animated suggest -- "$BUFFER"
+  [[ -n $_shelp_out ]] && BUFFER=$_shelp_out && CURSOR=${#BUFFER}
   zle reset-prompt
 }
 zle -N shelp-widget
@@ -80,7 +136,7 @@ _shelp_raw_dispatch() {
   # $1: mode (suggest|explain); $2: original typed line (for history);
   # $3: raw payload, byte-for-byte.
   emulate -L zsh
-  local kind=$1 orig=$2 body=$3 cmd rc errfile
+  local kind=$1 orig=$2 body=$3 cmd rc _shelp_out _shelp_err
   if [[ $kind == explain ]]; then
     zle -I
     command shelp explain --shell zsh -- "$body"
@@ -97,11 +153,9 @@ _shelp_raw_dispatch() {
     zle reset-prompt
     return
   fi
-  errfile=$(mktemp "${TMPDIR:-/tmp}/shelp-line.XXXXXX" 2>/dev/null) || errfile=/dev/null
-  _shelp_status_show
-  cmd=$(command shelp suggest --shell zsh -- "$body" 2>"$errfile")
+  _shelp_run_animated suggest --shell zsh -- "$body"
   rc=$?
-  _shelp_status_clear
+  cmd=$_shelp_out
   if (( rc == 0 )) && [[ -n $cmd ]]; then
     print -s -- "$orig"
     BUFFER=$cmd
@@ -109,9 +163,9 @@ _shelp_raw_dispatch() {
   else
     BUFFER=$orig
     CURSOR=${#BUFFER}
-    [[ -s $errfile ]] && zle -M "shelp: $(<$errfile)"
+    # 130: Ctrl-C cancelled it -- just hand the line back, no message
+    (( rc != 130 )) && [[ -n $_shelp_err ]] && zle -M "shelp: $_shelp_err"
   fi
-  command rm -f "$errfile" 2>/dev/null
   zle reset-prompt
 }
 
