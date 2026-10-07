@@ -397,3 +397,31 @@ func SetupSteps() []SetupStep {
 	defer mu.Unlock()
 	return append([]SetupStep(nil), setupSteps...)
 }
+
+// NoteFunc returns short, human-facing notes a family wants shown below
+// the `shelp providers` view, about things no single provider's row
+// covers (e.g. leftover Apple Shortcuts from an older shelp). It runs after
+// every Detect, may reuse what Detect cached, and returns nil when there is
+// nothing to say.
+type NoteFunc func(ctx context.Context, cfg *config.Config) []string
+
+var noteFuncs []NoteFunc
+
+// RegisterNotes adds a NoteFunc. Call it from init().
+func RegisterNotes(f NoteFunc) {
+	mu.Lock()
+	defer mu.Unlock()
+	noteFuncs = append(noteFuncs, f)
+}
+
+// Notes runs every registered NoteFunc, in registration order.
+func Notes(ctx context.Context, cfg *config.Config) []string {
+	mu.Lock()
+	fs := append([]NoteFunc(nil), noteFuncs...)
+	mu.Unlock()
+	var out []string
+	for _, f := range fs {
+		out = append(out, f(ctx, cfg)...)
+	}
+	return out
+}

@@ -379,8 +379,17 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(rows)
 	}
-	_, err = io.WriteString(stdout, renderProviders(style.For(stdout), rows, chainFor("", cfg), chainSource(cfg), *all, style.TermWidth(stdout), provider.Offline()))
-	return err
+	pal := style.For(stdout)
+	if _, err = io.WriteString(stdout, renderProviders(pal, rows, chainFor("", cfg), chainSource(cfg), *all, style.TermWidth(stdout), provider.Offline())); err != nil {
+		return err
+	}
+	if notes := provider.Notes(ctx, cfg); len(notes) > 0 {
+		fmt.Fprintln(stdout)
+		for _, n := range notes {
+			fmt.Fprintln(stdout, pal.Warn("note: "+n))
+		}
+	}
+	return nil
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
