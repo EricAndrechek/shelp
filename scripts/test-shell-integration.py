@@ -398,6 +398,10 @@ SGR_BEFORE_STATUS = re.compile(r"\x1b\[[0-9;]*m(?=[" + BRAILLE + r"]| " + STATUS
 JOB_NOISE = re.compile(r"\[\d+\]|\b(done|terminated|killed|interrupt|running|suspended)\b")
 
 
+CURSOR_HIDE = "\x1b[?25l"
+CURSOR_SHOW = "\x1b[?25h"
+
+
 def frames_in(raw):
     return {c for c in strip_ansi(raw) if c in BRAILLE}
 
@@ -496,6 +500,14 @@ def zsh_anim_checks(s, results, label, scratch):
         results.check(f"{label}: spinner animates while shelp runs ({tag})",
                       got and len(fr) >= 2 and STATUS_TEXT in during,
                       f"suggestion={got} frames={sorted(fr)} tail={during[-300:]!r}")
+        # the cursor is hidden before the first frame and shown again after
+        # the last one, so it never jumps onto the spinner between redraws
+        hide, show = during.find(CURSOR_HIDE), during.rfind(CURSOR_SHOW)
+        first = re.search("[" + BRAILLE + "]", during)
+        last = max((m.end() for m in re.finditer("[" + BRAILLE + "]", during)), default=-1)
+        results.check(f"{label}: cursor hidden while the spinner runs ({tag})",
+                      first is not None and 0 <= hide < first.start() and show > last,
+                      f"hide={hide} first={first.start() if first else None} show={show} last={last}")
         if frame_sgr is None:
             m = SGR_BEFORE_STATUS.search(during)
             results.check(f"{label}: NO_COLOR status has no color", m is None,
@@ -580,6 +592,8 @@ def zsh_anim_checks(s, results, label, scratch):
     note_pid()
     pid = pids[-1] if pids else None
     gone = pid is not None and not pid_alive(pid)
+    results.check(f"{label}: Ctrl-C shows the cursor again", CURSOR_SHOW in after_enter,
+                  after_enter[-200:])
     results.check(f"{label}: Ctrl-C kills the background shelp", started and early and gone,
                   f"started={started} early={early} pid={pid} buf={s.buf[-300:]!r}")
     rep = zsh_report(s)

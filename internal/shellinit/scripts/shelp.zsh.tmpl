@@ -52,6 +52,13 @@ _shelp_run_animated() {
   local text='shelp: thinking…' saved_post=$POSTDISPLAY tmpd pid sig t k
   local -i rc=0 intr=0 i=0 n=$#BUFFER
   local -a frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) hl
+  # Hide the cursor while the frame spins: every `zle -R` draws the status
+  # and then moves the cursor back to the end of the line, and terminals
+  # paint that round trip as the cursor block jumping onto the spinner.
+  local hide='' show=''
+  if [[ ${TERM-} != dumb && -n ${TTY-} && -w ${TTY-} ]]; then
+    hide=$'\e[?25l' show=$'\e[?25h'
+  fi
   if [[ -z ${NO_COLOR-} ]]; then
     k='fg=6'
     [[ ${COLORTERM-} == (truecolor|24bit) ]] && k='fg=#00c4b4'
@@ -60,6 +67,7 @@ _shelp_run_animated() {
   tmpd=$(command mktemp -d "${TMPDIR:-/tmp}/shelp.XXXXXX" 2>/dev/null)
   region_highlight+=("${hl[@]}")
   POSTDISPLAY="  ${frames[1]} $text"
+  [[ -n $hide ]] && print -rn -- $hide >$TTY 2>/dev/null
   zle -R
   if [[ -z $tmpd || ! -d $tmpd ]]; then
     # nowhere to collect output: block, with the first frame standing still
@@ -88,6 +96,7 @@ _shelp_run_animated() {
       done
       hl=()
       zle -R
+      [[ -n $show ]] && print -rn -- $show >$TTY 2>/dev/null
       for sig in INT TERM KILL; do
         kill -$sig $pid 2>/dev/null || break
         for t in 1 2 3 4 5; do
@@ -109,6 +118,7 @@ _shelp_run_animated() {
     # it can't render (e.g. fg=8 on an 8-color TERM becomes `none`)
     region_highlight=("${(@)region_highlight:#${k% *} *}")
   done
+  [[ -n $show ]] && print -rn -- $show >$TTY 2>/dev/null
   return $rc
 }
 
