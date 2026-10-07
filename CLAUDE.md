@@ -166,23 +166,40 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
 - `ShortcutFormatVersion` (Go const in `shortcutgen.go`) is the current
   generated shortcut's plist format: **1** (shelp 0.1.x) was the
   original, marker-less, 2-action (Use Model + Stop and Output) shape
-  above; **2** (shelp 0.2.0-0.2.1) added a leading version-marker `If`
-  block but stored its `WFInput` wrong, so a v2 shortcut fails EVERY run,
-  real prompts included, with "Please choose a value for each parameter
-  in this action." (+ a notification); **3** (current) fixes that
-  `WFInput`. The block: "If Shortcut Input is `__shelp_shortcut_version__`,
-  Stop and Output the text `shelp-shortcut 3` (no model call); Otherwise,
-  `<the v1 pair>`; End If" -- 6 actions (`currentShortcutActionCount()`).
+  above. **2** (0.2.0-0.2.1) added a leading version-marker `If` block
+  and **3** (0.2.2) fixed its `WFInput` wrapper, but both fail EVERY run,
+  real prompts included, at the If with "Please choose a value for each
+  parameter in this action." (+ a notification). **4** (0.2.3, current)
+  is the first one verified live (2026-10-07: marker -> `shelp-shortcut
+  4`, a real prompt -> a command): "Text: Shortcut Input. If Text is
+  `__shelp_shortcut_version__`, Stop and Output the text `shelp-shortcut
+  4` (no model call); Otherwise, `<the v1 pair>`; End If" -- 7 actions
+  (`currentShortcutActionCount()`). The reply has no trailing newline, so
+  when checking it by hand pipe it through `od -c`: an interactive prompt
+  can draw over it and make it look empty.
 - The `is.workflow.actions.conditional` action (`If`/`Otherwise`/`End If`)
   repeats one identifier three times, sharing a `GroupingIdentifier` and
   varying `WFControlFlowMode` (`0` If, `1` Otherwise, `2` End If, which
   alone carries a `UUID`). Only the `If` sets `WFCondition` (`4` = "Is"
   on text), `WFConditionalActionString` (the literal), and `WFInput`,
-  which is wrapped: `{"Type":"Variable","Variable":{"Value":{"Type":
-  "ExtensionInput"},"WFSerializationType":"WFTextTokenAttachment"}}`. v2
-  put the inner attachment there bare; Shortcuts imported it silently and
-  then treated the input as unset. No Gallery `.wflow` has a conditional;
-  the shape comes from the 20 If actions in Eric's own library.
+  which is wrapped: `{"Type":"Variable","Variable":{"Value":<attachment>,
+  "WFSerializationType":"WFTextTokenAttachment"}}` (v2 put the attachment
+  there bare). Two traps, both silent at import and fatal at run time:
+  the subject must have a TEXT type for "Is" -- Shortcut Input of a
+  shortcut that accepts text or files doesn't (v3), so v4 compares the
+  `ActionOutput` (`OutputName` "Text") of an `is.workflow.actions.gettext`
+  holding Shortcut Input, the way Apple-built shortcuts compare text; and
+  a missing wrapper (v2). No Gallery `.wflow` has a conditional; sources:
+  the 20 If actions in Eric's own library, and
+  `viticci/shortcuts-playground-plugin`'s CONTROL_FLOW.md (macOS 27, checked
+  against Apple-built samples). Newer Shortcuts also has a multi-condition
+  `WFConditions` (`WFContentPredicateTableTemplate`) form; the
+  single-condition form still works.
+- **Debugging a failed run**: `/usr/bin/log show --start "<time>" --style
+  compact` filtered to `BackgroundShortcutRunner` lists each action as it
+  runs ("Running action <WFTextAction ...>", "finished with error {domain:
+  ConditionalAction, code: 1}", `WFActionIndex`), which is how v3's If and
+  v4's untouched model branch were confirmed without running anything.
 - **Reading what Shortcuts actually stored** (no side effects, the way
   the v2 bug was found): copy `~/Library/Shortcuts/Shortcuts.sqlite*` to
   the scratchpad, then `ZSHORTCUT` (`ZNAME`, `ZACTIONCOUNT`, `ZACTIONS`)
@@ -198,12 +215,11 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   So: count 2 -> v1 (never sent the marker: its only real action is Use
   Model); count 0 or >= 6 -> run it with the marker as input and parse
   `shelp-shortcut N` (`shortcutMarkerVersionCmd`); anything else -> not a
-  shelp format. Any failure (Shortcuts Events down, a v2 that fails every
-  run) is "unknown", never outdated. `Detect` reports an outdated
+  shelp format. Any failure (Shortcuts Events down, a v2/v3 that fails
+  every run) is "unknown", never outdated. `Detect` reports an outdated
   shortcut as available with a `Reason` (`outdated shortcut (format vN,
   current vM): run \`shelp setup shortcuts\` to update`), which `shelp
-  providers` appends to the "ok" row. The marker run against a REAL
-  installed v3 has not been done yet -- see Open items.
+  providers` appends to the "ok" row.
 - **Update flow** (`shelp setup shortcuts`): each variant in the install
   list -- plus any `shortcutVariants` entry already installed, so an
   upgrade covers everything the user has -- is *missing* (generate, sign,
@@ -384,17 +400,13 @@ limit instead of tripping the breaker at all.
 
 ## Open items (2026-10-07)
 
-- The user's "shelp · Apple Intelligence Pro" (installed 2026-10-07) is
-  a broken v2; "Ask AI" is gone. They delete it by hand, `shelp setup
-  shortcuts` (Add flow) installs a v3, and then THEY run, via `!`, the
-  first live check of v3: the marker
-  (`printf __shelp_shortcut_version__ | shortcuts run "shelp · Apple
-  Intelligence Pro" -o - --output-type public.plain-text` -> `shelp-shortcut 3`)
-  and one real prompt.
+- Eric's "shelp · Apple Intelligence Pro" is a live-verified v4; "Ask AI"
+  is gone.
 - Still unverified with a human: the "Replace" re-import. Testing it
   needs a throwaway build with `ShortcutFormatVersion` bumped past the
   installed one; the replace poll runs the installed shortcut's marker
-  every 2s, so only test it over a shortcut whose marker already works.
+  every 2s, so only test it over a shortcut whose marker already works
+  (Eric's v4 now qualifies).
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
   chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
   them (`--min-interval`) to stay under the limit.

@@ -420,7 +420,7 @@ through documented flags:
   generates (a new `ShortcutFormatVersion`), an already-installed one
   doesn't update itself. shelp notices on its own — `shelp providers`
   shows an outdated shortcut as available but with a note (`outdated
-  shortcut (format v1, current v3): run \`shelp setup shortcuts\` to
+  shortcut (format v1, current v4): run \`shelp setup shortcuts\` to
   update`), and a normal `shelp` call prints a one-line stderr hint the
   first time it runs after a new shelp version if any shortcut it'd use
   is outdated — so just re-run `shelp setup shortcuts`: it regenerates
@@ -428,9 +428,10 @@ through documented flags:
   except this time click **"Replace"** instead of "Add Shortcut" when
   Shortcuts asks. (After a `brew upgrade shelp`, this is the same command
   to reach for — see the Formula's caveats.)
-- **Shortcuts installed by shelp 0.2.0 or 0.2.1 are broken**: their
-  format-2 version check was malformed, so every run fails with "Please
-  choose a value for each parameter in this action." and a notification.
+- **Shortcuts installed by shelp 0.2.0, 0.2.1 or 0.2.2 are broken**: their
+  version check (formats 2 and 3) was malformed, so every run fails with
+  "Please choose a value for each parameter in this action." and a
+  notification.
   shelp can't ask a broken shortcut its version, so it won't replace one
   for you: delete it in the Shortcuts app, then run `shelp setup
   shortcuts` again.
