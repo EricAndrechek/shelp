@@ -81,15 +81,15 @@ type usageError struct{ error }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		printUsage(stderr)
 		return usageError{errors.New("no task given")}
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
-		fmt.Fprint(stdout, usage)
+		printUsage(stdout)
 		return nil
 	case "version", "--version":
-		fmt.Fprintln(stdout, "shelp", version)
+		printVersion(stdout)
 		return nil
 	case "init":
 		return runInit(args[1:], stdout, stderr)
