@@ -22,8 +22,16 @@ _shelp_suggest_flow() {
 
 shelp() {
   case "${1-}" in
-    ''|-h|--help|help|explain|-e|init|setup|providers|version|--version)
+    ''|-h|--help|help|init|setup|providers|version|--version)
       SHELP_SHELL=bash command shelp "$@" ;;
+    explain|-e)
+      # On a terminal, a blank line after the explanation so it doesn't
+      # run into the next prompt (as zsh and fish's raw line mode do).
+      # Piped or redirected output stays byte-for-byte.
+      local rc=0
+      SHELP_SHELL=bash command shelp "$@" || rc=$?
+      [ -t 1 ] && echo
+      return $rc ;;
     suggest)
       # Reached by raw line mode below, which rewrites the typed line to
       # `shelp suggest -- <task>`: same editable "run>" flow as the
