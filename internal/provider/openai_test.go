@@ -19,7 +19,7 @@ import (
 
 // TestMain points XDG_CACHE_HOME at a throwaway directory for the whole
 // package test run, so tests never read or write the real
-// ~/.cache/shelp/local-models.json. Individual tests that want an empty,
+// ~/.cache/shelp/local-models.json, and fakes the shortcut version probe. Individual tests that want an empty,
 // per-test cache still call setCacheHome.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "shelp-openai-test-cache")
@@ -27,6 +27,10 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_CACHE_HOME", dir)
+	// Never run a real installed shortcut from a unit test: the version
+	// probe defaults to "current format". Tests that need another answer
+	// replace it themselves.
+	shortcutMarkerVersionCmd = func(context.Context, string) (int, error) { return ShortcutFormatVersion, nil }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

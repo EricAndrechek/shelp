@@ -215,18 +215,21 @@ func appleScriptQuote(s string) string {
 // shortcutActionCountCmd runs a read-only AppleScript query for name's
 // installed action count via the Shortcuts Events app's scripting
 // dictionary. Verified live on macOS 27.0 against the real, installed
-// "Ask AI" shortcut (a v1, 2-action shortcut):
+// "Ask AI" shortcut (a v1, 2-action shortcut built by hand in the editor):
 //
 //	osascript -e 'tell application "Shortcuts Events" to get action count of shortcut "Ask AI"'
 //	-> 2, ~150-170ms
 //
 // and against a nonexistent name (exit 1, "Can't get shortcut ... (-1728)"
 // on stderr). This never runs the shortcut and never touches the model --
-// it only asks the app a property of the shortcut object -- so it's the
-// cheap, safe check the outdated-version detection is built on: it's safe
-// to call on a shortcut of unknown format, unlike shortcutVersionMarker,
-// which callers must only send once this check has confirmed the count
-// already matches the current generator.
+// it only asks the app a property of the shortcut object -- so it's safe
+// to call on a shortcut of unknown format, unlike shortcutVersionMarker.
+//
+// It reads a count Shortcuts caches when a shortcut is saved, and a
+// shortcut imported from a .shortcut file -- which is how `shelp setup
+// shortcuts` installs every one -- never gets it: it reads 0 (subtitle "No
+// actions") with all its actions stored, verified live on macOS 27.0. Only
+// a nonzero count says anything; see installedShortcutVersion.
 //
 // It's a package var, like shortcutsListCmd/openCmd, so tests can fake it
 // without ever touching the real Shortcuts app, and so production code can
@@ -247,28 +250,86 @@ var shortcutActionCountCmd = func(ctx context.Context, name string) (int, error)
 	return n, nil
 }
 
-// outdatedShortcutNote reports whether the installed shortcut named name is
-// outdated relative to the current generator (shortcutgen.go's
-// currentShortcutActionCount), by comparing action counts -- never by
-// running the marker (see shortcutActionCountCmd's doc comment: never sent
-// to a shortcut whose count says v1). It returns "" when the count matches
-// the current format, or when the check itself failed: an osascript error
-// (Shortcuts Events unavailable, a transient failure, ...) must never make
-// an otherwise-working, installed shortcut look unavailable or wrongly
-// "outdated" -- this is a best-effort note, not a hard gate.
-func outdatedShortcutNote(ctx context.Context, name string) string {
+// shortcutMarkerMinActions is the fewest actions any marker-carrying
+// format (v2+) can have: If, Text, Stop and Output, Otherwise, Use Model,
+// Stop and Output, End If minus the shared ones -- currently 6. A shortcut
+// below this is never sent shortcutVersionMarker: it can't contain the
+// marker branch, so the marker would reach Use Model as a real prompt.
+const shortcutMarkerMinActions = 6
+
+// shortcutMarkerVersionCmd asks an installed shortcut which format it was
+// generated with by sending it shortcutVersionMarker. For v3+ the marker
+// branch answers "shelp-shortcut <N>" without ever reaching Use Model, so
+// this costs no model call, no quota, and posts no notification. A v2
+// shortcut fails here like it fails every run (exit 1, and Shortcuts posts
+// a notification), and that failure is just an unreadable version. Callers
+// go through installedShortcutVersion, which never sends the marker to a
+// shortcut whose count rules the marker branch out. A package var so tests
+// never run a real shortcut.
+var shortcutMarkerVersionCmd = func(ctx context.Context, name string) (int, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	res, err := RunCmd(cctx, strings.NewReader(shortcutVersionMarker), nil,
+		"shortcuts", "run", name, "-o", "-", "--output-type", "public.plain-text")
+	if err != nil {
+		return 0, err
+	}
+	if res.ExitCode != 0 {
+		return 0, fmt.Errorf("shortcuts run exited %d: %s", res.ExitCode, FirstLine(res.Stderr))
+	}
+	return parseShortcutMarkerReply(res.Stdout)
+}
+
+// parseShortcutMarkerReply parses the marker branch's "shelp-shortcut <N>".
+func parseShortcutMarkerReply(out string) (int, error) {
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) == 2 && f[0] == "shelp-shortcut" {
+		if n, err := strconv.Atoi(f[1]); err == nil && n > 0 {
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("unexpected version-marker reply %q", strings.TrimSpace(out))
+}
+
+// installedShortcutVersion reports which ShortcutFormatVersion the
+// installed shortcut called name was generated with. Format 1 has no
+// marker and is recognized by its action count alone; every later format
+// answers the marker, so a format change that keeps the same number of
+// actions is still detected. A count of 0 means Shortcuts never cached
+// one (a file import, see shortcutActionCountCmd), so the marker is the
+// only way to tell; a nonzero count too small to hold the marker branch
+// (and not v1) is reported as an error rather than probed.
+//
+// The one case this sends the marker somewhere it doesn't belong is a
+// file-imported shortcut without the marker branch -- a v1 file from shelp
+// 0.1.x, or a shortcut from elsewhere named in [shortcuts].names -- where
+// it reaches the model as one ordinary prompt.
+func installedShortcutVersion(ctx context.Context, name string) (int, error) {
 	count, err := shortcutActionCountCmd(ctx, name)
 	if err != nil {
-		return ""
-	}
-	current := currentShortcutActionCount()
-	if count == current {
-		return ""
+		return 0, err
 	}
 	if count == shortcutV1ActionCount {
-		return fmt.Sprintf("outdated shortcut (format v1, current v%d): run `shelp setup shortcuts` to update", ShortcutFormatVersion)
+		return 1, nil
 	}
-	return fmt.Sprintf("outdated shortcut (%d actions, current format v%d expects %d): run `shelp setup shortcuts` to update", count, ShortcutFormatVersion, current)
+	if count != 0 && count < shortcutMarkerMinActions {
+		return 0, fmt.Errorf("%q has %d actions: not a shelp-generated format", name, count)
+	}
+	return shortcutMarkerVersionCmd(ctx, name)
+}
+
+// outdatedShortcutNote returns a one-line note when the installed shortcut
+// called name was generated by an older shelp (see
+// installedShortcutVersion), else "". A failed check returns "": an
+// installed, working shortcut must never look unavailable or wrongly
+// outdated because Shortcuts Events hiccuped -- this is a best-effort
+// note, not a hard gate.
+func outdatedShortcutNote(ctx context.Context, name string) string {
+	v, err := installedShortcutVersion(ctx, name)
+	if err != nil || v >= ShortcutFormatVersion {
+		return ""
+	}
+	return fmt.Sprintf("outdated shortcut (format v%d, current v%d): run `shelp setup shortcuts` to update", v, ShortcutFormatVersion)
 }
 
 func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, error) {
@@ -471,23 +532,19 @@ func waitForShortcut(ctx context.Context, name string, progress io.Writer) (bool
 	}
 }
 
-// waitForShortcutUpdate polls name's installed action count (via
-// shortcutActionCountCmd) until it equals wantCount, printing one "." per
-// attempt, up to shortcutsPollTimeout. It checks immediately before ever
-// sleeping, like waitForShortcut. Used after re-opening an ALREADY
-// installed, outdated shortcut for the user to click "Replace": unlike
-// waitForShortcut (which waits for a new name to appear in `shortcuts
-// list`), the name is already installed throughout, so presence alone
-// can't distinguish an accepted replace from a declined/unopened import
-// dialog -- only the action count actually changing can.
-func waitForShortcutUpdate(ctx context.Context, name string, wantCount int, progress io.Writer) (bool, error) {
+// waitForShortcutUpdate polls name's installed format version (see
+// installedShortcutVersion) until it reaches wantVersion, printing one "."
+// per attempt, up to shortcutsPollTimeout. It checks immediately before
+// sleeping, like waitForShortcut. Used after re-opening an already
+// installed, outdated shortcut for the user to click "Replace": the name
+// exists throughout, so only the version changing can tell an accepted
+// replace from a declined or never-opened import dialog. A failed check
+// mid-poll (the shortcut is briefly missing while Shortcuts swaps it) is
+// retried, not fatal.
+func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, progress io.Writer) (bool, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
 	for {
-		count, err := shortcutActionCountCmd(ctx, name)
-		if err != nil {
-			return false, err
-		}
-		if count == wantCount {
+		if v, err := installedShortcutVersion(ctx, name); err == nil && v >= wantVersion {
 			return true, nil
 		}
 		if !time.Now().Before(deadline) {
@@ -532,19 +589,18 @@ func shortcutSetupKeys(wanted []string, sc shortcutsConfig, installed map[string
 //
 //   - missing: generate, sign, open (user clicks "Add Shortcut"), poll
 //     `shortcuts list` until the name appears -- as before.
-//   - outdated (installed, but its action count doesn't match the current
-//     generator's -- see shortcutgen.go's currentShortcutActionCount):
-//     regenerate, sign, open (user clicks "Replace" this time -- Shortcuts
-//     offers that button when importing over an existing name; UNVERIFIED
-//     without a human actually doing it, see MERGE NOTES), then poll the
-//     action count (not presence: the name doesn't change) until it
-//     matches the current count, with the same timeout as install.
-//   - current: skip with a message.
+//   - outdated (installedShortcutVersion is older than
+//     ShortcutFormatVersion): regenerate, sign, open (user clicks
+//     "Replace" this time -- Shortcuts offers that button when importing
+//     over an existing name; UNVERIFIED without a human actually doing
+//     it), then poll the version (not presence: the name doesn't change)
+//     until it's current, with the same timeout as install.
+//   - current or newer: skip with a message.
 //
-// An action-count check that itself fails (Shortcuts Events unavailable,
-// transient) is never treated as outdated -- same reasoning as Detect's
-// outdatedShortcutNote -- so that variant is skipped with a note instead
-// of being needlessly re-opened.
+// A version check that itself fails (Shortcuts Events unavailable, a
+// shortcut that fails every run) is never treated as outdated -- same
+// reasoning as Detect's outdatedShortcutNote -- so that variant is skipped
+// with a note instead of being re-opened.
 func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr io.Writer) error {
 	if runtime.GOOS != "darwin" {
 		fmt.Fprintln(stdout, "shortcuts: darwin only, nothing to do here")
@@ -573,7 +629,6 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	}
 	defer os.RemoveAll(tmpDir)
 
-	current := currentShortcutActionCount()
 	for _, key := range shortcutSetupKeys(wanted, sc, installed) {
 		v, ok := variantByKey(key)
 		if !ok {
@@ -607,17 +662,24 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			continue
 		}
 
-		count, cerr := shortcutActionCountCmd(ctx, name)
-		if cerr != nil {
-			fmt.Fprintf(stdout, "shortcuts: %s: %q installed, couldn't check its version (%v); assuming current\n", v.id, name, cerr)
+		// An unreadable version is left alone rather than replaced: the
+		// replace flow polls the version, and polling a shortcut that fails
+		// every run (a v2) would post a notification every poll.
+		have, verr := installedShortcutVersion(ctx, name)
+		if verr != nil {
+			fmt.Fprintf(stdout, "shortcuts: %s: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again\n", v.id, name, verr)
 			continue
 		}
-		if count == current {
+		if have == ShortcutFormatVersion {
 			fmt.Fprintf(stdout, "shortcuts: %s: %q already up to date (v%d), skipping\n", v.id, name, ShortcutFormatVersion)
 			continue
 		}
+		if have > ShortcutFormatVersion {
+			fmt.Fprintf(stdout, "shortcuts: %s: %q is v%d, newer than this shelp (v%d); leaving it alone\n", v.id, name, have, ShortcutFormatVersion)
+			continue
+		}
 
-		fmt.Fprintf(stdout, "shortcuts: %s: %q is outdated (%d actions, current v%d expects %d); regenerating...\n", v.id, name, count, ShortcutFormatVersion, current)
+		fmt.Fprintf(stdout, "shortcuts: %s: %q is outdated (v%d, current v%d); regenerating...\n", v.id, name, have, ShortcutFormatVersion)
 		path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
 		if err != nil {
 			return fmt.Errorf("%s: generate: %w", v.id, err)
@@ -627,7 +689,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			return fmt.Errorf("%s: open: %w", v.id, err)
 		}
 		fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to replace it (up to %s) ", v.id, shortcutsPollTimeout)
-		updated, err := waitForShortcutUpdate(ctx, name, current, stdout)
+		updated, err := waitForShortcutUpdate(ctx, name, ShortcutFormatVersion, stdout)
 		fmt.Fprintln(stdout)
 		if err != nil {
 			return fmt.Errorf("%s: %w", v.id, err)

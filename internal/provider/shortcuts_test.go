@@ -184,14 +184,111 @@ func TestOutdatedShortcutNoteV1(t *testing.T) {
 	}
 }
 
-func TestOutdatedShortcutNoteUnexpectedCount(t *testing.T) {
+func installFakeMarkerVersion(t *testing.T, fn func(ctx context.Context, name string) (int, error)) *int {
+	t.Helper()
+	orig := shortcutMarkerVersionCmd
+	t.Cleanup(func() { shortcutMarkerVersionCmd = orig })
+	calls := new(int)
+	shortcutMarkerVersionCmd = func(ctx context.Context, name string) (int, error) {
+		*calls++
+		return fn(ctx, name)
+	}
+	return calls
+}
+
+// A format change that keeps the same action count is still detected:
+// the marker, not the count, says which version is installed.
+func TestOutdatedShortcutNoteSameCountOlderVersion(t *testing.T) {
 	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-		return 99, nil // neither v1 nor the current format
+		return currentShortcutActionCount(), nil
 	})
-	got := outdatedShortcutNote(context.Background(), "Ask AI")
-	for _, want := range []string{"outdated", "99", "shelp setup shortcuts"} {
+	installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		return ShortcutFormatVersion - 1, nil
+	})
+	got := outdatedShortcutNote(context.Background(), "shelp · Apple Intelligence Pro")
+	for _, want := range []string{"outdated", fmt.Sprintf("format v%d", ShortcutFormatVersion-1), "shelp setup shortcuts"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("outdatedShortcutNote() = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// An unexpected action count is settled by asking the marker, not by
+// the count alone.
+func TestOutdatedShortcutNoteUnexpectedCountAsksMarker(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return 99, nil // neither v1 nor the current format's count
+	})
+	calls := installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		return ShortcutFormatVersion, nil
+	})
+	if got := outdatedShortcutNote(context.Background(), "Ask AI"); got != "" {
+		t.Errorf("outdatedShortcutNote() = %q, want empty: the marker says it's current", got)
+	}
+	if *calls != 1 {
+		t.Errorf("marker probe called %d times, want 1", *calls)
+	}
+}
+
+// The marker must never reach a v1 shortcut (2 actions: its only real
+// action is Use Model) or anything too small to hold the marker branch.
+func TestInstalledShortcutVersionNeverProbesSmallShortcuts(t *testing.T) {
+	for _, count := range []int{shortcutV1ActionCount, 3, 5} {
+		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) { return count, nil })
+		calls := installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+			return ShortcutFormatVersion, nil
+		})
+		v, err := installedShortcutVersion(context.Background(), "x")
+		if *calls != 0 {
+			t.Errorf("count %d: marker probe called %d times, want 0", count, *calls)
+		}
+		if count == shortcutV1ActionCount {
+			if err != nil || v != 1 {
+				t.Errorf("count %d: got v%d, %v; want v1", count, v, err)
+			}
+		} else if err == nil {
+			t.Errorf("count %d: got v%d, want an error (not a shelp format)", count, v)
+		}
+	}
+}
+
+// A shortcut imported from a file reads action count 0 (Shortcuts never
+// caches one for it), so only the marker can say which version it is.
+func TestInstalledShortcutVersionZeroCountAsksMarker(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) { return 0, nil })
+	calls := installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		return ShortcutFormatVersion - 1, nil
+	})
+	v, err := installedShortcutVersion(context.Background(), "shelp · Apple Intelligence Pro")
+	if err != nil || v != ShortcutFormatVersion-1 {
+		t.Errorf("got v%d, %v; want v%d from the marker", v, err, ShortcutFormatVersion-1)
+	}
+	if *calls != 1 {
+		t.Errorf("marker probe called %d times, want 1", *calls)
+	}
+}
+
+func TestOutdatedShortcutNoteMarkerErrorIsNeverOutdated(t *testing.T) {
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		return currentShortcutActionCount(), nil
+	})
+	installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		return 0, errors.New("shortcuts run exited 1")
+	})
+	if got := outdatedShortcutNote(context.Background(), "x"); got != "" {
+		t.Errorf("outdatedShortcutNote() = %q, want empty when the marker probe fails", got)
+	}
+}
+
+func TestParseShortcutMarkerReply(t *testing.T) {
+	for in, want := range map[string]int{"shelp-shortcut 2": 2, "shelp-shortcut 3\n": 3, "  shelp-shortcut 10 ": 10} {
+		if got, err := parseShortcutMarkerReply(in); err != nil || got != want {
+			t.Errorf("parseShortcutMarkerReply(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "ls -la", "shelp-shortcut", "shelp-shortcut x", "shelp-shortcut 0"} {
+		if _, err := parseShortcutMarkerReply(in); err == nil {
+			t.Errorf("parseShortcutMarkerReply(%q): want an error", in)
 		}
 	}
 }
@@ -544,8 +641,8 @@ install = ["apple-pro"]
 	if opened != 0 {
 		t.Errorf("open was called %d times, want 0 (an action-count error must never trigger a reopen)", opened)
 	}
-	if !strings.Contains(stdout.String(), "assuming current") {
-		t.Errorf("stdout = %q, want a mention of assuming current on a check failure", stdout.String())
+	if !strings.Contains(stdout.String(), "leaving it alone") {
+		t.Errorf("stdout = %q, want a mention of leaving it alone on a check failure", stdout.String())
 	}
 }
 

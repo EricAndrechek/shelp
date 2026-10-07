@@ -125,7 +125,6 @@ func findOutdatedInstalledShortcuts(ctx context.Context, cfg *config.Config, cha
 	var sc shortcutsConfig
 	_ = cfg.Section("shortcuts", &sc)
 
-	current := currentShortcutActionCount()
 	checked := map[string]bool{}
 	for _, id := range chain {
 		key, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(id)), "shortcuts:")
@@ -142,11 +141,7 @@ func findOutdatedInstalledShortcuts(ctx context.Context, cfg *config.Config, cha
 		}
 		checked[name] = true
 
-		count, err := shortcutActionCountCmd(ctx, name)
-		if err != nil {
-			continue
-		}
-		if count != current {
+		if v, err := installedShortcutVersion(ctx, name); err == nil && v < ShortcutFormatVersion {
 			return true
 		}
 	}
