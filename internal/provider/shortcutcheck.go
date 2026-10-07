@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
+	"github.com/ericandrechek/shelp/internal/style"
 )
 
 // shortcutCheckTimeout bounds CheckShortcutsFreshness's own work (a
@@ -180,6 +181,6 @@ func CheckShortcutsFreshness(ctx context.Context, cfg *config.Config, version st
 	_ = recordShortcutVersionCheck(version) // best-effort; a write failure just means we check again next call
 
 	if outdated {
-		fmt.Fprintln(stderr, "shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them")
+		fmt.Fprintln(stderr, style.For(stderr).Warn("shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them"))
 	}
 }

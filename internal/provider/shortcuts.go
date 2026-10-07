@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
+	"github.com/ericandrechek/shelp/internal/style"
 )
 
 // shortcutsRunTimeout bounds one `shortcuts run` call so a hung Shortcuts
@@ -616,6 +617,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 		return err
 	}
 	wanted := installList(sc)
+	out, errp := style.For(stdout), style.For(stderr)
 
 	rawList, err := shortcutsListCmd(ctx)
 	if err != nil {
@@ -643,7 +645,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			if err != nil {
 				return fmt.Errorf("%s: generate: %w", v.id, err)
 			}
-			fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click \"Add Shortcut\" to install %q\n", v.id, name)
+			fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s to install %q\n", v.id, out.Bold("\"Add Shortcut\""), name)
 			if err := openCmd(ctx, path); err != nil {
 				return fmt.Errorf("%s: open: %w", v.id, err)
 			}
@@ -654,10 +656,10 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 				return fmt.Errorf("%s: %w", v.id, err)
 			}
 			if !added {
-				fmt.Fprintf(stderr, "shortcuts: %s: timed out waiting for %q; run `shelp setup shortcuts` again once it's added\n", v.id, name)
+				fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %s: timed out waiting for %q; run `shelp setup shortcuts` again once it's added", v.id, name)))
 				continue
 			}
-			fmt.Fprintf(stdout, "shortcuts: %s: %q installed\n", v.id, name)
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q installed", v.id, name)))
 			installed[name] = true
 			continue
 		}
@@ -667,24 +669,24 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 		// every run (a v2) would post a notification every poll.
 		have, verr := installedShortcutVersion(ctx, name)
 		if verr != nil {
-			fmt.Fprintf(stdout, "shortcuts: %s: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again\n", v.id, name, verr)
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again", v.id, name, verr)))
 			continue
 		}
 		if have == ShortcutFormatVersion {
-			fmt.Fprintf(stdout, "shortcuts: %s: %q already up to date (v%d), skipping\n", v.id, name, ShortcutFormatVersion)
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q already up to date (v%d), skipping", v.id, name, ShortcutFormatVersion)))
 			continue
 		}
 		if have > ShortcutFormatVersion {
-			fmt.Fprintf(stdout, "shortcuts: %s: %q is v%d, newer than this shelp (v%d); leaving it alone\n", v.id, name, have, ShortcutFormatVersion)
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q is v%d, newer than this shelp (v%d); leaving it alone", v.id, name, have, ShortcutFormatVersion)))
 			continue
 		}
 
-		fmt.Fprintf(stdout, "shortcuts: %s: %q is outdated (v%d, current v%d); regenerating...\n", v.id, name, have, ShortcutFormatVersion)
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q is outdated (v%d, current v%d); regenerating...", v.id, name, have, ShortcutFormatVersion)))
 		path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
 		if err != nil {
 			return fmt.Errorf("%s: generate: %w", v.id, err)
 		}
-		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click \"Replace\" to update %q\n", v.id, name)
+		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s to update %q\n", v.id, out.Bold("\"Replace\""), name)
 		if err := openCmd(ctx, path); err != nil {
 			return fmt.Errorf("%s: open: %w", v.id, err)
 		}
@@ -695,18 +697,18 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			return fmt.Errorf("%s: %w", v.id, err)
 		}
 		if !updated {
-			fmt.Fprintf(stderr, "shortcuts: %s: timed out waiting for %q to update; run `shelp setup shortcuts` again once it's replaced\n", v.id, name)
+			fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %s: timed out waiting for %q to update; run `shelp setup shortcuts` again once it's replaced", v.id, name)))
 			continue
 		}
-		fmt.Fprintf(stdout, "shortcuts: %s: %q updated to v%d\n", v.id, name, ShortcutFormatVersion)
+		fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q updated to v%d", v.id, name, ShortcutFormatVersion)))
 	}
 
 	fmt.Fprintln(stdout, "shortcuts: status:")
 	for _, v := range shortcutVariants {
 		name := resolveName(v, sc)
-		status := "not installed"
+		status := out.Dim("not installed")
 		if installed[name] {
-			status = "installed"
+			status = out.OK("installed")
 		}
 		fmt.Fprintf(stdout, "  %-24s %-32s %s\n", v.id, name, status)
 	}
