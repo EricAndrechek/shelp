@@ -164,10 +164,10 @@ decodes only its own table, so unrelated tables are ignored.
 # Apple's cloud model, at the cost of your Claude plan's usage.
 providers = ["shortcuts:apple-pro", "claude:sonnet", "fm"]
 
-# Prompt template: "v2" (default: rules), "v1" (minimal), "v3" (v2 +
-# few-shot). See internal/prompt/templates.go; the Benchmark section below
+# Prompt template: "v4" (default: v2, with Markdown explanations), "v2"
+# (rules), "v1" (minimal), "v3" (v2 + few-shot). See internal/prompt/templates.go; the Benchmark section below
 # has the comparison.
-template = "v2"
+template = "v4"
 
 # What to tell the model about your environment. cwd/tools are opt-in --
 # they leave the machine once a cloud provider is in the chain. Default:
@@ -299,7 +299,9 @@ the full report across every run, including dropped backends.
   everywhere: Apple Intelligence Pro 94% -> 98%, Claude Sonnet's
   format-clean rate 91% -> 100%, fm 31% -> 36%. v3 (v2 plus worked
   examples) added nothing over v2 for any model, and small models copy the
-  examples' shape.
+  examples' shape. The default template is now v4, which is v2 for suggest
+  and only changes explain's format (short Markdown that shelp renders on a
+  terminal), so these suggest numbers still apply.
 - **Telling the model which tools are installed (`--context ...,tools`)
   made fm worse** (36% -> 32%): it reached for the listed tools where they
   didn't fit. It stays opt-in.

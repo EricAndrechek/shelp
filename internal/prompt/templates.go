@@ -8,7 +8,7 @@ import (
 
 // Default is the template the CLI uses. Change it only on benchmark
 // evidence; the README table records why.
-const Default = "v2"
+const Default = "v4"
 
 func init() {
 	// v1: the prompt ghcs/ghce shipped with, tuned on Apple's on-device
@@ -148,4 +148,32 @@ func fewShot(c Context) string {
 		second = "Request: print the date one week from today\nCommand: date -d '+7 days' +%Y-%m-%d"
 	}
 	return first + "\n" + second
+}
+
+func init() {
+	// v4: v2 for suggest; explain asks for short, scannable Markdown that
+	// the CLI renders on a terminal (and passes through untouched
+	// elsewhere): a one-line summary, one bullet per part, an optional
+	// warning line.
+	Register(Template{
+		Name:        "v4",
+		Description: "v2; explain returns concise Markdown (summary, bullets, warning)",
+		System: func(m provider.Mode, c Context) string {
+			if m != provider.Explain {
+				v2, _ := Get("v2")
+				return v2.System(m, c)
+			}
+			sh, osName := shellOr(c, "POSIX shell"), c.OS
+			if osName == "" {
+				osName = "a Unix-like system"
+			}
+			return "You explain " + sh + " commands to a user on " + osName + ". Reply in concise Markdown, with no preamble: first one sentence (at most 25 words) saying what the whole command does; then one bullet per meaningful part, flag or pipe stage, each formatted like \"- `-h` — human-readable sizes\" (at most 12 words per bullet); then, only if the command can lose data, is irreversible or is otherwise risky, a final line \"**Warning:** ...\". No headings, no code fences, no URLs." + extras(c)
+		},
+		User: func(m provider.Mode, in string, c Context) string {
+			if m == provider.Explain {
+				return "Command: " + in
+			}
+			return "Request: " + in
+		},
+	})
 }
