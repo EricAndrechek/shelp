@@ -36,8 +36,12 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   for colored table cells (tabwriter counts escape codes as text). Never
   for suggest's command, `--json`, or `shelp init`. `logo.go`: `Logo(p)`,
   the Braille "shelp" wordmark in the brand gradient, shown by `shelp
-  version`/`--help` on a terminal. Its consumers in `cmd/shelp/`:
-  `table.go` (colored `providers` table), `explain.go` (streaming explain
+  version`/`--help` on a terminal. `spinner.go`: `IsTerminal(w)`,
+  `StartSpinner`/`(*Spinner).Stop`, the stderr "thinking" spinner shown
+  while a model answers (terminal only). `termsize*.go`: `TermWidth`
+  (TIOCGWINSZ) and `Truncate`. Its consumers in `cmd/shelp/`:
+  `providers_view.go` (grouped `providers` view with chain line,
+  `--all`/`-v`; replaced the old `table.go`), `explain.go` (streaming explain
   highlighter), `banner.go` (version/usage with the logo).
 - `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode,
   `--bind`; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
