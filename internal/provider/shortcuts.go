@@ -251,18 +251,18 @@ var shortcutActionCountCmd = func(ctx context.Context, name string) (int, error)
 }
 
 // shortcutMarkerMinActions is the fewest actions any marker-carrying
-// format (v2+) can have: If, Text, Stop and Output, Otherwise, Use Model,
-// Stop and Output, End If minus the shared ones -- currently 6. A shortcut
-// below this is never sent shortcutVersionMarker: it can't contain the
-// marker branch, so the marker would reach Use Model as a real prompt.
+// format (v2+) has: 6 (If, Stop and Output, Otherwise, Use Model, Stop and
+// Output, End If; v4 adds a Text action for 7). A shortcut below this is
+// never sent shortcutVersionMarker: it can't contain the marker branch, so
+// the marker would reach Use Model as a real prompt.
 const shortcutMarkerMinActions = 6
 
 // shortcutMarkerVersionCmd asks an installed shortcut which format it was
-// generated with by sending it shortcutVersionMarker. For v3+ the marker
+// generated with by sending it shortcutVersionMarker. For v4+ the marker
 // branch answers "shelp-shortcut <N>" without ever reaching Use Model, so
-// this costs no model call, no quota, and posts no notification. A v2
-// shortcut fails here like it fails every run (exit 1, and Shortcuts posts
-// a notification), and that failure is just an unreadable version. Callers
+// this costs no model call, no quota, and posts no notification. A v2 or
+// v3 shortcut fails here like it fails every run (exit 1, and Shortcuts
+// posts a notification), and that failure is just an unreadable version. Callers
 // go through installedShortcutVersion, which never sends the marker to a
 // shortcut whose count rules the marker branch out. A package var so tests
 // never run a real shortcut.

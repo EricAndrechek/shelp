@@ -69,11 +69,8 @@ type wfTextTokenAttachment struct {
 // wfConditionInput is the If action's WFInput: unlike WFFile and the like,
 // it wraps the WFTextTokenAttachment in a {"Type": "Variable", "Variable":
 // ...} envelope. Every If action stored in a real Shortcuts library has
-// this shape (checked against 20 on macOS 27, one of them testing Shortcut
-// Input exactly as buildWorkflow does). Format 2 put the bare attachment
-// here instead; Shortcuts imported it without complaint but treated the
-// input as unset, so every run failed at the If with "Please choose a
-// value for each parameter in this action." before reaching Use Model.
+// this shape (checked against 20 on macOS 27). Format 2 put the bare
+// attachment here instead.
 type wfConditionInput struct {
 	Type     string                `json:"Type"`
 	Variable wfTextTokenAttachment `json:"Variable"`
@@ -87,6 +84,14 @@ type askLLMParams struct {
 	FollowUp               bool        `json:"FollowUp"`
 	WFAllowWebSearch       bool        `json:"WFAllowWebSearch"`
 	WFLLMPrompt            wfTextToken `json:"WFLLMPrompt"`
+}
+
+// textParams is WFWorkflowActionParameters for is.workflow.actions.gettext
+// (the "Text" action), whose output is named "Text". Shape as stored in a
+// real Shortcuts library on macOS 27.
+type textParams struct {
+	UUID             string      `json:"UUID"`
+	WFTextActionText wfTextToken `json:"WFTextActionText"`
 }
 
 // outputParams is WFWorkflowActionParameters for is.workflow.actions.output.
@@ -144,10 +149,15 @@ const conditionIsEquals = 4
 // that changes currentShortcutActionCount() or otherwise requires an
 // installed shortcut to be regenerated (see shortcuts.go's outdated-version
 // detection). 1 was the original marker-less, 2-action (Use Model + Stop
-// and Output) shape; 2 added the leading version-marker If block below but
-// stored its WFInput in a shape Shortcuts can't use, so a v2 shortcut fails
-// on every run (see wfConditionInput); 3 fixes that WFInput.
-const ShortcutFormatVersion = 3
+// and Output) shape. 2 added the version-marker If block below, and 3
+// fixed its WFInput wrapper, but both compared Shortcut Input itself, and
+// a shortcut that takes text or files has no text type for "is" to
+// compare: Shortcuts drops the comparison string, and every run, real
+// prompts included, fails at the If with "Please choose a value for each
+// parameter in this action." (live on macOS 27, 2026-10-07). 4 compares
+// the output of a Text action holding Shortcut Input instead, the way
+// Apple-built shortcuts do text comparisons.
+const ShortcutFormatVersion = 4
 
 // shortcutVersionMarker is the literal Shortcut Input value that asks a
 // generated shortcut to report its own format version instead of calling
@@ -215,23 +225,25 @@ const extensionInputPlaceholder = "￼"
 // for freshly generated UUIDs.
 //
 // Since ShortcutFormatVersion 2, the actual Use Model call is wrapped in a
-// leading version-check block: "If Shortcut Input is <the marker string>,
-// Stop and Output 'shelp-shortcut <N>'; Otherwise, <the v1 Use Model +
-// Stop and Output pair>; End If." This lets shelp ask an already-installed
+// leading version-check block: "Text: Shortcut Input. If Text is <the
+// marker string>, Stop and Output 'shelp-shortcut <N>'; Otherwise, <the
+// v1 Use Model + Stop and Output pair>; End If." (The Text action is
+// format 4's; see ShortcutFormatVersion.) This lets shelp ask an already-installed
 // shortcut what format it is (see shortcuts.go) without ever spending a
 // real model call to find out, and without risking one on a shortcut that
 // might still be the marker-less v1 format (that branch never runs unless
 // the input equals the exact marker string).
 func buildWorkflow(model string, web bool) workflow {
 	uuid := newUUID()
+	textUUID := newUUID()
 	groupID := newUUID()
 	endUUID := newUUID()
 
-	shortcutInput := &wfConditionInput{
+	inputText := &wfConditionInput{
 		Type: "Variable",
 		Variable: wfTextTokenAttachment{
 			WFSerializationType: "WFTextTokenAttachment",
-			Value:               wfAttachment{Type: "ExtensionInput"},
+			Value:               wfAttachment{Type: "ActionOutput", OutputUUID: textUUID, OutputName: "Text"},
 		},
 	}
 
@@ -244,14 +256,29 @@ func buildWorkflow(model string, web bool) workflow {
 			WFWorkflowIconGlyphNumber: 61699,
 		},
 		WFWorkflowActions: []wfAction{
-			{ // If Shortcut Input is <shortcutVersionMarker>
+			{ // Text: Shortcut Input
+				WFWorkflowActionIdentifier: "is.workflow.actions.gettext",
+				WFWorkflowActionParameters: textParams{
+					UUID: textUUID,
+					WFTextActionText: wfTextToken{
+						WFSerializationType: "WFTextTokenString",
+						Value: wfTextTokenValue{
+							String: extensionInputPlaceholder,
+							AttachmentsByRange: map[string]wfAttachment{
+								"{0, 1}": {Type: "ExtensionInput"},
+							},
+						},
+					},
+				},
+			},
+			{ // If Text is <shortcutVersionMarker>
 				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
 				WFWorkflowActionParameters: conditionalParams{
 					GroupingIdentifier:        groupID,
 					WFControlFlowMode:         wfControlFlowStart,
 					WFCondition:               conditionIsEquals,
 					WFConditionalActionString: shortcutVersionMarker,
-					WFInput:                   shortcutInput,
+					WFInput:                   inputText,
 				},
 			},
 			{ // Stop and Output "shelp-shortcut <N>" (no model call)

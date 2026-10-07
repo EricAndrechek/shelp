@@ -8,6 +8,21 @@
   },
   "WFWorkflowActions": [
     {
+      "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+      "WFWorkflowActionParameters": {
+        "UUID": "44444444-4444-4444-4444-444444444444",
+        "WFTextActionText": {
+          "WFSerializationType": "WFTextTokenString",
+          "Value": {
+            "string": "￼",
+            "attachmentsByRange": {
+              "{0, 1}": { "Type": "ExtensionInput" }
+            }
+          }
+        }
+      }
+    },
+    {
       "WFWorkflowActionIdentifier": "is.workflow.actions.conditional",
       "WFWorkflowActionParameters": {
         "GroupingIdentifier": "22222222-2222-2222-2222-222222222222",
@@ -18,7 +33,11 @@
           "Type": "Variable",
           "Variable": {
             "WFSerializationType": "WFTextTokenAttachment",
-            "Value": { "Type": "ExtensionInput" }
+            "Value": {
+              "Type": "ActionOutput",
+              "OutputUUID": "44444444-4444-4444-4444-444444444444",
+              "OutputName": "Text"
+            }
           }
         }
       }
@@ -29,7 +48,7 @@
         "WFOutput": {
           "WFSerializationType": "WFTextTokenString",
           "Value": {
-            "string": "shelp-shortcut 3",
+            "string": "shelp-shortcut 4",
             "attachmentsByRange": {}
           }
         }
