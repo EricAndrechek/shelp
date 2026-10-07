@@ -148,6 +148,13 @@ _shelp_raw_dispatch() {
   emulate -L zsh
   local kind=$1 orig=$2 body=$3 cmd rc _shelp_out _shelp_err
   if [[ $kind == explain ]]; then
+    # `zle -I` moves below the typed line so the explanation prints like a
+    # command's output; then one blank line. No `zle reset-prompt`
+    # afterwards: zle doesn't know about the output, so reset-prompt would
+    # move up to where it last drew the prompt -- one line for the edit
+    # line plus one per extra prompt line -- and redraw over the blank line
+    # and, with a two-line prompt (powerlevel10k), the explanation's last
+    # line. `zle -I` already makes zle draw a fresh prompt below on return.
     zle -I
     command shelp explain --shell zsh -- "$body"
     rc=$?
@@ -160,7 +167,6 @@ _shelp_raw_dispatch() {
       BUFFER=$orig
       CURSOR=${#BUFFER}
     fi
-    zle reset-prompt
     return
   fi
   _shelp_run_animated suggest --shell zsh -- "$body"
