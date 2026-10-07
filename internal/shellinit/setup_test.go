@@ -10,15 +10,17 @@ import (
 )
 
 // isolate points HOME (and clears ZDOTDIR/XDG_CONFIG_HOME so RCFile's
-// fallbacks kick in predictably) at a fresh temp dir, and restricts PATH
-// to dir plus the bare minimum so exec.LookPath("chezmoi") reliably
-// misses unless a test adds a fake one.
+// fallbacks kick in predictably) at a fresh temp dir, clears SHELP_HOOKS
+// (set whenever the shell running the tests has shelp hooked), and
+// restricts PATH to dir plus the bare minimum so exec.LookPath("chezmoi")
+// reliably misses unless a test adds a fake one.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("SHELP_HOOKS", "")
 	t.Setenv("PATH", "/usr/bin:/bin")
 	return home
 }
