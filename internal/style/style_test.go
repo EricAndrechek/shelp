@@ -109,3 +109,26 @@ func TestPadRight(t *testing.T) {
 		t.Errorf("PadRight never truncates: got %q", got)
 	}
 }
+
+func TestTruncate(t *testing.T) {
+	if got := Truncate("hello world", 8); got != "hello w…" {
+		t.Errorf("got %q", got)
+	}
+	if got := Truncate("short", 8); got != "short" {
+		t.Errorf("got %q", got)
+	}
+	p := Forced(Color16)
+	got := Truncate(p.Dim("hello world"), 6)
+	if Strip(got) != "hello…" || Width(got) != 6 {
+		t.Errorf("got %q", got)
+	}
+	if Truncate("abc", 0) != "abc" {
+		t.Error("max 0 must not truncate")
+	}
+}
+
+func TestTermWidthNotTerminal(t *testing.T) {
+	if w := TermWidth(&strings.Builder{}); w != 0 {
+		t.Errorf("TermWidth(non-file) = %d", w)
+	}
+}
