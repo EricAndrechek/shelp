@@ -3,43 +3,62 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // uuidLikeRE matches an 8-4-4-4-12 hex string, upper- or lower-case.
 var uuidLikeRE = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// normalizeUUIDs walks a generic JSON tree (as produced by
-// json.Unmarshal into `any`) and replaces every UUID-shaped string with a
-// fixed placeholder, so two workflows that differ only by their randomly
-// generated action UUID compare equal.
+// normalizeUUIDs walks a generic JSON tree (as produced by json.Unmarshal
+// into `any`), object keys in sorted order, and replaces every UUID-shaped
+// string with "<UUID-n>", n counting distinct UUIDs in first-seen order.
+// Two workflows that differ only by their randomly generated UUIDs then
+// compare equal -- and only if every reference points at the same action
+// in both.
 func normalizeUUIDs(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, vv := range t {
-			out[k] = normalizeUUIDs(vv)
+	seen := map[string]string{}
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch t := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			out := make(map[string]any, len(t))
+			for _, k := range keys {
+				out[k] = walk(t[k])
+			}
+			return out
+		case []any:
+			out := make([]any, len(t))
+			for i, vv := range t {
+				out[i] = walk(vv)
+			}
+			return out
+		case string:
+			if !uuidLikeRE.MatchString(t) {
+				return t
+			}
+			if _, ok := seen[t]; !ok {
+				seen[t] = fmt.Sprintf("<UUID-%d>", len(seen)+1)
+			}
+			return seen[t]
+		default:
+			return v
 		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, vv := range t {
-			out[i] = normalizeUUIDs(vv)
-		}
-		return out
-	case string:
-		if uuidLikeRE.MatchString(t) {
-			return "<UUID>"
-		}
-		return t
-	default:
-		return v
 	}
+	return walk(v)
 }
 
 func mustGenericJSON(t *testing.T, data []byte) any {
@@ -51,13 +70,38 @@ func mustGenericJSON(t *testing.T, data []byte) any {
 	return v
 }
 
-// TestBuildWorkflowMatchesReference checks buildWorkflow's JSON shape
-// against testdata/shortcuts/reference.json (WFLLMModel "Apple
-// Intelligence Pro", web search off). Its Use Model + Stop and Output pair
-// is the "Ask AI" shortcut's plist as reverse-engineered on macOS 27.0;
-// its If block follows the If actions stored in a real Shortcuts library
-// (see conditionalParams). UUIDs are normalized away since buildWorkflow
-// generates a fresh one every call.
+// genericActions marshals buildWorkflow() and returns its action array as
+// generic JSON: what plutil actually gets.
+func genericActions(t *testing.T) []map[string]any {
+	t.Helper()
+	data, err := json.Marshal(buildWorkflow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		WFWorkflowActions []map[string]any
+	}
+	if err := json.Unmarshal(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	return wf.WFWorkflowActions
+}
+
+func params(a map[string]any) map[string]any {
+	p, _ := a["WFWorkflowActionParameters"].(map[string]any)
+	return p
+}
+
+func ident(a map[string]any) string {
+	s, _ := a["WFWorkflowActionIdentifier"].(string)
+	return strings.TrimPrefix(s, "is.workflow.actions.")
+}
+
+// TestBuildWorkflowMatchesReference checks buildWorkflow's JSON against
+// testdata/shortcuts/reference.json, a reviewed copy of the format 5
+// shortcut (see buildWorkflow's doc comment for the shape and shortcutgen.go
+// for each action's source). UUIDs are normalized consistently, so every
+// reference between actions is compared too.
 func TestBuildWorkflowMatchesReference(t *testing.T) {
 	refBytes, err := os.ReadFile("testdata/shortcuts/reference.json")
 	if err != nil {
@@ -65,162 +109,375 @@ func TestBuildWorkflowMatchesReference(t *testing.T) {
 	}
 	ref := normalizeUUIDs(mustGenericJSON(t, refBytes))
 
-	wf := buildWorkflow("Apple Intelligence Pro", false)
-	gotBytes, err := json.Marshal(wf)
+	gotBytes, err := json.Marshal(buildWorkflow())
 	if err != nil {
 		t.Fatalf("marshal generated workflow: %v", err)
 	}
 	got := normalizeUUIDs(mustGenericJSON(t, gotBytes))
 
 	if !reflect.DeepEqual(ref, got) {
-		t.Errorf("generated workflow does not match reference.\nref:  %#v\ngot:  %#v", ref, got)
+		pretty, _ := json.MarshalIndent(got, "", "  ")
+		t.Errorf("generated workflow does not match reference.json; normalized, it is:\n%s", pretty)
 	}
 }
 
-// TestBuildWorkflowVariants checks the two fields that vary per shelp
-// provider variant: WFLLMModel and WFAllowWebSearch, plus that the askllm
-// and its output action share one UUID (the output action's OutputUUID
-// must reference the askllm action's UUID), that FollowUp is always false,
-// and that the leading version-check If/Otherwise/End If block (see
-// buildWorkflow) is wired correctly: all three conditional actions share
-// one GroupingIdentifier distinct from the askllm UUID, the If checks
-// Shortcut Input against shortcutVersionMarker with conditionIsEquals, the
-// marker branch's literal output text matches ShortcutFormatVersion, and
-// the End If carries its own UUID.
-func TestBuildWorkflowVariants(t *testing.T) {
-	for _, tc := range []struct {
-		model string
-		web   bool
-	}{
-		{"Apple Intelligence", false},
-		{"Apple Intelligence", true},
-		{"Apple Intelligence Pro", false},
-		{"Apple Intelligence Pro", true},
-		{"ChatGPT", false},
-		{"ChatGPT", true},
-	} {
-		wf := buildWorkflow(tc.model, tc.web)
-		if len(wf.WFWorkflowActions) != 7 {
-			t.Fatalf("%s/web=%v: got %d actions, want 7", tc.model, tc.web, len(wf.WFWorkflowActions))
-		}
+// TestCurrentShortcutActionCount pins today's generator at 40 actions:
+// Text + the marker If/Stop and Output/Otherwise (4), Get Dictionary from
+// Input + 2 Get Dictionary Value + Text (4), six If/Use Model/Stop and
+// Output/Otherwise branches (24), the fallback Stop and Output (1), and
+// seven End Ifs.
+func TestCurrentShortcutActionCount(t *testing.T) {
+	if got := currentShortcutActionCount(); got != 40 {
+		t.Errorf("currentShortcutActionCount() = %d, want 40", got)
+	}
+}
 
-		wantIdents := []string{
-			"is.workflow.actions.gettext",     // Text: Shortcut Input
-			"is.workflow.actions.conditional", // If Text is <marker>
-			"is.workflow.actions.output",      // Stop and Output "shelp-shortcut N"
-			"is.workflow.actions.conditional", // Otherwise
-			"is.workflow.actions.askllm",
-			"is.workflow.actions.output",
-			"is.workflow.actions.conditional", // End If
+// outputNames is the output each referenced action type stores under.
+var outputNames = map[string]string{
+	"gettext":           outputNameText,
+	"detect.dictionary": outputNameDictionary,
+	"getvalueforkey":    outputNameDictionaryValue,
+	"askllm":            outputNameResponse,
+}
+
+// TestBuildWorkflowWellFormed checks what Shortcuts' import would not
+// catch and only a run would: every control-flow group opens, (at most
+// once) branches, and closes, properly nested; every reference names an
+// earlier action by its real output name; every If compares a Text
+// action's output (an If on Shortcut Input itself failed every run, v3);
+// every text token's attachments sit on U+FFFC placeholders.
+func TestBuildWorkflowWellFormed(t *testing.T) {
+	acts := genericActions(t)
+	byUUID := map[string]string{} // UUID -> identifier, of actions seen so far
+	type group struct{ mid, end int }
+	var stack []string
+	groups := map[string]*group{}
+
+	checkRef := func(i int, att map[string]any) {
+		t.Helper()
+		switch att["Type"] {
+		case "ExtensionInput":
+		case "ActionOutput":
+			id, _ := att["OutputUUID"].(string)
+			src, ok := byUUID[id]
+			if !ok {
+				t.Errorf("action %d references %q, not an earlier action's UUID", i, id)
+				return
+			}
+			if want := outputNames[src]; att["OutputName"] != want {
+				t.Errorf("action %d references %s's output as %q, want %q", i, src, att["OutputName"], want)
+			}
+		default:
+			t.Errorf("action %d: unexpected attachment %v", i, att)
 		}
-		for i, want := range wantIdents {
-			if got := wf.WFWorkflowActions[i].WFWorkflowActionIdentifier; got != want {
-				t.Fatalf("%s/web=%v: action %d identifier = %q, want %q", tc.model, tc.web, i, got, want)
+	}
+	checkToken := func(i int, tok any) {
+		t.Helper()
+		m, _ := tok.(map[string]any)
+		if m["WFSerializationType"] != "WFTextTokenString" {
+			t.Errorf("action %d: token %v is not a WFTextTokenString", i, tok)
+			return
+		}
+		v, _ := m["Value"].(map[string]any)
+		s, _ := v["string"].(string)
+		units := utf16.Encode([]rune(s))
+		atts, _ := v["attachmentsByRange"].(map[string]any)
+		placeholders := 0
+		for _, u := range units {
+			if u == 0xFFFC {
+				placeholders++
 			}
 		}
+		if placeholders != len(atts) {
+			t.Errorf("action %d: %d placeholders, %d attachments in %q", i, placeholders, len(atts), s)
+		}
+		for rng, att := range atts {
+			var off int
+			if _, err := fmt.Sscanf(rng, "{%d, 1}", &off); err != nil || off >= len(units) || units[off] != 0xFFFC {
+				t.Errorf("action %d: attachment range %q isn't on a placeholder in %q", i, rng, s)
+			}
+			checkRef(i, att.(map[string]any))
+		}
+	}
+	checkAttachment := func(i int, v any) {
+		t.Helper()
+		m, _ := v.(map[string]any)
+		if m["WFSerializationType"] != "WFTextTokenAttachment" {
+			t.Errorf("action %d: %v is not a WFTextTokenAttachment", i, v)
+			return
+		}
+		checkRef(i, m["Value"].(map[string]any))
+	}
 
-		text, ok := wf.WFWorkflowActions[0].WFWorkflowActionParameters.(textParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 0 params are %T, want textParams", tc.model, tc.web, wf.WFWorkflowActions[0].WFWorkflowActionParameters)
+	for i, a := range acts {
+		p := params(a)
+		switch id := ident(a); id {
+		case "gettext":
+			checkToken(i, p["WFTextActionText"])
+		case "detect.dictionary":
+			checkAttachment(i, p["WFInput"])
+		case "getvalueforkey":
+			checkAttachment(i, p["WFInput"])
+			if k, _ := p["WFDictionaryKey"].(string); k != "model" && k != "prompt" {
+				t.Errorf("action %d: WFDictionaryKey %q", i, k)
+			}
+		case "askllm":
+			checkToken(i, p["WFLLMPrompt"])
+		case "output":
+			checkToken(i, p["WFOutput"])
+		case "conditional":
+			g, _ := p["GroupingIdentifier"].(string)
+			mode, ok := p["WFControlFlowMode"].(float64)
+			if !ok || mode != float64(int(mode)) {
+				t.Fatalf("action %d: WFControlFlowMode %v is not an integer", i, p["WFControlFlowMode"])
+			}
+			switch int(mode) {
+			case wfControlFlowStart:
+				if groups[g] != nil {
+					t.Fatalf("action %d: GroupingIdentifier %s reused", i, g)
+				}
+				groups[g] = &group{mid: -1, end: -1}
+				stack = append(stack, g)
+				if p["WFCondition"] != float64(conditionIsEquals) || p["WFConditionalActionString"] == nil {
+					t.Errorf("action %d: If is not `is <literal>`: %v", i, p)
+				}
+				in, _ := p["WFInput"].(map[string]any)
+				if in["Type"] != "Variable" {
+					t.Errorf("action %d: If WFInput lacks the Variable wrapper: %v", i, in)
+				}
+				checkAttachment(i, in["Variable"])
+				att := in["Variable"].(map[string]any)["Value"].(map[string]any)
+				if byUUID[att["OutputUUID"].(string)] != "gettext" {
+					t.Errorf("action %d: If compares %v, not a Text action's output", i, att)
+				}
+			case wfControlFlowMiddle:
+				if len(stack) == 0 || stack[len(stack)-1] != g || groups[g].mid >= 0 {
+					t.Fatalf("action %d: Otherwise out of place (group %s, open %v)", i, g, stack)
+				}
+				if len(p) != 2 {
+					t.Errorf("action %d: plain Otherwise carries extra fields: %v", i, p)
+				}
+				groups[g].mid = i
+			case wfControlFlowEnd:
+				if len(stack) == 0 || stack[len(stack)-1] != g {
+					t.Fatalf("action %d: End If closes %s, but %v is open", i, g, stack)
+				}
+				stack = stack[:len(stack)-1]
+				groups[g].end = i
+			default:
+				t.Fatalf("action %d: WFControlFlowMode %v", i, mode)
+			}
+		default:
+			t.Fatalf("action %d: unexpected action %s", i, id)
 		}
-		if text.UUID == "" || text.WFTextActionText.Value.AttachmentsByRange["{0, 1}"].Type != "ExtensionInput" {
-			t.Errorf("%s/web=%v: Text action = %#v, want a UUID and Shortcut Input as its text", tc.model, tc.web, text)
+		if u, ok := p["UUID"].(string); ok {
+			if _, dup := byUUID[u]; dup {
+				t.Errorf("action %d: UUID %s reused", i, u)
+			}
+			byUUID[u] = ident(a)
 		}
+	}
+	if len(stack) != 0 {
+		t.Errorf("unclosed groups: %v", stack)
+	}
+	if len(groups) != len(shortcutVariants)+1 {
+		t.Errorf("%d If groups, want %d (marker + one per variant)", len(groups), len(shortcutVariants)+1)
+	}
+}
 
-		ifParams, ok := wf.WFWorkflowActions[1].WFWorkflowActionParameters.(conditionalParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 1 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[1].WFWorkflowActionParameters)
-		}
-		if ifParams.WFControlFlowMode != wfControlFlowStart {
-			t.Errorf("%s/web=%v: If WFControlFlowMode = %d, want %d", tc.model, tc.web, ifParams.WFControlFlowMode, wfControlFlowStart)
-		}
-		if ifParams.WFCondition != conditionIsEquals {
-			t.Errorf("%s/web=%v: If WFCondition = %d, want %d", tc.model, tc.web, ifParams.WFCondition, conditionIsEquals)
-		}
-		if ifParams.WFConditionalActionString != shortcutVersionMarker {
-			t.Errorf("%s/web=%v: If WFConditionalActionString = %q, want %q", tc.model, tc.web, ifParams.WFConditionalActionString, shortcutVersionMarker)
-		}
-		want := wfAttachment{Type: "ActionOutput", OutputUUID: text.UUID, OutputName: "Text"}
-		if in := ifParams.WFInput; in == nil || in.Type != "Variable" || in.Variable.WFSerializationType != "WFTextTokenAttachment" || in.Variable.Value != want {
-			t.Errorf("%s/web=%v: If WFInput = %#v, want a Variable wrapping the Text action's output", tc.model, tc.web, ifParams.WFInput)
-		}
-		if ifParams.GroupingIdentifier == "" {
-			t.Errorf("%s/web=%v: If GroupingIdentifier is empty", tc.model, tc.web)
-		}
+// --- A tiny interpreter for the generated workflow ------------------------
 
-		markerOut, ok := wf.WFWorkflowActions[2].WFWorkflowActionParameters.(outputParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 2 params are %T, want outputParams", tc.model, tc.web, wf.WFWorkflowActions[2].WFWorkflowActionParameters)
-		}
-		if want := shortcutVersionOutputText(ShortcutFormatVersion); markerOut.WFOutput.Value.String != want {
-			t.Errorf("%s/web=%v: marker branch output = %q, want %q", tc.model, tc.web, markerOut.WFOutput.Value.String, want)
-		}
-		if len(markerOut.WFOutput.Value.AttachmentsByRange) != 0 {
-			t.Errorf("%s/web=%v: marker branch output has attachments %#v, want none (literal text)", tc.model, tc.web, markerOut.WFOutput.Value.AttachmentsByRange)
-		}
+// fakeModel stands in for Use Model in runWorkflow.
+type fakeModel struct{ calls []string }
 
-		otherwiseParams, ok := wf.WFWorkflowActions[3].WFWorkflowActionParameters.(conditionalParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 3 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[3].WFWorkflowActionParameters)
-		}
-		if otherwiseParams.WFControlFlowMode != wfControlFlowMiddle {
-			t.Errorf("%s/web=%v: Otherwise WFControlFlowMode = %d, want %d", tc.model, tc.web, otherwiseParams.WFControlFlowMode, wfControlFlowMiddle)
-		}
-		if otherwiseParams.GroupingIdentifier != ifParams.GroupingIdentifier {
-			t.Errorf("%s/web=%v: Otherwise GroupingIdentifier %q != If's %q", tc.model, tc.web, otherwiseParams.GroupingIdentifier, ifParams.GroupingIdentifier)
-		}
+func (m *fakeModel) answer(model string, web bool, prompt string) string {
+	r := fmt.Sprintf("model=%s web=%v prompt=%s", model, web, prompt)
+	m.calls = append(m.calls, r)
+	return r
+}
 
-		ask, ok := wf.WFWorkflowActions[4].WFWorkflowActionParameters.(askLLMParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 4 params are %T, want askLLMParams", tc.model, tc.web, wf.WFWorkflowActions[4].WFWorkflowActionParameters)
+// runWorkflow executes acts on input the way Shortcuts runs the actions
+// buildWorkflow uses: Text renders its token; If compares its subject to
+// the literal and, when false, continues after its Otherwise (or End If);
+// reaching an Otherwise from the true branch skips to the End If; Get
+// Dictionary from Input parses JSON text (anything but an object fails);
+// Get Dictionary Value yields "" for a missing key; Use Model calls m;
+// Stop and Output ends the run with its text. It checks the semantics of
+// the shape, not the plist format (that is TestBuildWorkflowWellFormed's
+// and, for real, a live run's job).
+func runWorkflow(acts []map[string]any, input string, m *fakeModel) (string, error) {
+	groups := map[string]map[int]int{} // GroupingIdentifier -> mode -> index
+	for i, a := range acts {
+		if ident(a) == "conditional" {
+			p := params(a)
+			g := p["GroupingIdentifier"].(string)
+			if groups[g] == nil {
+				groups[g] = map[int]int{}
+			}
+			groups[g][int(p["WFControlFlowMode"].(float64))] = i
 		}
-		if ask.WFLLMModel != tc.model {
-			t.Errorf("%s/web=%v: WFLLMModel = %q", tc.model, tc.web, ask.WFLLMModel)
+	}
+	outputs := map[string]map[string]any{}
+	resolve := func(att map[string]any) (any, error) {
+		switch att["Type"] {
+		case "ExtensionInput":
+			return input, nil
+		case "ActionOutput":
+			v, ok := outputs[att["OutputUUID"].(string)][att["OutputName"].(string)]
+			if !ok {
+				return nil, fmt.Errorf("no value for %v", att)
+			}
+			return v, nil
 		}
-		if ask.WFAllowWebSearch != tc.web {
-			t.Errorf("%s/web=%v: WFAllowWebSearch = %v", tc.model, tc.web, ask.WFAllowWebSearch)
+		return nil, fmt.Errorf("unknown attachment %v", att)
+	}
+	render := func(tok any) (string, error) {
+		v := tok.(map[string]any)["Value"].(map[string]any)
+		units := utf16.Encode([]rune(v["string"].(string)))
+		atts := v["attachmentsByRange"].(map[string]any)
+		var out []uint16
+		for i, u := range units {
+			att, ok := atts[fmt.Sprintf("{%d, 1}", i)]
+			if !ok {
+				out = append(out, u)
+				continue
+			}
+			val, err := resolve(att.(map[string]any))
+			if err != nil {
+				return "", err
+			}
+			s, ok := val.(string)
+			if !ok {
+				return "", fmt.Errorf("can't render %T into text", val)
+			}
+			out = append(out, utf16.Encode([]rune(s))...)
 		}
-		if ask.FollowUp {
-			t.Errorf("%s/web=%v: FollowUp = true, want false", tc.model, tc.web)
+		return string(utf16.Decode(out)), nil
+	}
+	attached := func(v any) (any, error) {
+		return resolve(v.(map[string]any)["Value"].(map[string]any))
+	}
+	set := func(p map[string]any, name string, v any) {
+		u := p["UUID"].(string)
+		if outputs[u] == nil {
+			outputs[u] = map[string]any{}
 		}
-		if ask.UUID == "" {
-			t.Errorf("%s/web=%v: empty UUID", tc.model, tc.web)
-		}
-		if ask.UUID == ifParams.GroupingIdentifier {
-			t.Errorf("%s/web=%v: askllm UUID collides with the conditional's GroupingIdentifier", tc.model, tc.web)
-		}
+		outputs[u][name] = v
+	}
 
-		out, ok := wf.WFWorkflowActions[5].WFWorkflowActionParameters.(outputParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 5 params are %T, want outputParams", tc.model, tc.web, wf.WFWorkflowActions[5].WFWorkflowActionParameters)
+	for pc := 0; pc < len(acts); pc++ {
+		p := params(acts[pc])
+		switch ident(acts[pc]) {
+		case "gettext":
+			s, err := render(p["WFTextActionText"])
+			if err != nil {
+				return "", err
+			}
+			set(p, outputNameText, s)
+		case "conditional":
+			g := groups[p["GroupingIdentifier"].(string)]
+			switch int(p["WFControlFlowMode"].(float64)) {
+			case wfControlFlowStart:
+				subj, err := attached(p["WFInput"].(map[string]any)["Variable"])
+				if err != nil {
+					return "", err
+				}
+				if subj != p["WFConditionalActionString"] {
+					if mid, ok := g[wfControlFlowMiddle]; ok {
+						pc = mid
+					} else {
+						pc = g[wfControlFlowEnd]
+					}
+				}
+			case wfControlFlowMiddle:
+				pc = g[wfControlFlowEnd]
+			}
+		case "detect.dictionary":
+			in, err := attached(p["WFInput"])
+			if err != nil {
+				return "", err
+			}
+			var d map[string]any
+			if err := json.Unmarshal([]byte(in.(string)), &d); err != nil || d == nil {
+				return "", fmt.Errorf("Get Dictionary from Input: %q is no dictionary", in)
+			}
+			set(p, outputNameDictionary, d)
+		case "getvalueforkey":
+			in, err := attached(p["WFInput"])
+			if err != nil {
+				return "", err
+			}
+			v, _ := in.(map[string]any)[p["WFDictionaryKey"].(string)].(string)
+			set(p, outputNameDictionaryValue, v)
+		case "askllm":
+			prompt, err := render(p["WFLLMPrompt"])
+			if err != nil {
+				return "", err
+			}
+			set(p, outputNameResponse, m.answer(p["WFLLMModel"].(string), p["WFAllowWebSearch"].(bool), prompt))
+		case "output":
+			return render(p["WFOutput"])
+		default:
+			return "", fmt.Errorf("unknown action %s", ident(acts[pc]))
 		}
-		gotOut := out.WFOutput.Value.AttachmentsByRange["{0, 1}"].OutputUUID
-		if gotOut != ask.UUID {
-			t.Errorf("%s/web=%v: output OutputUUID %q != askllm UUID %q", tc.model, tc.web, gotOut, ask.UUID)
-		}
+	}
+	return "", errors.New("ran off the end without Stop and Output")
+}
 
-		endParams, ok := wf.WFWorkflowActions[6].WFWorkflowActionParameters.(conditionalParams)
-		if !ok {
-			t.Fatalf("%s/web=%v: action 6 params are %T, want conditionalParams", tc.model, tc.web, wf.WFWorkflowActions[6].WFWorkflowActionParameters)
+func TestWorkflowAnswersMarkerWithoutModel(t *testing.T) {
+	var m fakeModel
+	got, err := runWorkflow(genericActions(t), shortcutVersionMarker, &m)
+	if err != nil || got != shortcutVersionOutputText(ShortcutFormatVersion) {
+		t.Fatalf("marker -> %q, %v; want %q", got, err, shortcutVersionOutputText(ShortcutFormatVersion))
+	}
+	if len(m.calls) != 0 {
+		t.Errorf("the marker reached Use Model: %v", m.calls)
+	}
+	if v, err := parseShortcutMarkerReply(got); err != nil || v != ShortcutFormatVersion {
+		t.Errorf("parseShortcutMarkerReply(%q) = %d, %v", got, v, err)
+	}
+}
+
+// Each variant's request (as Generate encodes it) reaches exactly its own
+// Use Model, with the prompt intact.
+func TestWorkflowDispatchesEveryVariant(t *testing.T) {
+	acts := genericActions(t)
+	prompt := "You are shelp.\n\nfind \"big\" files <over> 100MB & sort them -- ünïcödé 🙂 \\ done"
+	for _, v := range shortcutVariants {
+		var m fakeModel
+		body, err := shortcutRequestBody(v.key, prompt)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if endParams.WFControlFlowMode != wfControlFlowEnd {
-			t.Errorf("%s/web=%v: End If WFControlFlowMode = %d, want %d", tc.model, tc.web, endParams.WFControlFlowMode, wfControlFlowEnd)
+		got, err := runWorkflow(acts, body, &m)
+		want := fmt.Sprintf("model=%s web=%v prompt=%s", v.model, v.web, prompt)
+		if err != nil || got != want {
+			t.Errorf("%s: got %q, %v; want %q", v.id, got, err, want)
 		}
-		if endParams.GroupingIdentifier != ifParams.GroupingIdentifier {
-			t.Errorf("%s/web=%v: End If GroupingIdentifier %q != If's %q", tc.model, tc.web, endParams.GroupingIdentifier, ifParams.GroupingIdentifier)
-		}
-		if endParams.UUID == "" {
-			t.Errorf("%s/web=%v: End If UUID is empty", tc.model, tc.web)
+		if len(m.calls) != 1 {
+			t.Errorf("%s: Use Model ran %d times, want 1", v.id, len(m.calls))
 		}
 	}
 }
 
-// TestCurrentShortcutActionCount pins today's generator at 7 actions:
-// Text, then the version-check If/Otherwise/End If wrapping the 2-action
-// v1 Use Model + Stop and Output pair.
-func TestCurrentShortcutActionCount(t *testing.T) {
-	if got := currentShortcutActionCount(); got != 7 {
-		t.Errorf("currentShortcutActionCount() = %d, want 7", got)
+func TestWorkflowUnknownModelFallsBack(t *testing.T) {
+	acts := genericActions(t)
+	for body, want := range map[string]string{
+		`{"model":"gpt-9","prompt":"x"}`:     shortcutUnknownModelText + "gpt-9",
+		`{"prompt":"x"}`:                     shortcutUnknownModelText,
+		`{"model":"APPLE-PRO","prompt":"x"}`: shortcutUnknownModelText + "APPLE-PRO",
+	} {
+		var m fakeModel
+		got, err := runWorkflow(acts, body, &m)
+		if err != nil || got != want {
+			t.Errorf("%s -> %q, %v; want %q", body, got, err, want)
+		}
+		if len(m.calls) != 0 {
+			t.Errorf("%s reached Use Model: %v", body, m.calls)
+		}
+		if msg, ok := shortcutErrorReply(got); !ok || !strings.HasPrefix(msg, "unknown model") {
+			t.Errorf("shortcutErrorReply(%q) = %q, %v", got, msg, ok)
+		}
 	}
 }
 
@@ -255,10 +512,13 @@ func TestSanitizeFilename(t *testing.T) {
 
 // TestGenerateShortcutPlutilRoundTrip runs the real generator pipeline
 // (Go JSON -> plutil -> shortcuts sign) and checks that the intermediate
-// unsigned plist -- when read back with `plutil -convert json` -- still
-// has real JSON booleans (not "true"/"false" strings) and the U+FFFC
-// attachment placeholder intact. Building and signing a shortcut file is
-// silent; nothing is ever `open`ed, so no import dialog appears.
+// unsigned plist -- read back with `plutil -convert json` and `xml1` --
+// still has real booleans (not "true"/"false" strings), integer
+// WFControlFlowMode/WFCondition values, and the U+FFFC placeholders
+// intact. Building and signing a shortcut file is silent; nothing is ever
+// `open`ed, so no import dialog appears. `shortcuts sign` asks Apple's
+// server and occasionally fails with an HTTP 500: rerun before concluding
+// anything from a failure there.
 func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("darwin only")
@@ -272,8 +532,8 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 
 	dir := t.TempDir()
 	ctx := context.Background()
-	name := "shelp · Test + Web"
-	signedPath, err := GenerateShortcut(ctx, dir, name, "Apple Intelligence Pro", true)
+	name := defaultShortcutName
+	signedPath, err := GenerateShortcut(ctx, dir, name)
 	if err != nil {
 		t.Fatalf("GenerateShortcut: %v", err)
 	}
@@ -284,40 +544,72 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	if info.Size() == 0 {
 		t.Fatalf("signed shortcut is empty")
 	}
-	if got := signedPath[len(signedPath)-len(".shortcut"):]; got != ".shortcut" {
-		t.Errorf("signed path %q does not end in .shortcut", signedPath)
-	}
-	base := sanitizeFilename(name)
-	if !strings.Contains(signedPath, base) {
-		t.Errorf("signed path %q does not derive from shortcut name %q (WFWorkflowName isn't set; the filename IS the name Shortcuts imports under)", signedPath, name)
+	if want := dir + "/" + name + ".shortcut"; signedPath != want {
+		t.Errorf("signed path = %q, want %q (WFWorkflowName isn't set; the filename IS the name Shortcuts imports under)", signedPath, want)
 	}
 
-	unsignedPath := dir + "/" + base + ".unsigned.shortcut"
+	unsignedPath := dir + "/" + name + ".unsigned.shortcut"
 	res, err := RunCmd(ctx, nil, nil, "plutil", "-convert", "json", unsignedPath, "-o", "-")
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("plutil -convert json roundtrip failed: err=%v exit=%d stderr=%s", err, res.ExitCode, res.Stderr)
 	}
-
 	var got map[string]any
 	if err := json.Unmarshal([]byte(res.Stdout), &got); err != nil {
 		t.Fatalf("unmarshal plutil roundtrip output: %v\n%s", err, res.Stdout)
 	}
 	actions, _ := got["WFWorkflowActions"].([]any)
-	if len(actions) != 7 {
-		t.Fatalf("roundtrip: got %d actions, want 7 (Text, then If/Otherwise/End If wrapping Use Model + Stop and Output)", len(actions))
+	if len(actions) != currentShortcutActionCount() {
+		t.Fatalf("roundtrip: got %d actions, want %d", len(actions), currentShortcutActionCount())
 	}
-	// askllm is action index 4: Text(0), If(1), Stop and Output "shelp-shortcut N"(2), Otherwise(3), askllm(4), Stop and Output(5), End If(6).
-	askParams, _ := actions[4].(map[string]any)["WFWorkflowActionParameters"].(map[string]any)
+	webByModel := map[string]bool{}
+	asks := 0
+	for _, a := range actions {
+		am := a.(map[string]any)
+		if ident(am) != "askllm" {
+			continue
+		}
+		asks++
+		p := params(am)
+		if fu, ok := p["FollowUp"].(bool); !ok || fu {
+			t.Errorf("FollowUp after plutil roundtrip = %#v (%T), want bool false", p["FollowUp"], p["FollowUp"])
+		}
+		ws, ok := p["WFAllowWebSearch"].(bool)
+		if !ok {
+			t.Errorf("WFAllowWebSearch after plutil roundtrip = %#v (%T), want a bool", p["WFAllowWebSearch"], p["WFAllowWebSearch"])
+		}
+		webByModel[fmt.Sprintf("%s/%v", p["WFLLMModel"], ws)] = true
+		promptVal, _ := p["WFLLMPrompt"].(map[string]any)["Value"].(map[string]any)["string"].(string)
+		if promptVal != extensionInputPlaceholder {
+			t.Errorf("WFLLMPrompt string after plutil roundtrip = %q, want U+FFFC", promptVal)
+		}
+	}
+	if asks != len(shortcutVariants) || len(webByModel) != len(shortcutVariants) {
+		t.Errorf("roundtrip: %d Use Model actions covering %v, want one per variant", asks, webByModel)
+	}
 
-	if fu, ok := askParams["FollowUp"].(bool); !ok || fu {
-		t.Errorf("FollowUp after plutil roundtrip = %#v (%T), want bool false", askParams["FollowUp"], askParams["FollowUp"])
+	res, err = RunCmd(ctx, nil, nil, "plutil", "-convert", "xml1", unsignedPath, "-o", "-")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("plutil -convert xml1 failed: err=%v exit=%d stderr=%s", err, res.ExitCode, res.Stderr)
 	}
-	if ws, ok := askParams["WFAllowWebSearch"].(bool); !ok || !ws {
-		t.Errorf("WFAllowWebSearch after plutil roundtrip = %#v (%T), want bool true", askParams["WFAllowWebSearch"], askParams["WFAllowWebSearch"])
+	for _, key := range []string{"WFControlFlowMode", "WFCondition"} {
+		all := regexp.MustCompile(`<key>`+key+`</key>\s*<(\w+)>`).FindAllStringSubmatch(res.Stdout, -1)
+		if len(all) == 0 {
+			t.Errorf("no %s in the plist", key)
+		}
+		for _, m := range all {
+			if m[1] != "integer" {
+				t.Errorf("%s stored as <%s>, want <integer>", key, m[1])
+			}
+		}
 	}
-
-	promptVal, _ := askParams["WFLLMPrompt"].(map[string]any)["Value"].(map[string]any)["string"].(string)
-	if promptVal != extensionInputPlaceholder {
-		t.Errorf("WFLLMPrompt string after plutil roundtrip = %q, want U+FFFC", promptVal)
+	conds := 0
+	for _, a := range actions {
+		if ident(a.(map[string]any)) == "conditional" {
+			conds++
+		}
+	}
+	// If, Otherwise and End If for the marker and for each variant.
+	if want := 3 * (len(shortcutVariants) + 1); conds != want {
+		t.Errorf("%d conditional actions, want %d", conds, want)
 	}
 }

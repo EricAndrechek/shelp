@@ -5,8 +5,9 @@ package provider
 // providers` or hit an outdated shortcut some other way. This file adds a
 // best-effort, once-per-binary-version runtime hint: cmd/shelp calls
 // CheckShortcutsFreshness after printing a normal suggest/explain answer,
-// and it prints one line to stderr if an installed shelp shortcut turns
-// out to be outdated -- see CheckShortcutsFreshness's doc comment for the
+// and it prints one line to stderr if the installed shelp shortcut turns
+// out to be outdated, or only the per-model shortcuts of an older shelp
+// are installed -- see CheckShortcutsFreshness's doc comment for the
 // exact guarantees (never blocks/fails the real command, checked at most
 // once per shelp version).
 
@@ -25,9 +26,10 @@ import (
 )
 
 // shortcutCheckTimeout bounds CheckShortcutsFreshness's own work (a
-// handful of osascript calls at most) so it can never hang the process it
-// was only ever supposed to add a fraction of a second to. A package var,
-// like shortcutsPollInterval/-Timeout, so tests can shrink it.
+// `shortcuts list`, an osascript call and a marker run at most) so it can
+// never hang the process it was only ever supposed to add a fraction of a
+// second to. A package var, like shortcutsPollInterval/-Timeout, so tests
+// can shrink it.
 var shortcutCheckTimeout = 5 * time.Second
 
 // shortcutCheckState is shortcut-check.json's shape.
@@ -112,45 +114,43 @@ func chainHasShortcuts(chain []string) bool {
 	return false
 }
 
-// findOutdatedInstalledShortcuts checks only the shortcuts:* provider IDs
-// actually named in chain (deduplicated by resolved name) -- not every
-// shortcutVariants entry -- since that's what this invocation actually
-// relies on. For each, it calls shortcutActionCountCmd directly rather
-// than first listing installed shortcuts: shortcutActionCountCmd already
-// fails cleanly for a shortcut that doesn't exist (verified live: exit 1,
-// "Can't get shortcut ... (-1728)"), and that failure is swallowed exactly
-// like any other check failure -- never installed and check-failed are
-// both "skip, not outdated" here, since neither is this function's job to
-// distinguish (Detect already reports "not installed" separately).
-func findOutdatedInstalledShortcuts(ctx context.Context, cfg *config.Config, chain []string) bool {
-	var sc shortcutsConfig
-	_ = cfg.Section("shortcuts", &sc)
+// Freshness hints, one line each on stderr.
+const (
+	shortcutOutdatedHint = "shelp: your Apple Shortcut is from an older shelp; run `shelp setup shortcuts` to update it"
+	shortcutMigrateHint  = "shelp: shelp now uses one Apple Shortcut for every shortcuts:* provider; run `shelp setup shortcuts` to install it (and delete the old ones)"
+)
 
-	checked := map[string]bool{}
-	for _, id := range chain {
-		key, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(id)), "shortcuts:")
-		if !ok {
-			continue
-		}
-		v, ok := variantByKey(key)
-		if !ok {
-			continue
-		}
-		name := resolveName(v, sc)
-		if checked[name] {
-			continue
-		}
-		checked[name] = true
-
-		if v, err := installedShortcutVersion(ctx, name); err == nil && v < ShortcutFormatVersion {
-			return true
-		}
+// shortcutsFreshnessHint returns the hint to print, or "". Every shortcuts:*
+// provider runs the one shortcut named by [shortcuts].name, so that is
+// the only one it checks: if it's installed and answers an older version,
+// it's outdated; if it isn't installed but per-model shortcuts from
+// formats 1-4 are (legacyShortcuts, matched by name in `shortcuts list`
+// and never run), this is the first run after the upgrade that replaced
+// them. Every failure (a list or version check that errors) is "no hint":
+// neither is this function's to report, and Detect already says "not
+// installed" separately.
+func shortcutsFreshnessHint(ctx context.Context, cfg *config.Config) string {
+	name := resolveShortcutName(cfg)
+	raw, err := shortcutsListCmd(ctx)
+	if err != nil {
+		return ""
 	}
-	return false
+	list := parseShortcutsList(raw)
+	if list[name] {
+		if v, err := installedShortcutVersion(ctx, name); err == nil && v < ShortcutFormatVersion {
+			return shortcutOutdatedHint
+		}
+		return ""
+	}
+	if len(legacyShortcuts(list, name)) > 0 {
+		return shortcutMigrateHint
+	}
+	return ""
 }
 
 // CheckShortcutsFreshness is shelp's best-effort, once-per-binary-version
-// hint that an installed Apple Shortcuts wrapper is outdated -- the
+// hint that the installed Apple Shortcut is outdated, or missing while an
+// older shelp's per-model ones are still there -- the
 // scenario it exists for is a `brew upgrade shelp` that shipped a new
 // ShortcutFormatVersion, which otherwise gives the user no signal to ever
 // run `shelp setup shortcuts` again.
@@ -166,7 +166,8 @@ func findOutdatedInstalledShortcuts(ctx context.Context, cfg *config.Config, cha
 //   - all work is bounded by shortcutCheckTimeout;
 //   - every failure along the way (an unwritable cache dir, an osascript
 //     error, ...) is swallowed silently -- only a confirmed-outdated
-//     shortcut ever produces output, and it's always exactly one line.
+//     shortcut, or legacy ones without the current one, ever produce
+//     output, and it's always exactly one line.
 func CheckShortcutsFreshness(ctx context.Context, cfg *config.Config, version string, chain []string, stderr io.Writer) {
 	if !chainHasShortcuts(chain) {
 		return
@@ -177,10 +178,10 @@ func CheckShortcutsFreshness(ctx context.Context, cfg *config.Config, version st
 	cctx, cancel := context.WithTimeout(ctx, shortcutCheckTimeout)
 	defer cancel()
 
-	outdated := findOutdatedInstalledShortcuts(cctx, cfg, chain)
+	hint := shortcutsFreshnessHint(cctx, cfg)
 	_ = recordShortcutVersionCheck(version) // best-effort; a write failure just means we check again next call
 
-	if outdated {
-		fmt.Fprintln(stderr, style.For(stderr).Warn("shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them"))
+	if hint != "" {
+		fmt.Fprintln(stderr, style.For(stderr).Warn(hint))
 	}
 }

@@ -3,23 +3,25 @@ package provider
 // shortcuts: Apple's cloud models (Apple Intelligence, Apple Intelligence
 // Pro / Private Cloud Compute, and ChatGPT) reached headlessly through the
 // Shortcuts "Use Model" action (is.workflow.actions.askllm), run via the
-// `shortcuts` CLI. See shortcutgen.go for how the shortcuts themselves are
+// `shortcuts` CLI. See shortcutgen.go for how the shortcut itself is
 // built, and CLAUDE.md's "Shortcuts Use Model" section for how this was
 // reverse-engineered.
 //
-// Shortcuts has no import API: a human has to click "Add Shortcut" once
-// per shortcut (see `shelp setup shortcuts` / runShortcutsSetup below).
-// Once installed, a shortcut is invoked purely headlessly:
+// Shortcuts has no import API: a human has to click "Add Shortcut" (see
+// `shelp setup shortcuts` / runShortcutsSetup below). Once installed, the
+// shortcut is invoked purely headlessly:
 //
-//	printf '%s' "$prompt" | shortcuts run "<name>" -o - --output-type public.plain-text
+//	printf '%s' '{"model":"apple-pro","prompt":"..."}' | shortcuts run shelp -o - --output-type public.plain-text
 //
-// Each shelp variant is really just (model, web-search) baked into one
-// installed shortcut; shelp tracks the mapping from variant to shortcut
-// *name* (configurable), and looks the name up via `shortcuts list` to
-// know whether it's installed.
+// Since format 5 one shortcut ("shelp" unless [shortcuts].name says
+// otherwise) serves all six providers: each sends its own variant key as
+// "model", and the shortcut picks the matching Use Model action. Formats
+// 1-4 were one shortcut per variant, named "shelp · <Model>[ + Web]"; those
+// are now only ever listed by name (legacyShortcuts) and never run.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -30,7 +32,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/ericandrechek/shelp/internal/config"
 	"github.com/ericandrechek/shelp/internal/style"
@@ -44,13 +45,14 @@ const shortcutsRunTimeout = 60 * time.Second
 // a provider ID.
 type shortcutVariant struct {
 	id    string // provider ID, e.g. "shortcuts:apple-pro"
-	key   string // config key under [shortcuts].names / .install, e.g. "apple-pro"
+	key   string // the request's "model", which the shortcut's Ifs compare, e.g. "apple-pro"
 	model string // WFLLMModel value
 	web   bool   // WFAllowWebSearch ("Use Broad World Knowledge" in the UI)
 }
 
-// shortcutVariants is every "Use Model" combination shelp knows about.
-// Values are those documented as valid on macOS 27 in CLAUDE.md.
+// shortcutVariants is every "Use Model" combination shelp knows about, and
+// (in this order) the branches of the generated shortcut. Values are those
+// documented as valid on macOS 27 in CLAUDE.md.
 var shortcutVariants = []shortcutVariant{
 	{id: "shortcuts:apple", key: "apple", model: "Apple Intelligence", web: false},
 	{id: "shortcuts:apple-web", key: "apple-web", model: "Apple Intelligence", web: true},
@@ -60,8 +62,8 @@ var shortcutVariants = []shortcutVariant{
 	{id: "shortcuts:chatgpt-web", key: "chatgpt-web", model: "ChatGPT", web: true},
 }
 
-// variantByKey finds a variant by its config key (e.g. "apple-pro", not
-// the full "shortcuts:apple-pro" provider ID).
+// variantByKey finds a variant by its key (e.g. "apple-pro", not the full
+// "shortcuts:apple-pro" provider ID).
 func variantByKey(key string) (shortcutVariant, bool) {
 	for _, v := range shortcutVariants {
 		if v.key == key {
@@ -71,27 +73,42 @@ func variantByKey(key string) (shortcutVariant, bool) {
 	return shortcutVariant{}, false
 }
 
-// defaultInstall is the install list used when [shortcuts].install is
-// absent and $SHELP_SHORTCUTS is unset: just the best variant, matching
-// DefaultChain's "shortcuts:apple-pro" entry.
-var defaultInstall = []string{"apple-pro"}
+// defaultShortcutName is the name `shelp setup shortcuts` installs the
+// shortcut under, and every shortcuts:* provider runs, unless
+// [shortcuts].name overrides it.
+const defaultShortcutName = "shelp"
+
+// chatGPTExtension is what the ChatGPT variants need beyond the shortcut.
+const chatGPTExtension = "the ChatGPT extension (System Settings › Siri)"
 
 // shortcutsConfig is the decoded [shortcuts] table.
 //
 //	[shortcuts]
-//	names = { "apple-pro" = "Ask AI" }   # per-variant name override
-//	install = ["apple-pro", "chatgpt"]   # what `shelp setup shortcuts` installs
+//	name = "shelp"   # the shortcut every shortcuts:* provider runs
 type shortcutsConfig struct {
-	Names   map[string]string `toml:"names"`
-	Install []string          `toml:"install"`
+	Name string `toml:"name"`
 }
 
-// defaultShortcutName is shelp's naming scheme for a generated shortcut:
-// "shelp · <Model>" / "shelp · <Model> + Web". Verified (see MERGE NOTES)
-// that `shortcuts run` accepts "·" and "+" in a name without complaint --
-// they're ordinary characters to the CLI, which never goes through a
-// shell (exec.Command passes argv directly).
-func defaultShortcutName(v shortcutVariant) string {
+// shortcutName is the configured name if present and non-blank, else
+// defaultShortcutName.
+func (sc shortcutsConfig) shortcutName() string {
+	if n := strings.TrimSpace(sc.Name); n != "" {
+		return n
+	}
+	return defaultShortcutName
+}
+
+// resolveShortcutName decodes cfg's [shortcuts] table, falling back to the
+// default on a malformed one.
+func resolveShortcutName(cfg *config.Config) string {
+	var sc shortcutsConfig
+	_ = cfg.Section("shortcuts", &sc)
+	return sc.shortcutName()
+}
+
+// legacyShortcutName is the per-variant name formats 1-4 (shelp 0.1-0.2)
+// generated: "shelp · <Model>", or "shelp · <Model> + Web".
+func legacyShortcutName(v shortcutVariant) string {
 	name := "shelp · " + v.model
 	if v.web {
 		name += " + Web"
@@ -99,41 +116,26 @@ func defaultShortcutName(v shortcutVariant) string {
 	return name
 }
 
-// resolveName returns the shortcut name for v: the config override if
-// present and non-blank, else the default naming scheme.
-func resolveName(v shortcutVariant, cfg shortcutsConfig) string {
-	if n, ok := cfg.Names[v.key]; ok {
-		if n = strings.TrimSpace(n); n != "" {
-			return n
+// legacyShortcuts returns, sorted, the names in installed that formats
+// 1-4 left behind: a legacyShortcutName, or a "<that name> N" copy an
+// update made. current (the configured name) is never one of them. These
+// are only ever listed: an old one may be a format that fails, posting a
+// notification, every time it runs, so shelp never runs them.
+func legacyShortcuts(installed map[string]bool, current string) []string {
+	var out []string
+	for _, v := range shortcutVariants {
+		old := legacyShortcutName(v)
+		if installed[old] && old != current {
+			out = append(out, old)
 		}
-	}
-	return defaultShortcutName(v)
-}
-
-// installList resolves which variant keys `shelp setup shortcuts` should
-// install: $SHELP_SHORTCUTS ("all" or a comma list) overrides
-// [shortcuts].install, which overrides defaultInstall.
-func installList(cfg shortcutsConfig) []string {
-	if env := strings.TrimSpace(os.Getenv("SHELP_SHORTCUTS")); env != "" {
-		if strings.EqualFold(env, "all") {
-			keys := make([]string, len(shortcutVariants))
-			for i, v := range shortcutVariants {
-				keys[i] = v.key
-			}
-			return keys
-		}
-		var out []string
-		for _, k := range strings.Split(env, ",") {
-			if k = strings.TrimSpace(k); k != "" {
-				out = append(out, k)
+		for _, c := range conflictCopies(installed, old) {
+			if c != current {
+				out = append(out, c)
 			}
 		}
-		return out
 	}
-	if len(cfg.Install) > 0 {
-		return cfg.Install
-	}
-	return defaultInstall
+	sort.Strings(out)
+	return out
 }
 
 // --- Family / Provider -----------------------------------------------
@@ -151,19 +153,17 @@ func (shortcutsFamily) Providers(cfg *config.Config) []Provider {
 	if _, ok := LookPath("shortcuts"); !ok {
 		return nil
 	}
-	var sc shortcutsConfig
-	_ = cfg.Section("shortcuts", &sc) // malformed config: fall back to defaults
-
+	name := resolveShortcutName(cfg)
 	out := make([]Provider, 0, len(shortcutVariants))
 	for _, v := range shortcutVariants {
-		out = append(out, &shortcutsProvider{variant: v, name: resolveName(v, sc)})
+		out = append(out, &shortcutsProvider{variant: v, name: name})
 	}
 	return out
 }
 
 type shortcutsProvider struct {
 	variant shortcutVariant
-	name    string
+	name    string // the shortcut to run, shared by every variant
 }
 
 func (p *shortcutsProvider) ID() string { return p.variant.id }
@@ -178,16 +178,25 @@ func (p *shortcutsProvider) Description() string {
 }
 
 // Label is the short display name: the model, plus " + web search" for the
-// web variants.
+// web variants, plus what the ChatGPT ones need from macOS.
 func (p *shortcutsProvider) Label() string {
 	l := p.variant.model
 	if p.variant.web {
 		l += " + web search"
 	}
+	if p.variant.model == "ChatGPT" {
+		l += " (needs Apple's ChatGPT extension)"
+	}
 	return l
 }
 
+// Detect reports the provider available only when the shared shortcut is
+// installed and answers the version marker with ShortcutFormatVersion or
+// newer: an older one doesn't take the JSON request (formats 1-4 would pass
+// it to the model as the prompt). The version check runs once per process
+// for all six providers (cachedShortcutVersion).
 func (p *shortcutsProvider) Detect(ctx context.Context) Status {
+	const fix = "run `shelp setup shortcuts`"
 	set, err := installedShortcuts(ctx)
 	if err != nil {
 		return Status{Reason: "can't list shortcuts", Detail: err.Error()}
@@ -195,19 +204,18 @@ func (p *shortcutsProvider) Detect(ctx context.Context) Status {
 	if !set[p.name] {
 		reason := "not installed"
 		if p.variant.model == "ChatGPT" {
-			reason += "; needs the ChatGPT extension (System Settings › Siri)"
+			reason += "; needs " + chatGPTExtension
 		}
-		return Status{Reason: reason, Fix: "run `shelp setup shortcuts`", Detail: fmt.Sprintf("shortcut %q not found", p.name)}
+		return Status{Reason: reason, Fix: fix, Detail: fmt.Sprintf("shortcut %q not found", p.name)}
 	}
-	// Installed and still callable either way, so Available stays true even
-	// when outdated -- see outdatedShortcutNote's doc comment for why this
-	// is only a Reason note, not an Unavailable.
-	st := Status{Available: true, Version: p.variant.model}
-	if note := outdatedShortcutNote(ctx, p.name); note != "" {
-		st.Reason = note
-		st.Fix = "run `shelp setup shortcuts` to update"
+	v, err := cachedShortcutVersion(ctx, p.name)
+	if err != nil {
+		return Status{Reason: "shortcut didn't answer its version check", Fix: fix, Detail: fmt.Sprintf("shortcut %q: %v", p.name, err)}
 	}
-	return st
+	if v < ShortcutFormatVersion {
+		return Status{Reason: fmt.Sprintf("outdated shortcut (format v%d, current v%d)", v, ShortcutFormatVersion), Fix: fix + " to update it", Detail: fmt.Sprintf("shortcut %q", p.name)}
+	}
+	return Status{Available: true, Version: p.variant.model}
 }
 
 // shortcutV1ActionCount is how many WFWorkflowActions entries the original,
@@ -266,9 +274,9 @@ var shortcutActionCountCmd = func(ctx context.Context, name string) (int, error)
 
 // shortcutMarkerMinActions is the fewest actions any marker-carrying
 // format (v2+) has: 6 (If, Stop and Output, Otherwise, Use Model, Stop and
-// Output, End If; v4 adds a Text action for 7). A shortcut below this is
-// never sent shortcutVersionMarker: it can't contain the marker branch, so
-// the marker would reach Use Model as a real prompt.
+// Output, End If; v4 adds a Text action for 7, v5 has 40). A shortcut
+// below this is never sent shortcutVersionMarker: it can't contain the
+// marker branch, so the marker would reach Use Model as a real prompt.
 const shortcutMarkerMinActions = 6
 
 // shortcutMarkerVersionCmd asks an installed shortcut which format it was
@@ -276,10 +284,10 @@ const shortcutMarkerMinActions = 6
 // branch answers "shelp-shortcut <N>" without ever reaching Use Model, so
 // this costs no model call, no quota, and posts no notification. A v2 or
 // v3 shortcut fails here like it fails every run (exit 1, and Shortcuts
-// posts a notification), and that failure is just an unreadable version. Callers
-// go through installedShortcutVersion, which never sends the marker to a
-// shortcut whose count rules the marker branch out. A package var so tests
-// never run a real shortcut.
+// posts a notification), and that failure is just an unreadable version.
+// Callers go through installedShortcutVersion, which never sends the
+// marker to a shortcut whose count rules the marker branch out. A package
+// var so tests never run a real shortcut.
 var shortcutMarkerVersionCmd = func(ctx context.Context, name string) (int, error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -316,7 +324,7 @@ func parseShortcutMarkerReply(out string) (int, error) {
 //
 // The one case this sends the marker somewhere it doesn't belong is a
 // file-imported shortcut without the marker branch -- a v1 file from shelp
-// 0.1.x, or a shortcut from elsewhere named in [shortcuts].names -- where
+// 0.1.x, or a shortcut from elsewhere named by [shortcuts].name -- where
 // it reaches the model as one ordinary prompt.
 func installedShortcutVersion(ctx context.Context, name string) (int, error) {
 	count, err := shortcutActionCountCmd(ctx, name)
@@ -332,32 +340,44 @@ func installedShortcutVersion(ctx context.Context, name string) (int, error) {
 	return shortcutMarkerVersionCmd(ctx, name)
 }
 
-// outdatedShortcutNote returns a one-line note when the installed shortcut
-// called name was generated by an older shelp (see
-// installedShortcutVersion), else "". A failed check returns "": an
-// installed, working shortcut must never look unavailable or wrongly
-// outdated because Shortcuts Events hiccuped -- this is a best-effort
-// note, not a hard gate.
-func outdatedShortcutNote(ctx context.Context, name string) string {
-	v, err := installedShortcutVersion(ctx, name)
-	if err != nil || v >= ShortcutFormatVersion {
-		return ""
+// shortcutRequestBody is the JSON a format 5+ shortcut takes as its
+// input: {"model": key, "prompt": prompt}, without HTML escaping (the
+// shortcut's Get Dictionary from Input would undo it anyway; this keeps
+// the body readable) and without a trailing newline.
+func shortcutRequestBody(key, prompt string) (string, error) {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(shortcutRequest{Model: key, Prompt: prompt}); err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("outdated shortcut (format v%d, current v%d)", v, ShortcutFormatVersion)
+	return strings.TrimSuffix(b.String(), "\n"), nil
+}
+
+// shortcutErrorReply reports whether out is the shortcut's own error
+// answer (its fallback branch: "shelp-shortcut-error: unknown model <key>",
+// reached when no If matched the request's model), and its message.
+func shortcutErrorReply(out string) (string, bool) {
+	msg, ok := strings.CutPrefix(strings.TrimSpace(out), shortcutErrorPrefix)
+	return strings.TrimSpace(msg), ok
 }
 
 func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, shortcutsRunTimeout)
 	defer cancel()
 
-	// Use Model has no separate system-prompt field: fold it into the
-	// single input Shortcuts passes through as the Shortcut Input.
-	input := req.Prompt
+	// Use Model has no separate system-prompt field: fold it into the one
+	// prompt the request carries.
+	prompt := req.Prompt
 	if req.System != "" {
-		input = req.System + "\n\n" + req.Prompt
+		prompt = req.System + "\n\n" + req.Prompt
+	}
+	body, err := shortcutRequestBody(p.variant.key, prompt)
+	if err != nil {
+		return "", err
 	}
 
-	res, err := RunCmd(cctx, strings.NewReader(input), nil,
+	res, err := RunCmd(cctx, strings.NewReader(body), nil,
 		"shortcuts", "run", p.name, "-o", "-", "--output-type", "public.plain-text")
 	if err != nil {
 		if cctx.Err() != nil {
@@ -373,6 +393,9 @@ func (p *shortcutsProvider) Generate(ctx context.Context, req Request) (string, 
 	// itself narrower on exit 0 (see shortcutsRateLimitReason).
 	if reason, ok := shortcutsRateLimitReason(res.ExitCode, res.Stdout, res.Stderr); ok {
 		return "", RateLimited(p.ID(), 0, "%s", reason)
+	}
+	if msg, ok := shortcutErrorReply(res.Stdout); ok {
+		return "", Unavailable(p.ID(), "shortcut %q answered %q: run `shelp setup shortcuts` to update it", p.name, msg)
 	}
 	if res.ExitCode != 0 {
 		msg := FirstLine(res.Stderr)
@@ -446,7 +469,7 @@ func shortcutsRateLimitReason(exitCode int, stdout, stderr string) (string, bool
 	return reason, true
 }
 
-// --- `shortcuts list` cache --------------------------------------------
+// --- `shortcuts list` and version caches -----------------------------
 
 // shortcutsListCmd runs `shortcuts list` and returns its raw stdout (one
 // name per line). It's a package var so tests can fake it without
@@ -473,27 +496,95 @@ func parseShortcutsList(output string) map[string]bool {
 	return set
 }
 
-var (
-	shortcutsListOnce sync.Once
-	shortcutsListSet  map[string]bool
-	shortcutsListErr  error
-)
+// countShortcutName counts the lines of raw `shortcuts list` output that
+// are exactly name. Importing over a taken name briefly lists both
+// shortcuts under it (after "Add Shortcut", until "Replace"/"Keep Both"
+// renames one), and `shortcuts run <name>` may then reach either, so a
+// name listed twice is never taken as installed.
+func countShortcutName(raw, name string) int {
+	n := 0
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(line) == name {
+			n++
+		}
+	}
+	return n
+}
+
+// shortcutsCache holds, for the life of the process, what Detect learns:
+// `shortcuts list` (the same ~50ms-plus round trip for every provider) and
+// each shortcut's version (a marker run, ~1s -- six providers share one
+// shortcut, so one run serves all six). Only Detect and the `shelp
+// providers` notes use it; Generate and the setup step always ask fresh.
+var shortcutsCache struct {
+	mu       sync.Mutex
+	listDone bool
+	list     map[string]bool
+	listErr  error
+	versions map[string]*shortcutVersionProbe
+}
+
+type shortcutVersionProbe struct {
+	once sync.Once
+	v    int
+	err  error
+}
 
 // installedShortcuts returns the set of installed shortcut names, cached
-// for the life of the process: `shortcuts list` is the same ~50ms-plus
-// round trip every time and every provider's Detect calls it once per
-// `shelp providers` invocation. Only Detect uses this cache; Generate and
-// the setup step always ask fresh (see shortcutsListCmd).
+// for the life of the process (see shortcutsCache).
 func installedShortcuts(ctx context.Context) (map[string]bool, error) {
-	shortcutsListOnce.Do(func() {
+	c := &shortcutsCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.listDone {
 		out, err := shortcutsListCmd(ctx)
 		if err != nil {
-			shortcutsListErr = err
-			return
+			c.listErr = err
+		} else {
+			c.list = parseShortcutsList(out)
 		}
-		shortcutsListSet = parseShortcutsList(out)
-	})
-	return shortcutsListSet, shortcutsListErr
+		c.listDone = true
+	}
+	return c.list, c.listErr
+}
+
+// cachedShortcutVersion is installedShortcutVersion, run at most once per
+// name per process however many providers ask concurrently.
+func cachedShortcutVersion(ctx context.Context, name string) (int, error) {
+	c := &shortcutsCache
+	c.mu.Lock()
+	if c.versions == nil {
+		c.versions = map[string]*shortcutVersionProbe{}
+	}
+	p := c.versions[name]
+	if p == nil {
+		p = &shortcutVersionProbe{}
+		c.versions[name] = p
+	}
+	c.mu.Unlock()
+	p.once.Do(func() { p.v, p.err = installedShortcutVersion(ctx, name) })
+	return p.v, p.err
+}
+
+// legacyShortcutsNotes is the shortcuts family's `shelp providers` note:
+// the format 1-4 shortcuts still installed, by name only (never run).
+func legacyShortcutsNotes(ctx context.Context, cfg *config.Config) []string {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	if _, ok := LookPath("shortcuts"); !ok {
+		return nil
+	}
+	set, err := installedShortcuts(ctx)
+	if err != nil {
+		return nil
+	}
+	name := resolveShortcutName(cfg)
+	legacy := legacyShortcuts(set, name)
+	if len(legacy) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("old shelp shortcuts, no longer used (shelp now uses one, %q): %s -- delete them in the Shortcuts app", name, quoteAll(legacy))}
 }
 
 // --- Setup step ---------------------------------------------------------
@@ -513,25 +604,34 @@ var openCmd = func(ctx context.Context, path string) error {
 	return nil
 }
 
+// generateShortcut is GenerateShortcut, as a package var so the setup
+// step's tests don't sign (a call to Apple's server) on every run.
+var generateShortcut = GenerateShortcut
+
 // shortcutsPollInterval/-Timeout govern how the setup step waits for a
-// human to click "Add Shortcut". Package vars so tests can shrink them.
+// human to act in the Shortcuts app. Package vars so tests can shrink them.
 var (
-	shortcutsPollInterval = 2 * time.Second
+	shortcutsPollInterval = time.Second
 	shortcutsPollTimeout  = 3 * time.Minute
 )
 
-// waitForShortcut polls `shortcuts list` until name appears, printing one
-// "." to progress per attempt, up to shortcutsPollTimeout. It checks
-// immediately before ever sleeping, so an already-installed shortcut (or
-// a very fast click) returns right away.
-func waitForShortcut(ctx context.Context, name string, progress io.Writer) (bool, error) {
+// maxMarkerErrors is how many failed marker runs one wait allows per
+// shortcut before it stops asking that shortcut: a shortcut that fails
+// every run posts a notification every time, so a broken new format must
+// not be polled every second for minutes.
+const maxMarkerErrors = 3
+
+// waitForShortcutGone polls `shortcuts list` -- running nothing -- until
+// no shortcut is named name, printing one "." to progress per attempt, up
+// to shortcutsPollTimeout. It checks immediately before ever sleeping.
+func waitForShortcutGone(ctx context.Context, name string, progress io.Writer) (bool, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
 	for {
-		out, err := shortcutsListCmd(ctx)
+		raw, err := shortcutsListCmd(ctx)
 		if err != nil {
 			return false, err
 		}
-		if parseShortcutsList(out)[name] {
+		if countShortcutName(raw, name) == 0 {
 			return true, nil
 		}
 		if !time.Now().Before(deadline) {
@@ -551,7 +651,8 @@ func waitForShortcut(ctx context.Context, name string, progress io.Writer) (bool
 // -- sorted. Neither button in the import's "Replace"/"Keep Both" prompt
 // deletes anything (verified on macOS 27, 2026-10-07): "Replace" gives the
 // new shortcut the name and renames the old one "<name> 1"; "Keep Both"
-// names the new one "<name> 1".
+// names the new one "<name> 1". N can skip numbers: names of deleted
+// shortcuts still count.
 func conflictCopies(list map[string]bool, name string) []string {
 	var out []string
 	for n := range list {
@@ -571,28 +672,43 @@ func quoteAll(names []string) string {
 	return strings.Join(q, ", ")
 }
 
-// waitForShortcutUpdate runs after the update's import dialog opens. The
-// dialog asks "Add Shortcut", then "Replace" or "Keep Both" (the name is
-// taken), and every poll it works out which one happened:
+// waitResult is how waitForNewShortcut ended.
+type waitResult struct {
+	installed bool
+	// unreadable is the marker's last error when the new shortcut, the only
+	// one with the name, failed its version check maxMarkerErrors times.
+	unreadable error
+}
+
+// waitForNewShortcut runs after the import dialog opens and returns once
+// exactly one shortcut is named name, it answers wantVersion or newer, and
+// no "<name> N" copy that appeared during the wait is left. Normally the
+// name is free when the dialog opens (a fresh install, or an update whose
+// old shortcut the user already deleted) and "Add Shortcut" is all there
+// is. If the name is taken anyway (the user didn't delete the old one, or
+// it came back), Shortcuts asks "Replace" or "Keep Both" after "Add
+// Shortcut", and every poll works out which happened:
 //
-//   - Replace: name answers wantVersion. Done -- unless the old shortcut
-//     was kept as "<name> 1" (it always is, on macOS 27), in which case it
-//     says to delete that copy and waits for it to go; Ctrl-C there is
-//     harmless, the update has already worked.
+//   - the name is listed twice: the dialog is still open (both shortcuts
+//     carry the name until the user answers, and `shortcuts run` may reach
+//     either), so nothing is run and nothing counts as done.
+//   - Replace: name answers wantVersion, and the old shortcut was kept as
+//     "<name> N". It says to delete that copy and waits for it to go;
+//     Ctrl-C there is harmless, the update has already worked.
 //   - Keep Both: name still answers the old version while a copy that
 //     appeared during this wait answers wantVersion. It says to delete the
 //     old one and rename the copy, then waits for name to answer
 //     wantVersion with no copy left over.
 //
 // before is the shortcut list from just before the dialog opened. Only
-// copies that appeared since are ever asked their version (they are this
-// import or the old shortcut, which just answered its own), so an older
-// leftover -- perhaps a broken v2 that would fail and post a notification
-// -- is never run. Each new instruction restarts the shortcutsPollTimeout
-// clock, since the user has something new to do. out gets one "." per
-// poll after the caller's "waiting..." line, which this function ends.
-// Returns false on timeout.
-func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, before map[string]bool, out io.Writer, pal style.Palette) (bool, error) {
+// name and copies that appeared since are ever asked their version, at
+// most maxMarkerErrors failed runs each, so an older leftover -- perhaps a
+// broken v2 that would fail and post a notification -- is never run. Each
+// new instruction restarts the shortcutsPollTimeout clock, since the user
+// has something new to do. out gets one "." per poll after the caller's
+// "waiting..." line, which this function ends. A zero waitResult is a
+// timeout.
+func waitForNewShortcut(ctx context.Context, name string, wantVersion int, before map[string]bool, out io.Writer, pal style.Palette) (waitResult, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
 	midLine := true
 	say := func(msg string) {
@@ -603,13 +719,28 @@ func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, be
 		midLine = false
 		deadline = time.Now().Add(shortcutsPollTimeout)
 	}
-	finish := func(ok bool) (bool, error) {
+	finish := func(r waitResult) (waitResult, error) {
 		if midLine {
 			fmt.Fprintln(out)
 		}
-		return ok, nil
+		return r, nil
 	}
-	var toldCopies, toldKeptBoth string
+	failures := map[string]int{}
+	var lastErr error
+	probe := func(n string) (int, bool) {
+		if failures[n] >= maxMarkerErrors {
+			return 0, false
+		}
+		v, err := installedShortcutVersion(ctx, n)
+		if err != nil {
+			failures[n]++
+			lastErr = err
+			return 0, false
+		}
+		return v, true
+	}
+	var toldDup bool
+	var toldCopies, keptBoth string
 	for {
 		if raw, err := shortcutsListCmd(ctx); err == nil {
 			list := parseShortcutsList(raw)
@@ -619,87 +750,109 @@ func waitForShortcutUpdate(ctx context.Context, name string, wantVersion int, be
 					fresh = append(fresh, c)
 				}
 			}
-			current := false
-			if list[name] {
-				v, err := installedShortcutVersion(ctx, name)
-				current = err == nil && v >= wantVersion
-			}
-			switch {
-			case current && len(fresh) == 0:
-				return finish(true)
-			case current:
-				if q := quoteAll(fresh); q != toldCopies {
-					toldCopies = q
-					say(fmt.Sprintf("updated -- but Shortcuts also kept a copy, %s: delete it in the Shortcuts app (shelp can't delete shortcuts). Waiting for that; Ctrl-C is fine too, the update itself is done.", q))
+			switch count := countShortcutName(raw, name); {
+			case count > 1:
+				if !toldDup {
+					toldDup = true
+					say(fmt.Sprintf("two shortcuts are named %q while Shortcuts asks \"Replace\" or \"Keep Both\"; either works, and shelp will say what's left to tidy up.", name))
 				}
 			default:
-				for _, c := range fresh {
-					if v, err := installedShortcutVersion(ctx, c); err == nil && v >= wantVersion {
-						if c != toldKeptBoth {
-							toldKeptBoth = c
-							say(fmt.Sprintf("that was \"Keep Both\", so the update is %q: in the Shortcuts app, delete the old %q, then rename %q to %q. Waiting for that...", c, name, c, name))
+				current := false
+				if count == 1 {
+					v, ok := probe(name)
+					current = ok && v >= wantVersion
+					if !ok && failures[name] >= maxMarkerErrors && len(fresh) == 0 {
+						return finish(waitResult{unreadable: lastErr})
+					}
+				}
+				switch {
+				case current && len(fresh) == 0:
+					return finish(waitResult{installed: true})
+				case current:
+					if q := quoteAll(fresh); q != toldCopies {
+						toldCopies = q
+						say(fmt.Sprintf("updated -- but Shortcuts also kept a copy, %s: delete it in the Shortcuts app (shelp can't delete shortcuts). Waiting for that; Ctrl-C is fine too, the update itself is done.", q))
+					}
+				default:
+					for _, c := range fresh {
+						if c == keptBoth {
+							break // already found and explained; no need to run it again
 						}
-						break
+						if v, ok := probe(c); ok && v >= wantVersion {
+							keptBoth = c
+							say(fmt.Sprintf("that was \"Keep Both\", so the update is %q: in the Shortcuts app, delete the old %q, then rename %q to %q. Waiting for that...", c, name, c, name))
+							break
+						}
 					}
 				}
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return finish(false)
+			return finish(waitResult{})
 		}
 		fmt.Fprint(out, ".")
 		midLine = true
 		select {
 		case <-ctx.Done():
-			finish(false)
-			return false, ctx.Err()
+			finish(waitResult{})
+			return waitResult{}, ctx.Err()
 		case <-time.After(shortcutsPollInterval):
 		}
 	}
 }
 
-// shortcutSetupKeys returns the variant keys runShortcutsSetup should
-// process: installList's keys (config/env, in order), plus -- so an
-// upgrade covers everything the user already has, not just what's
-// currently configured -- any other shortcutVariants entry whose resolved
-// name is already installed. Unknown keys from installList are left in
-// place; the caller reports and skips them (as before), since a typo
-// there is a config problem worth surfacing, not silently dropping.
-func shortcutSetupKeys(wanted []string, sc shortcutsConfig, installed map[string]bool) []string {
-	keys := append([]string(nil), wanted...)
-	seen := make(map[string]bool, len(wanted))
-	for _, k := range wanted {
-		seen[k] = true
+// addShortcut opens the generated file at path (Shortcuts shows "Add
+// Shortcut") and waits for the user to add it. It reports whether the
+// shortcut ended up installed and current.
+func addShortcut(ctx context.Context, name, path string, stdout, stderr io.Writer) (bool, error) {
+	out, errp := style.For(stdout), style.For(stderr)
+	before := map[string]bool{}
+	if raw, err := shortcutsListCmd(ctx); err == nil {
+		before = parseShortcutsList(raw)
 	}
-	for _, v := range shortcutVariants {
-		if seen[v.key] {
-			continue
-		}
-		if installed[resolveName(v, sc)] {
-			keys = append(keys, v.key)
-			seen[v.key] = true
-		}
+	fmt.Fprintf(stdout, "shortcuts: opening Shortcuts -- click %s to install %q\n", out.Bold("\"Add Shortcut\""), name)
+	if err := openCmd(ctx, path); err != nil {
+		return false, fmt.Errorf("open: %w", err)
 	}
-	return keys
+	fmt.Fprintf(stdout, "shortcuts: waiting for you to add it (up to %s) ", shortcutsPollTimeout)
+	res, err := waitForNewShortcut(ctx, name, ShortcutFormatVersion, before, stdout, out)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case res.installed:
+		fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %q installed (v%d)", name, ShortcutFormatVersion)))
+		return true, nil
+	case res.unreadable != nil:
+		fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %q was added, but it didn't answer its version check (%v), so shelp stopped asking (each failed run posts a notification). Delete it in the Shortcuts app and run `shelp setup shortcuts` again.", name, res.unreadable)))
+	default:
+		fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: timed out waiting for %q; run `shelp setup shortcuts` again once it's added", name)))
+	}
+	return false, nil
 }
 
-// runShortcutsSetup is the "shortcuts" SetupStep. For each variant in
-// shortcutSetupKeys, it handles one of three states:
+// runShortcutsSetup is the "shortcuts" SetupStep. It installs or updates
+// the one shortcut every shortcuts:* provider runs:
 //
-//   - missing: generate, sign, open (user clicks "Add Shortcut"), poll
-//     `shortcuts list` until the name appears -- as before.
+//   - missing: generate, sign, open (user clicks "Add Shortcut"), wait for
+//     it to be listed once and answer the current version marker.
 //   - outdated (installedShortcutVersion is older than
-//     ShortcutFormatVersion): regenerate, sign, open (user clicks
-//     "Replace" this time -- Shortcuts offers that button when importing
-//     over an existing name; UNVERIFIED without a human actually doing
-//     it), then poll the version (not presence: the name doesn't change)
-//     until it's current, with the same timeout as install.
+//     ShortcutFormatVersion): generate and sign first, then ask the user to
+//     delete the old one in the Shortcuts app and poll `shortcuts list` --
+//     running nothing -- until it's gone; then open the new one, which
+//     imports with a plain "Add Shortcut" since the name is free, and wait
+//     as for a missing one (which still copes with "Replace"/"Keep Both"
+//     if the name turns out to be taken after all). Deleting first is the
+//     only way to end with one shortcut under the name: importing over it
+//     keeps both, whichever button the user picks.
 //   - current or newer: skip with a message.
+//   - unknown version (the check itself failed: Shortcuts Events
+//     unavailable, a broken format that fails every run): left alone,
+//     with a note to delete it by hand and run setup again.
 //
-// A version check that itself fails (Shortcuts Events unavailable, a
-// shortcut that fails every run) is never treated as outdated -- same
-// reasoning as Detect's outdatedShortcutNote -- so that variant is skipped
-// with a note instead of being re-opened.
+// Before any of that it lists, by name and never running them, the
+// per-model shortcuts formats 1-4 installed (legacyShortcuts) and any
+// "<name> N" copies an earlier update left, so the user can delete them.
 func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr io.Writer) error {
 	if runtime.GOOS != "darwin" {
 		fmt.Fprintln(stdout, "shortcuts: darwin only, nothing to do here")
@@ -714,7 +867,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	if err := cfg.Section("shortcuts", &sc); err != nil {
 		return err
 	}
-	wanted := installList(sc)
+	name := sc.shortcutName()
 	out, errp := style.For(stdout), style.For(stderr)
 
 	rawList, err := shortcutsListCmd(ctx)
@@ -723,105 +876,77 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	}
 	installed := parseShortcutsList(rawList)
 
+	// Listed by name only, never run: an old one may be a broken format
+	// that fails (and posts a notification) on every run.
+	if legacy := legacyShortcuts(installed, name); len(legacy) > 0 {
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: older shelps made one shortcut per model; this one uses a single shortcut, %q, for every shortcuts:* provider. No longer used, so delete them in the Shortcuts app (right-click › Delete): %s", name, quoteAll(legacy))))
+	}
+	if copies := conflictCopies(installed, name); len(copies) > 0 {
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s look(s) like a copy left by an earlier update; delete it in the Shortcuts app if you don't use it", quoteAll(copies))))
+	}
+
 	tmpDir, err := os.MkdirTemp("", "shelp-shortcuts-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	for _, key := range shortcutSetupKeys(wanted, sc, installed) {
-		v, ok := variantByKey(key)
-		if !ok {
-			fmt.Fprintf(stderr, "shortcuts: unknown variant %q in install list, skipping\n", key)
-			continue
+	current := false
+	switch {
+	case !installed[name]:
+		fmt.Fprintf(stdout, "shortcuts: generating %q...\n", name)
+		path, err := generateShortcut(ctx, tmpDir, name)
+		if err != nil {
+			return fmt.Errorf("generate: %w", err)
 		}
-		name := resolveName(v, sc)
-		// Never run: an old copy may be a broken format that fails (and
-		// posts a notification) on every run.
-		if copies := conflictCopies(installed, name); len(copies) > 0 {
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %s look(s) like a copy left by an earlier update; delete it in the Shortcuts app if you don't use it", v.id, quoteAll(copies))))
+		if current, err = addShortcut(ctx, name, path, stdout, stderr); err != nil {
+			return err
 		}
-
-		if !installed[name] {
-			fmt.Fprintf(stdout, "shortcuts: %s: generating %q...\n", v.id, name)
-			path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
+	default:
+		// An unreadable version is left alone rather than replaced: the
+		// update flow ends by polling the version, and polling a shortcut
+		// that fails every run (a v2) would post a notification every poll.
+		have, verr := installedShortcutVersion(ctx, name)
+		switch {
+		case verr != nil:
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again", name, verr)))
+		case have == ShortcutFormatVersion:
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %q already up to date (v%d), skipping", name, ShortcutFormatVersion)))
+			current = true
+		case have > ShortcutFormatVersion:
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is v%d, newer than this shelp (v%d); leaving it alone", name, have, ShortcutFormatVersion)))
+			current = true
+		default:
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is outdated (v%d, current v%d); generating the new one...", name, have, ShortcutFormatVersion)))
+			// Generate (and sign) before asking for the deletion: a signing
+			// failure must not cost the user their working shortcut.
+			path, err := generateShortcut(ctx, tmpDir, name)
 			if err != nil {
-				return fmt.Errorf("%s: generate: %w", v.id, err)
+				return fmt.Errorf("generate: %w", err)
 			}
-			fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s to install %q\n", v.id, out.Bold("\"Add Shortcut\""), name)
-			if err := openCmd(ctx, path); err != nil {
-				return fmt.Errorf("%s: open: %w", v.id, err)
-			}
-			fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to add it (up to %s) ", v.id, shortcutsPollTimeout)
-			added, err := waitForShortcut(ctx, name, stdout)
+			fmt.Fprintf(stdout, "shortcuts: Shortcuts can't update a shortcut in place, so delete the old one first: in the Shortcuts app, right-click %q › %s. shelp then opens the new one for you to add.\n", name, out.Bold("Delete"))
+			fmt.Fprintf(stdout, "shortcuts: waiting for %q to be deleted (up to %s) ", name, shortcutsPollTimeout)
+			gone, err := waitForShortcutGone(ctx, name, stdout)
 			fmt.Fprintln(stdout)
 			if err != nil {
-				return fmt.Errorf("%s: %w", v.id, err)
+				return err
 			}
-			if !added {
-				fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %s: timed out waiting for %q; run `shelp setup shortcuts` again once it's added", v.id, name)))
-				continue
+			if !gone {
+				fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: timed out waiting for %q to be deleted; nothing changed -- run `shelp setup shortcuts` again when you're ready", name)))
+				break
 			}
-			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q installed", v.id, name)))
-			installed[name] = true
-			continue
+			if current, err = addShortcut(ctx, name, path, stdout, stderr); err != nil {
+				return err
+			}
 		}
-
-		// An unreadable version is left alone rather than replaced: the
-		// replace flow polls the version, and polling a shortcut that fails
-		// every run (a v2) would post a notification every poll.
-		have, verr := installedShortcutVersion(ctx, name)
-		if verr != nil {
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again", v.id, name, verr)))
-			continue
-		}
-		if have == ShortcutFormatVersion {
-			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q already up to date (v%d), skipping", v.id, name, ShortcutFormatVersion)))
-			continue
-		}
-		if have > ShortcutFormatVersion {
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q is v%d, newer than this shelp (v%d); leaving it alone", v.id, name, have, ShortcutFormatVersion)))
-			continue
-		}
-
-		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s: %q is outdated (v%d, current v%d); regenerating...", v.id, name, have, ShortcutFormatVersion)))
-		path, err := GenerateShortcut(ctx, tmpDir, name, v.model, v.web)
-		if err != nil {
-			return fmt.Errorf("%s: generate: %w", v.id, err)
-		}
-		before := installed
-		if raw, err := shortcutsListCmd(ctx); err == nil {
-			before = parseShortcutsList(raw)
-		}
-		fmt.Fprintf(stdout, "shortcuts: %s: opening Shortcuts -- click %s, then %s, to update %q\n", v.id, out.Bold("\"Add Shortcut\""), out.Bold("\"Replace\""), name)
-		if err := openCmd(ctx, path); err != nil {
-			return fmt.Errorf("%s: open: %w", v.id, err)
-		}
-		fmt.Fprintf(stdout, "shortcuts: %s: waiting for you to replace it (up to %s) ", v.id, shortcutsPollTimeout)
-		updated, err := waitForShortcutUpdate(ctx, name, ShortcutFormatVersion, before, stdout, out)
-		if err != nil {
-			return fmt.Errorf("%s: %w", v.id, err)
-		}
-		if !updated {
-			fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %s: timed out waiting for %q to update; run `shelp setup shortcuts` again once it's replaced", v.id, name)))
-			continue
-		}
-		fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %s: %q updated to v%d", v.id, name, ShortcutFormatVersion)))
 	}
 
-	fmt.Fprintln(stdout, "shortcuts: status:")
-	idW, nameW := 0, 0
-	for _, v := range shortcutVariants {
-		idW = max(idW, len(v.id))
-		nameW = max(nameW, utf8.RuneCountInString(resolveName(v, sc)))
-	}
-	for _, v := range shortcutVariants {
-		name := resolveName(v, sc)
-		status := out.Dim("not installed")
-		if installed[name] {
-			status = out.OK("installed")
+	if current {
+		ids := make([]string, len(shortcutVariants))
+		for i, v := range shortcutVariants {
+			ids[i] = v.id
 		}
-		fmt.Fprintf(stdout, "  %s  %s  %s\n", style.PadRight(v.id, idW), style.PadRight(name, nameW), status)
+		fmt.Fprintf(stdout, "shortcuts: %q serves %s; the chatgpt ones also need %s\n", name, strings.Join(ids, ", "), chatGPTExtension)
 	}
 	return nil
 }
@@ -829,9 +954,10 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 func init() {
 	RegisterSetup(SetupStep{
 		Name: "shortcuts",
-		Help: "install shelp's Apple Shortcuts \"Use Model\" wrappers (opens Shortcuts; you click Add Shortcut)",
+		Help: "install shelp's Apple Shortcut for the shortcuts:* providers (opens Shortcuts; you click Add Shortcut)",
 		Run:  runShortcutsSetup,
 	})
+	RegisterNotes(legacyShortcutsNotes)
 }
 
 // --- Backend verification helper ----------------------------------------

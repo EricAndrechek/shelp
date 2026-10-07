@@ -1,19 +1,26 @@
 package provider
 
-// Builds, converts, and signs one Apple Shortcuts "Use Model" shortcut for
-// a given (model, web-search) pair.
+// Builds, converts, and signs shelp's one Apple Shortcuts "Use Model"
+// shortcut. Since format 5 a single shortcut serves every shortcuts:*
+// provider: its input names the model (see buildWorkflow).
 //
-// The plist shape below was reverse-engineered from the installed "Ask AI"
-// shortcut on macOS 27.0 (see CLAUDE.md, "Shortcuts Use Model") and is
-// intentionally minimal: it has no WFWorkflowName field, so the shortcut's
-// display name comes from the *filename* of the .shortcut file at import
-// time. GenerateShortcut therefore writes "<name>.shortcut" verbatim.
+// The plist has no WFWorkflowName field, so the shortcut's display name
+// comes from the *filename* of the .shortcut file at import time.
+// GenerateShortcut therefore writes "<name>.shortcut" verbatim.
 //
 // Pipeline: build JSON in Go -> `plutil -convert binary1` (JSON -> binary
 // plist) -> `shortcuts sign --mode anyone` (binary plist -> importable
 // .shortcut). Both steps are silent CLI operations; nothing pops a dialog
 // until the resulting file is opened (which only the setup step, deliberately,
 // ever does).
+//
+// Every action shape below is taken from a real, stored action, never
+// guessed. Sources, cited per type: the live-verified format 4 generator
+// (which itself came from Gallery.bundle's Haiku.wflow and the If actions
+// in Eric's library); read-only copies of Eric's Shortcuts library
+// (~/Library/Shortcuts/Shortcuts.sqlite, ZSHORTCUTACTIONS.ZDATA, macOS 27);
+// and github.com/viticci/shortcuts-playground-plugin's CONTROL_FLOW.md and
+// EXAMPLES.md (macOS 27, checked against Apple-built samples).
 
 import (
 	"context"
@@ -24,6 +31,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf16"
 )
 
 // wfIcon is WFWorkflowIcon.
@@ -34,12 +42,30 @@ type wfIcon struct {
 
 // wfAttachment is one entry of a WFTextTokenString's attachmentsByRange, or
 // (wrapped in wfTextTokenAttachment) a directly-referenced single value.
-// Only Type is set for the prompt's ExtensionInput attachment; the output
-// action's ActionOutput attachment also sets OutputUUID/OutputName.
+// Shortcut Input is {"Type": "ExtensionInput"}; an earlier action's output
+// is {"Type": "ActionOutput", "OutputUUID": <its UUID>, "OutputName":
+// <its output's name>}.
 type wfAttachment struct {
 	Type       string `json:"Type"`
 	OutputUUID string `json:"OutputUUID,omitempty"`
 	OutputName string `json:"OutputName,omitempty"`
+}
+
+// Output names of the actions buildWorkflow references, as stored in real
+// libraries: a Text action's is "Text" (the v4 If; Wolfram Alpha 2
+// Clipboard and XML To Dictionary), Get Dictionary from Input's is
+// "Dictionary" and Get Dictionary Value's is "Dictionary Value" (both in
+// Wolfram Alpha 2 Clipboard), Use Model's is "Response" (the v4 shortcut;
+// Gallery Haiku.wflow).
+const (
+	outputNameText            = "Text"
+	outputNameDictionary      = "Dictionary"
+	outputNameDictionaryValue = "Dictionary Value"
+	outputNameResponse        = "Response"
+)
+
+func actionOutput(uuid, name string) wfAttachment {
+	return wfAttachment{Type: "ActionOutput", OutputUUID: uuid, OutputName: name}
 }
 
 // wfTextTokenValue is a WFTextTokenString's Value.
@@ -48,22 +74,49 @@ type wfTextTokenValue struct {
 	AttachmentsByRange map[string]wfAttachment `json:"attachmentsByRange"`
 }
 
-// wfTextToken is a WFTextTokenString-typed parameter value (used for both
-// WFLLMPrompt and WFOutput).
+// wfTextToken is a WFTextTokenString-typed parameter value (WFLLMPrompt,
+// WFOutput, WFTextActionText).
 type wfTextToken struct {
 	WFSerializationType string           `json:"WFSerializationType"`
 	Value               wfTextTokenValue `json:"Value"`
 }
 
+// literalText is a WFTextTokenString with no attachments.
+func literalText(s string) wfTextToken {
+	return wfTextToken{
+		WFSerializationType: "WFTextTokenString",
+		Value:               wfTextTokenValue{String: s, AttachmentsByRange: map[string]wfAttachment{}},
+	}
+}
+
+// textWith is a WFTextTokenString reading prefix followed by att. The
+// attachment's key is "{<offset>, 1}", the offset of its U+FFFC placeholder
+// in UTF-16 code units: Wolfram Alpha 2 Clipboard's Text action stores
+// "https://api.wolframalpha.com/v2/query?input=￼&..." with its
+// attachment at "{44, 1}", the placeholder's index.
+func textWith(prefix string, att wfAttachment) wfTextToken {
+	off := len(utf16.Encode([]rune(prefix)))
+	return wfTextToken{
+		WFSerializationType: "WFTextTokenString",
+		Value: wfTextTokenValue{
+			String:             prefix + extensionInputPlaceholder,
+			AttachmentsByRange: map[string]wfAttachment{fmt.Sprintf("{%d, 1}", off): att},
+		},
+	}
+}
+
 // wfTextTokenAttachment is a parameter value that references a single
 // attachment directly (Value is the attachment dict itself), rather than
-// interpolating it into a string like wfTextToken does. Verified against
-// macOS 27's Gallery.bundle/DocumentReview.wflow, whose "Choose from Menu"
-// branches reference a file/URL the same way, e.g.
-// "WFFile": {"Value": {"Type": "Ask"}, "WFSerializationType": "WFTextTokenAttachment"}.
+// interpolating it into a string like wfTextToken does. Get Dictionary from
+// Input and Get Dictionary Value take their WFInput this way (Wolfram Alpha
+// 2 Clipboard, XML To Dictionary).
 type wfTextTokenAttachment struct {
 	WFSerializationType string       `json:"WFSerializationType"`
 	Value               wfAttachment `json:"Value"`
+}
+
+func tokenAttachment(att wfAttachment) wfTextTokenAttachment {
+	return wfTextTokenAttachment{WFSerializationType: "WFTextTokenAttachment", Value: att}
 }
 
 // wfConditionInput is the If action's WFInput: unlike WFFile and the like,
@@ -76,7 +129,15 @@ type wfConditionInput struct {
 	Variable wfTextTokenAttachment `json:"Variable"`
 }
 
+func conditionInput(att wfAttachment) *wfConditionInput {
+	return &wfConditionInput{Type: "Variable", Variable: tokenAttachment(att)}
+}
+
 // askLLMParams is WFWorkflowActionParameters for is.workflow.actions.askllm.
+// Its WFLLMPrompt is a WFTextTokenString; format 4 attached Shortcut Input
+// there, format 5 attaches the "prompt" Dictionary Value -- an ActionOutput
+// in a prompt, as viticci's EXAMPLES.md "AI Query" (an Ask for Input's
+// "Provided Input") and VARIABLES.md (a Text action's "Text") store it.
 type askLLMParams struct {
 	UUID                   string      `json:"UUID"`
 	WFLLMModel             string      `json:"WFLLMModel"`
@@ -94,7 +155,36 @@ type textParams struct {
 	WFTextActionText wfTextToken `json:"WFTextActionText"`
 }
 
-// outputParams is WFWorkflowActionParameters for is.workflow.actions.output.
+// detectDictionaryParams is WFWorkflowActionParameters for
+// is.workflow.actions.detect.dictionary ("Get Dictionary from Input"),
+// output "Dictionary". Stored shape (XML To Dictionary, action 8, run on a
+// "Text" output; Wolfram Alpha 2 Clipboard, action 5):
+//
+//	{"UUID": ..., "WFInput": {"Value": {"OutputUUID": ..., "Type":
+//	"ActionOutput", "OutputName": "Text"}, "WFSerializationType":
+//	"WFTextTokenAttachment"}}
+type detectDictionaryParams struct {
+	UUID    string                `json:"UUID"`
+	WFInput wfTextTokenAttachment `json:"WFInput"`
+}
+
+// getValueForKeyParams is WFWorkflowActionParameters for
+// is.workflow.actions.getvalueforkey ("Get Dictionary Value"), output
+// "Dictionary Value". Stored shape (Wolfram Alpha 2 Clipboard, actions
+// 6-10; none in the library sets WFGetDictionaryValueType, whose default
+// is "Value"):
+//
+//	{"UUID": ..., "WFDictionaryKey": "queryresult", "WFInput": {"Value":
+//	{"OutputUUID": ..., "Type": "ActionOutput", "OutputName":
+//	"Dictionary"}, "WFSerializationType": "WFTextTokenAttachment"}}
+type getValueForKeyParams struct {
+	UUID            string                `json:"UUID"`
+	WFDictionaryKey string                `json:"WFDictionaryKey"`
+	WFInput         wfTextTokenAttachment `json:"WFInput"`
+}
+
+// outputParams is WFWorkflowActionParameters for is.workflow.actions.output
+// ("Stop and Output").
 type outputParams struct {
 	WFOutput wfTextToken `json:"WFOutput"`
 }
@@ -104,10 +194,9 @@ type outputParams struct {
 // All three actions in one group share GroupingIdentifier and repeat the
 // same action identifier; WFControlFlowMode distinguishes which part of the
 // group a given entry is (see the WFControlFlowMode* constants below). Only
-// the "If" entry sets WFCondition/WFConditionalActionString/WFInput; only
-// the "End If" entry sets UUID (present but never referenced elsewhere in
-// this generator -- matches the pattern of every WFControlFlowMode-based
-// action observed, e.g. DocumentReview.wflow's repeat/choosefrommenu ends).
+// the "If" entry sets WFCondition/WFConditionalActionString/WFInput; the
+// "End If" entries here carry a UUID, as format 4's did (live-verified; real
+// libraries store End Ifs both with and without one -- PDFtoolkit has both).
 //
 // No macOS 27 Gallery.bundle *.wflow contains a conditional action, so the
 // shape comes from the If actions stored in a real Shortcuts library
@@ -141,23 +230,25 @@ const (
 // conditionIsEquals is the WFCondition code for "Is" (equals) on a text
 // input: a real library's "If Type is Safari web page" stores WFCondition
 // 4 with WFConditionalActionString "Safari web page", and
-// github.com/electrikmilk/cherri's `conditions` map agrees.
+// github.com/electrikmilk/cherri's `conditions` map and viticci's
+// CONTROL_FLOW.md ("4 | is (string equals)") agree.
 const conditionIsEquals = 4
 
 // ShortcutFormatVersion is the current generated shortcut's plist format.
 // It increments whenever buildWorkflow's action shape changes in a way
-// that changes currentShortcutActionCount() or otherwise requires an
-// installed shortcut to be regenerated (see shortcuts.go's outdated-version
-// detection). 1 was the original marker-less, 2-action (Use Model + Stop
-// and Output) shape. 2 added the version-marker If block below, and 3
-// fixed its WFInput wrapper, but both compared Shortcut Input itself, and
-// a shortcut that takes text or files has no text type for "is" to
-// compare: Shortcuts drops the comparison string, and every run, real
-// prompts included, fails at the If with "Please choose a value for each
-// parameter in this action." (live on macOS 27, 2026-10-07). 4 compares
-// the output of a Text action holding Shortcut Input instead, the way
-// Apple-built shortcuts do text comparisons.
-const ShortcutFormatVersion = 4
+// that requires an installed shortcut to be regenerated (see shortcuts.go's
+// outdated-version detection). 1 was the original marker-less, 2-action
+// (Use Model + Stop and Output) shape. 2 added the version-marker If block
+// below, and 3 fixed its WFInput wrapper, but both compared Shortcut Input
+// itself, and a shortcut that takes text or files has no text type for
+// "is" to compare: Shortcuts drops the comparison string, and every run,
+// real prompts included, fails at the If with "Please choose a value for
+// each parameter in this action." (live on macOS 27, 2026-10-07). 4
+// compares the output of a Text action holding Shortcut Input instead, the
+// way Apple-built shortcuts do text comparisons. 1-4 were one shortcut per
+// (model, web) pair, named "shelp · <Model>[ + Web]". 5 is one shortcut
+// for all of them, its input a JSON {"model", "prompt"} object.
+const ShortcutFormatVersion = 5
 
 // shortcutVersionMarker is the literal Shortcut Input value that asks a
 // generated shortcut to report its own format version instead of calling
@@ -173,20 +264,21 @@ func shortcutVersionOutputText(version int) string {
 	return fmt.Sprintf("shelp-shortcut %d", version)
 }
 
-// literalOutputParams builds an is.workflow.actions.output action whose
-// WFOutput is a plain literal string (no attachment/interpolation) --
-// contrast with buildWorkflow's model-response output, whose WFOutput
-// attaches the askllm action's ActionOutput.
-func literalOutputParams(text string) outputParams {
-	return outputParams{
-		WFOutput: wfTextToken{
-			WFSerializationType: "WFTextTokenString",
-			Value: wfTextTokenValue{
-				String:             text,
-				AttachmentsByRange: map[string]wfAttachment{},
-			},
-		},
-	}
+// shortcutErrorPrefix starts the text a format 5+ shortcut answers when
+// its input names no model it knows ("shelp-shortcut-error: unknown model
+// <key>"): its last Otherwise, reached without calling Use Model.
+const shortcutErrorPrefix = "shelp-shortcut-error:"
+
+// shortcutUnknownModelText is the fallback branch's literal text; the
+// model value follows it.
+const shortcutUnknownModelText = shortcutErrorPrefix + " unknown model "
+
+// shortcutRequest is a format 5+ shortcut's input: the JSON object its Get
+// Dictionary from Input parses. Model is a shortcutVariant key, Prompt the
+// whole Use Model prompt.
+type shortcutRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
 }
 
 // wfAction is one entry of WFWorkflowActions.
@@ -195,9 +287,8 @@ type wfAction struct {
 	WFWorkflowActionParameters any    `json:"WFWorkflowActionParameters"`
 }
 
-// workflow is the unsigned .shortcut plist, as JSON, for one "Use Model"
-// shortcut. Field order here doesn't matter: plutil/Shortcuts treat it as
-// an unordered dictionary.
+// workflow is the unsigned .shortcut plist, as JSON. Field order here
+// doesn't matter: plutil/Shortcuts treat it as an unordered dictionary.
 type workflow struct {
 	WFWorkflowMinimumClientVersionString string     `json:"WFWorkflowMinimumClientVersionString"`
 	WFWorkflowMinimumClientVersion       int        `json:"WFWorkflowMinimumClientVersion"`
@@ -218,34 +309,116 @@ type workflow struct {
 // Shortcut Input / previous action's output).
 const extensionInputPlaceholder = "￼"
 
-// buildWorkflow returns the unsigned plist (as Go structs, ready to
-// marshal to JSON) for the "Use Model" action configured with model and
-// web, wired to take Shortcut Input as the prompt and return the model's
-// response as output. Matches the reference in CLAUDE.md exactly except
-// for freshly generated UUIDs.
-//
-// Since ShortcutFormatVersion 2, the actual Use Model call is wrapped in a
-// leading version-check block: "Text: Shortcut Input. If Text is <the
-// marker string>, Stop and Output 'shelp-shortcut <N>'; Otherwise, <the
-// v1 Use Model + Stop and Output pair>; End If." (The Text action is
-// format 4's; see ShortcutFormatVersion.) This lets shelp ask an already-installed
-// shortcut what format it is (see shortcuts.go) without ever spending a
-// real model call to find out, and without risking one on a shortcut that
-// might still be the marker-less v1 format (that branch never runs unless
-// the input equals the exact marker string).
-func buildWorkflow(model string, web bool) workflow {
-	uuid := newUUID()
-	textUUID := newUUID()
-	groupID := newUUID()
-	endUUID := newUUID()
+// wfBuilder accumulates WFWorkflowActions.
+type wfBuilder struct{ actions []wfAction }
 
-	inputText := &wfConditionInput{
-		Type: "Variable",
-		Variable: wfTextTokenAttachment{
-			WFSerializationType: "WFTextTokenAttachment",
-			Value:               wfAttachment{Type: "ActionOutput", OutputUUID: textUUID, OutputName: "Text"},
-		},
+func (b *wfBuilder) add(ident string, params any) {
+	b.actions = append(b.actions, wfAction{WFWorkflowActionIdentifier: "is.workflow.actions." + ident, WFWorkflowActionParameters: params})
+}
+
+// text adds a Text action holding att and returns its UUID.
+func (b *wfBuilder) text(att wfAttachment) string {
+	id := newUUID()
+	b.add("gettext", textParams{UUID: id, WFTextActionText: textWith("", att)})
+	return id
+}
+
+// ifTextIs opens an "If <Text output of textUUID> is <literal>" group and
+// returns its GroupingIdentifier.
+func (b *wfBuilder) ifTextIs(textUUID, literal string) string {
+	g := newUUID()
+	b.add("conditional", conditionalParams{
+		GroupingIdentifier:        g,
+		WFControlFlowMode:         wfControlFlowStart,
+		WFCondition:               conditionIsEquals,
+		WFConditionalActionString: literal,
+		WFInput:                   conditionInput(actionOutput(textUUID, outputNameText)),
+	})
+	return g
+}
+
+func (b *wfBuilder) otherwise(group string) {
+	b.add("conditional", conditionalParams{GroupingIdentifier: group, WFControlFlowMode: wfControlFlowMiddle})
+}
+
+func (b *wfBuilder) endIf(group string) {
+	b.add("conditional", conditionalParams{GroupingIdentifier: group, WFControlFlowMode: wfControlFlowEnd, UUID: newUUID()})
+}
+
+func (b *wfBuilder) output(t wfTextToken) {
+	b.add("output", outputParams{WFOutput: t})
+}
+
+// buildWorkflow returns the unsigned plist (as Go structs, ready to
+// marshal to JSON) of shelp's one shortcut. With K the variant keys of
+// shortcutVariants:
+//
+//	Text: Shortcut Input                                        [T]
+//	If T is "__shelp_shortcut_version__"
+//	    Stop and Output "shelp-shortcut 5"         (no model call)
+//	Otherwise
+//	    Get Dictionary from Input: T                            [D]
+//	    Get Dictionary Value "model" in D                       [M]
+//	    Get Dictionary Value "prompt" in D                      [P]
+//	    Text: M                                                 [K]
+//	    If K is K[0]
+//	        Use Model (K[0]'s model and web flag), prompt P     [R0]
+//	        Stop and Output R0
+//	    Otherwise
+//	        If K is K[1]
+//	            ...
+//	        Otherwise
+//	            Stop and Output "shelp-shortcut-error: unknown model <K>"
+//	        End If
+//	    End If
+//	End If
+//
+// The marker block is format 4's, unchanged: an If needs a text-typed
+// subject, which Shortcut Input isn't, so it compares a Text action's
+// output; the model value goes through a Text action for the same reason.
+// The dispatch nests each If in the previous Otherwise, the shape real
+// shortcuts store (PDFtoolkit's three nested "If ... contains" groups
+// close innermost first, End If, End If, End If); macOS 27's "Otherwise
+// If" (a mode-1 conditional with condition fields, per viticci's
+// CONTROL_FLOW.md) appears in no library shortcut, so it isn't used. Each
+// branch ends in its own Stop and Output, so nothing after a Use Model
+// runs either way.
+func buildWorkflow() workflow {
+	var b wfBuilder
+
+	inputText := b.text(wfAttachment{Type: "ExtensionInput"})
+	marker := b.ifTextIs(inputText, shortcutVersionMarker)
+	b.output(literalText(shortcutVersionOutputText(ShortcutFormatVersion)))
+	b.otherwise(marker)
+
+	dict := newUUID()
+	b.add("detect.dictionary", detectDictionaryParams{UUID: dict, WFInput: tokenAttachment(actionOutput(inputText, outputNameText))})
+	modelValue, promptValue := newUUID(), newUUID()
+	b.add("getvalueforkey", getValueForKeyParams{UUID: modelValue, WFDictionaryKey: "model", WFInput: tokenAttachment(actionOutput(dict, outputNameDictionary))})
+	b.add("getvalueforkey", getValueForKeyParams{UUID: promptValue, WFDictionaryKey: "prompt", WFInput: tokenAttachment(actionOutput(dict, outputNameDictionary))})
+	modelText := b.text(actionOutput(modelValue, outputNameDictionaryValue))
+
+	groups := make([]string, 0, len(shortcutVariants))
+	for _, v := range shortcutVariants {
+		g := b.ifTextIs(modelText, v.key)
+		groups = append(groups, g)
+		ask := newUUID()
+		b.add("askllm", askLLMParams{
+			UUID:                   ask,
+			WFLLMModel:             v.model,
+			WFGenerativeResultType: "Text",
+			FollowUp:               false,
+			WFAllowWebSearch:       v.web,
+			WFLLMPrompt:            textWith("", actionOutput(promptValue, outputNameDictionaryValue)),
+		})
+		b.output(textWith("", actionOutput(ask, outputNameResponse)))
+		b.otherwise(g)
 	}
+	b.output(textWith(shortcutUnknownModelText, actionOutput(modelText, outputNameText)))
+	for i := len(groups) - 1; i >= 0; i-- {
+		b.endIf(groups[i])
+	}
+	b.endIf(marker)
 
 	return workflow{
 		WFWorkflowMinimumClientVersionString: "900",
@@ -255,85 +428,7 @@ func buildWorkflow(model string, web bool) workflow {
 			WFWorkflowIconStartColor:  946986751,
 			WFWorkflowIconGlyphNumber: 61699,
 		},
-		WFWorkflowActions: []wfAction{
-			{ // Text: Shortcut Input
-				WFWorkflowActionIdentifier: "is.workflow.actions.gettext",
-				WFWorkflowActionParameters: textParams{
-					UUID: textUUID,
-					WFTextActionText: wfTextToken{
-						WFSerializationType: "WFTextTokenString",
-						Value: wfTextTokenValue{
-							String: extensionInputPlaceholder,
-							AttachmentsByRange: map[string]wfAttachment{
-								"{0, 1}": {Type: "ExtensionInput"},
-							},
-						},
-					},
-				},
-			},
-			{ // If Text is <shortcutVersionMarker>
-				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
-				WFWorkflowActionParameters: conditionalParams{
-					GroupingIdentifier:        groupID,
-					WFControlFlowMode:         wfControlFlowStart,
-					WFCondition:               conditionIsEquals,
-					WFConditionalActionString: shortcutVersionMarker,
-					WFInput:                   inputText,
-				},
-			},
-			{ // Stop and Output "shelp-shortcut <N>" (no model call)
-				WFWorkflowActionIdentifier: "is.workflow.actions.output",
-				WFWorkflowActionParameters: literalOutputParams(shortcutVersionOutputText(ShortcutFormatVersion)),
-			},
-			{ // Otherwise
-				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
-				WFWorkflowActionParameters: conditionalParams{
-					GroupingIdentifier: groupID,
-					WFControlFlowMode:  wfControlFlowMiddle,
-				},
-			},
-			{
-				WFWorkflowActionIdentifier: "is.workflow.actions.askllm",
-				WFWorkflowActionParameters: askLLMParams{
-					UUID:                   uuid,
-					WFLLMModel:             model,
-					WFGenerativeResultType: "Text",
-					FollowUp:               false,
-					WFAllowWebSearch:       web,
-					WFLLMPrompt: wfTextToken{
-						WFSerializationType: "WFTextTokenString",
-						Value: wfTextTokenValue{
-							String: extensionInputPlaceholder,
-							AttachmentsByRange: map[string]wfAttachment{
-								"{0, 1}": {Type: "ExtensionInput"},
-							},
-						},
-					},
-				},
-			},
-			{
-				WFWorkflowActionIdentifier: "is.workflow.actions.output",
-				WFWorkflowActionParameters: outputParams{
-					WFOutput: wfTextToken{
-						WFSerializationType: "WFTextTokenString",
-						Value: wfTextTokenValue{
-							String: extensionInputPlaceholder,
-							AttachmentsByRange: map[string]wfAttachment{
-								"{0, 1}": {OutputUUID: uuid, Type: "ActionOutput", OutputName: "Response"},
-							},
-						},
-					},
-				},
-			},
-			{ // End If
-				WFWorkflowActionIdentifier: "is.workflow.actions.conditional",
-				WFWorkflowActionParameters: conditionalParams{
-					GroupingIdentifier: groupID,
-					WFControlFlowMode:  wfControlFlowEnd,
-					UUID:               endUUID,
-				},
-			},
-		},
+		WFWorkflowActions:                   b.actions,
 		WFWorkflowHasShortcutInputVariables: true,
 		WFWorkflowInputContentItemClasses:   []string{"WFStringContentItem", "WFGenericFileContentItem"},
 		WFWorkflowOutputContentItemClasses:  []string{"WFStringContentItem"},
@@ -345,12 +440,10 @@ func buildWorkflow(model string, web bool) workflow {
 }
 
 // currentShortcutActionCount is how many WFWorkflowActions entries the
-// current generator (buildWorkflow) produces, regardless of (model, web) --
-// used by shortcuts.go's action-count detection so it can never drift from
-// the real generator. It's computed once (all variants produce the same
-// count) rather than hardcoded.
+// current generator (buildWorkflow) produces, computed from the real
+// generator so it can never drift from it.
 var currentShortcutActionCount = sync.OnceValue(func() int {
-	return len(buildWorkflow("Apple Intelligence", false).WFWorkflowActions)
+	return len(buildWorkflow().WFWorkflowActions)
 })
 
 // newUUID returns a random RFC 4122 version 4 UUID, upper-cased to match
@@ -372,20 +465,18 @@ func sanitizeFilename(name string) string {
 	return strings.ReplaceAll(name, "/", "-")
 }
 
-// GenerateShortcut builds the "Use Model" shortcut for (model, web),
-// signs it, and writes "<name>.shortcut" (plus intermediate files) into
-// dir, which must already exist. It returns the path to the signed,
-// importable file. Because the plist has no WFWorkflowName, name becomes
-// the file's basename -- and therefore the name Shortcuts will import it
-// under, and the name shelp must later look it up by by (via `shortcuts
-// list` / `shortcuts run`).
+// GenerateShortcut builds shelp's shortcut, signs it, and writes
+// "<name>.shortcut" (plus intermediate files) into dir, which must already
+// exist. It returns the path to the signed, importable file. Because the
+// plist has no WFWorkflowName, name becomes the file's basename -- and
+// therefore the name Shortcuts will import it under, and the name shelp
+// must later look it up by (via `shortcuts list` / `shortcuts run`).
 //
 // This never opens or imports the result; it only writes files and runs
 // `plutil`/`shortcuts sign`, neither of which prompts the user.
-func GenerateShortcut(ctx context.Context, dir, name, model string, web bool) (string, error) {
+func GenerateShortcut(ctx context.Context, dir, name string) (string, error) {
 	base := sanitizeFilename(name)
-	wf := buildWorkflow(model, web)
-	data, err := json.Marshal(wf)
+	data, err := json.Marshal(buildWorkflow())
 	if err != nil {
 		return "", fmt.Errorf("marshal workflow: %w", err)
 	}

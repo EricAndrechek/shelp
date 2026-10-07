@@ -56,73 +56,79 @@ func TestShortcutCheckPathDefaultsUnderCache(t *testing.T) {
 	}
 }
 
-func TestFindOutdatedInstalledShortcuts(t *testing.T) {
-	cfg := &config.Config{}
-
-	t.Run("current", func(t *testing.T) {
-		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-			return currentShortcutActionCount(), nil
-		})
-		if findOutdatedInstalledShortcuts(context.Background(), cfg, []string{"shortcuts:apple-pro"}) {
-			t.Error("want false when the installed shortcut's action count matches current")
-		}
+// fakeFreshness fakes `shortcuts list` as names and the marker as
+// versions (missing: the run fails), action count 0; it returns the names
+// asked their version.
+func fakeFreshness(t *testing.T, names []string, versions map[string]int) *[]string {
+	t.Helper()
+	origList := shortcutsListCmd
+	t.Cleanup(func() { shortcutsListCmd = origList })
+	shortcutsListCmd = func(ctx context.Context) (string, error) { return strings.Join(names, "\n"), nil }
+	var asked []string
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		asked = append(asked, name)
+		return 0, nil
 	})
-
-	t.Run("outdated", func(t *testing.T) {
-		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-			return shortcutV1ActionCount, nil
-		})
-		if !findOutdatedInstalledShortcuts(context.Background(), cfg, []string{"shortcuts:apple-pro"}) {
-			t.Error("want true when the installed shortcut is still v1")
+	installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		if v, ok := versions[name]; ok {
+			return v, nil
 		}
+		return 0, errors.New("shortcuts run exited 1")
 	})
+	return &asked
+}
 
-	t.Run("not installed or check failed -- never outdated", func(t *testing.T) {
-		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-			return 0, errors.New(`Can't get shortcut "shelp · Apple Intelligence Pro" (-1728)`)
+func TestShortcutsFreshnessHint(t *testing.T) {
+	legacy := []string{"shelp · Apple Intelligence Pro", "shelp · ChatGPT 1"}
+	cases := []struct {
+		name     string
+		cfg      string
+		names    []string
+		versions map[string]int
+		want     string
+		asked    []string
+	}{
+		{"current", "", append([]string{"shelp"}, legacy...), map[string]int{"shelp": ShortcutFormatVersion}, "", []string{"shelp"}},
+		{"outdated", "", []string{"shelp"}, map[string]int{"shelp": 4}, shortcutOutdatedHint, []string{"shelp"}},
+		{"unreadable is never outdated", "", []string{"shelp"}, nil, "", []string{"shelp"}},
+		{"only legacy ones: the upgrade to one shortcut", "", legacy, map[string]int{legacy[0]: 4}, shortcutMigrateHint, nil},
+		{"nothing installed", "", []string{"Ask AI"}, nil, "", nil},
+		{"configured name", "[shortcuts]\nname = \"Ask AI\"\n", []string{"shelp", "Ask AI"}, map[string]int{"shelp": 5, "Ask AI": 4}, shortcutOutdatedHint, []string{"Ask AI"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			asked := fakeFreshness(t, c.names, c.versions)
+			cfg, err := config.Parse(c.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := shortcutsFreshnessHint(context.Background(), cfg); got != c.want {
+				t.Errorf("hint = %q, want %q", got, c.want)
+			}
+			if strings.Join(*asked, ",") != strings.Join(c.asked, ",") {
+				t.Errorf("asked %q for a version, want %q (legacy shortcuts are never run)", *asked, c.asked)
+			}
 		})
-		if findOutdatedInstalledShortcuts(context.Background(), cfg, []string{"shortcuts:apple-pro"}) {
-			t.Error("want false when the action-count check itself fails (e.g. not installed)")
-		}
-	})
+	}
+}
 
-	t.Run("no shortcuts provider in chain -- never calls the fake", func(t *testing.T) {
-		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-			t.Fatal("shortcutActionCountCmd should not be called for a chain with no shortcuts:* entry")
-			return 0, nil
-		})
-		if findOutdatedInstalledShortcuts(context.Background(), cfg, []string{"fm", "claude:haiku"}) {
-			t.Error("want false for a chain with no shortcuts provider")
-		}
+func TestShortcutsFreshnessHintListError(t *testing.T) {
+	origList := shortcutsListCmd
+	t.Cleanup(func() { shortcutsListCmd = origList })
+	shortcutsListCmd = func(ctx context.Context) (string, error) { return "", errors.New("shortcuts list exited 1") }
+	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
+		t.Fatal("asked a version after the list failed")
+		return 0, nil
 	})
-
-	t.Run("dedupes by resolved name", func(t *testing.T) {
-		calls := 0
-		installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-			calls++
-			return currentShortcutActionCount(), nil
-		})
-		// apple and apple-web share no name by default, but naming both to
-		// the same override collapses them to one check.
-		cfg, err := config.Parse(`[shortcuts]
-names = { "apple" = "Ask AI", "apple-web" = "Ask AI" }
-`)
-		if err != nil {
-			t.Fatalf("config.Parse: %v", err)
-		}
-		findOutdatedInstalledShortcuts(context.Background(), cfg, []string{"shortcuts:apple", "shortcuts:apple-web"})
-		if calls != 1 {
-			t.Errorf("shortcutActionCountCmd called %d times, want 1 (same resolved name)", calls)
-		}
-	})
+	if got := shortcutsFreshnessHint(context.Background(), &config.Config{}); got != "" {
+		t.Errorf("hint = %q, want none when the list fails", got)
+	}
 }
 
 func TestCheckShortcutsFreshnessEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
-	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-		return shortcutV1ActionCount, nil // outdated
-	})
+	fakeFreshness(t, []string{"shelp"}, map[string]int{"shelp": 4}) // outdated
 
 	var stderr strings.Builder
 	cfg := &config.Config{}
@@ -145,10 +151,12 @@ func TestCheckShortcutsFreshnessEndToEnd(t *testing.T) {
 func TestCheckShortcutsFreshnessNeverPrintsForNonShortcutsChain(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
-	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-		t.Fatal("shortcutActionCountCmd should not be called when chain has no shortcuts provider")
-		return 0, nil
-	})
+	origList := shortcutsListCmd
+	t.Cleanup(func() { shortcutsListCmd = origList })
+	shortcutsListCmd = func(ctx context.Context) (string, error) {
+		t.Fatal("shortcuts list should not run when chain has no shortcuts provider")
+		return "", nil
+	}
 
 	var stderr strings.Builder
 	CheckShortcutsFreshness(context.Background(), &config.Config{}, "9.9.9", []string{"fm"}, &stderr)
