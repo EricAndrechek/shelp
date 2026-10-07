@@ -150,9 +150,10 @@ Antigravity, and Copilot CLI were all evaluated and dropped -- see
 ## Configuration
 
 `~/.config/shelp/config.toml` (or `$SHELP_CONFIG`, or
-`$XDG_CONFIG_HOME/shelp/config.toml`). Every key and table is optional;
-each provider family decodes only its own table, so unrelated tables are
-ignored.
+`$XDG_CONFIG_HOME/shelp/config.toml`). A missing file at the default
+location just means the defaults; a `$SHELP_CONFIG` that names a missing
+file is an error. Every key and table is optional; each provider family
+decodes only its own table, so unrelated tables are ignored.
 
 ```toml
 # Fallback chain shelp tries in order; first success wins. Overridden by

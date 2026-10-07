@@ -50,6 +50,20 @@ func Path() string {
 	return filepath.Join(dir, "shelp", "config.toml")
 }
 
+// LoadDefault loads the config at Path(). A missing file at the default
+// location is an empty Config, but $SHELP_CONFIG naming a missing file is
+// an error: an explicit path that quietly falls back to the defaults makes
+// a typo or a cleaned-up temp file look like a config that took effect.
+func LoadDefault() (*Config, error) {
+	path := Path()
+	if os.Getenv("SHELP_CONFIG") != "" {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("SHELP_CONFIG: %w", err)
+		}
+	}
+	return Load(path)
+}
+
 // Load reads the config at path. A missing file yields an empty Config.
 func Load(path string) (*Config, error) {
 	c := &Config{}

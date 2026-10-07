@@ -18,7 +18,7 @@ const defaultCasesDir = "bench/cases"
 // defaultRunsDir holds one subdirectory per `run` invocation.
 const defaultRunsDir = "bench/runs"
 
-func loadConfig() (*config.Config, error) { return config.Load(config.Path()) }
+func loadConfig() (*config.Config, error) { return config.LoadDefault() }
 
 func loadCases(dir string, selector string) ([]bench.Case, error) {
 	if dir == "" {

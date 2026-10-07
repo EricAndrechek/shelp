@@ -106,7 +106,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func loadConfig() (*config.Config, error) { return config.Load(config.Path()) }
+func loadConfig() (*config.Config, error) { return config.LoadDefault() }
 
 // runInit handles `shelp init <shell> [--bind KEY] [--no-line-mode]`. It
 // runs at every shell start (via `eval "$(shelp init zsh)"`), so it stays
