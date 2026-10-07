@@ -39,6 +39,25 @@ func TestExplainChunkingInvariant(t *testing.T) {
 	}
 }
 
+// Raw byte reads can split a multi-byte character across chunks; the
+// highlighter must not turn the halves into U+FFFD.
+func TestExplainSplitMultibyteRune(t *testing.T) {
+	p := style.Forced(style.TrueColor)
+	text := "lsof — lists files… -n skips “DNS” lookups.\n"
+	whole := highlight(p, []string{text})
+	var one []string
+	for i := 0; i < len(text); i++ {
+		one = append(one, text[i:i+1])
+	}
+	got := highlight(p, one)
+	if got != whole {
+		t.Errorf("byte-chunked output differs:\n%q\n%q", got, whole)
+	}
+	if strings.ContainsRune(got, '\uFFFD') {
+		t.Errorf("split rune became U+FFFD: %q", got)
+	}
+}
+
 func TestExplainStyling(t *testing.T) {
 	p := style.Forced(style.Color16)
 	out := highlight(p, []string{sampleExplain})

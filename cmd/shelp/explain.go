@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ericandrechek/shelp/internal/style"
 )
@@ -30,6 +31,7 @@ type explainHighlighter struct {
 	p     style.Palette
 	cmd   map[string]bool // words of the explained command
 	buf   strings.Builder // the partial word
+	tail  string          // an incomplete UTF-8 sequence from the last chunk
 	begun bool
 	input string
 }
@@ -53,9 +55,12 @@ func (h *explainHighlighter) Header() {
 	io.WriteString(h.w, h.p.Bold(h.p.Accent(h.input))+"\n")
 }
 
-// Write feeds a chunk of explanation.
+// Write feeds a chunk of explanation. Subprocess output arrives in raw
+// byte reads (provider.RunCmdOpts), which can split a multi-byte
+// character, so an incomplete trailing sequence waits for the next chunk.
 func (h *explainHighlighter) Write(s string) {
 	h.Header()
+	s, h.tail = splitIncomplete(h.tail + s)
 	var out strings.Builder
 	for _, r := range s {
 		if unicode.IsSpace(r) {
@@ -73,8 +78,24 @@ func (h *explainHighlighter) Write(s string) {
 	}
 }
 
+// splitIncomplete splits s into its complete UTF-8 prefix and an
+// incomplete multi-byte sequence at its end (empty if there is none).
+func splitIncomplete(s string) (string, string) {
+	for i := len(s) - 1; i >= 0 && i >= len(s)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(s[i]) {
+			if utf8.FullRuneInString(s[i:]) {
+				return s, ""
+			}
+			return s[:i], s[i:]
+		}
+	}
+	return s, ""
+}
+
 // Flush writes the held-back partial word.
 func (h *explainHighlighter) Flush() {
+	h.buf.WriteString(h.tail)
+	h.tail = ""
 	if h.buf.Len() > 0 {
 		io.WriteString(h.w, h.word(h.buf.String()))
 		h.buf.Reset()
