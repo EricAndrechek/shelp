@@ -286,6 +286,12 @@ def zsh_home(tmpdir, plugin_lines=""):
         f.write("HISTSIZE=200\nSAVEHIST=200\n")
         f.write(plugin_lines + "\n")
         f.write('eval "$(command shelp init zsh)"\n')
+        # test-only widgets: ^Y seeds a foreign region_highlight entry, ^T
+        # reports region_highlight/POSTDISPLAY (used by the status checks)
+        f.write("_t_seed() { region_highlight=('0 5 bold'); }\n")
+        f.write("_t_rh() { zle -I; print -r -- \"RH=<${(j:|:)region_highlight}> PD=<$POSTDISPLAY>\"; }\n")
+        f.write("zle -N _t_seed; zle -N _t_rh\n")
+        f.write("bindkey '^Y' _t_seed; bindkey '^T' _t_rh\n")
     return d
 
 
@@ -294,7 +300,7 @@ def zsh_env(stub_dir, real_bin, home, cwd):
         "HOME": home, "ZDOTDIR": home,
         "PATH": stub_dir + ":/usr/bin:/bin",
         "SHELP_REAL_BIN": real_bin,
-        "TERM": "xterm", "LANG": "en_US.UTF-8",
+        "TERM": "xterm-256color", "LANG": "en_US.UTF-8",
         "PWD": cwd,
     }
 
@@ -384,6 +390,43 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
         s.expect(r"TESTPROMPT% \r?$", timeout=6)
         s.send("unset SHELP_STUB_SLEEP\r")
         s.read_available(0.5)
+        # in-progress status: gray `shelp: thinking…` while shelp runs
+        # (POSTDISPLAY + region_highlight), gone afterwards, foreign
+        # region_highlight entries untouched; NO_COLOR drops the color.
+        s.send("export SHELP_STUB_SLEEP=2\r")
+        s.read_available(0.5)
+        for nc in (False, True):
+            tag = "NO_COLOR" if nc else "color"
+            s.send(("export NO_COLOR=1" if nc else "unset NO_COLOR") + "\r")
+            s.read_available(0.5)
+            s.buf = ""
+            s.send("shelp status probe")
+            s.read_available(0.3)
+            s.send("\x19")  # seed a foreign highlight entry
+            s.read_available(0.2)
+            s.buf = ""
+            s.send("\r")
+            seen = s.expect(r"shelp: thinking…", timeout=1.5)
+            during = s.buf
+            results.check(f"{label}: status shown while running ({tag})", seen, during[-300:])
+            if seen:
+                head = during[:during.index("shelp: thinking…")]
+                sgr = re.search(r"\x1b\[[0-9;]*m[^\x1b]*$", head) is not None
+                results.check(f"{label}: status is colored ({tag})" if not nc else
+                              f"{label}: NO_COLOR status has no color",
+                              (not sgr) if nc else sgr, repr(head[-120:]))
+            s.expect(re.escape(suggest_cmd("status probe")), timeout=8)
+            s.read_available(0.4)
+            s.buf = ""
+            s.send("\x14")  # report
+            s.expect(r"PD=<", timeout=4)
+            rep = strip_ansi(s.buf)
+            results.check(f"{label}: status cleared, region_highlight restored ({tag})",
+                          ("RH=<0 5 bold" in rep and "18 36" not in rep and "thinking" not in rep), rep[-300:])
+            s.send("\x15")  # kill the leftover suggestion line
+            s.read_available(0.3)
+        s.send("unset NO_COLOR SHELP_STUB_SLEEP\r")
+        s.read_available(0.5)
     finally:
         s.close()
 
@@ -418,7 +461,7 @@ def bash_env(stub_dir, real_bin, home, cwd):
         "HOME": home,
         "PATH": stub_dir + ":/usr/bin:/bin",
         "SHELP_REAL_BIN": real_bin,
-        "TERM": "xterm", "LANG": "en_US.UTF-8",
+        "TERM": "xterm-256color", "LANG": "en_US.UTF-8",
         "PWD": cwd,
     }
 
@@ -664,12 +707,36 @@ def run_fish(tmpdir, results, real_linux_bin):
         s.read_available(0.5)
         s.buf = ""
         s.send("shelp what's my ip\r")
-        s.read_available(0.6)
+        s.expect(r"shelp: thinking…", timeout=2)
+        seen = "shelp: thinking…" in s.buf
+        results.check("fish: status shown while running", seen, repr(s.buf[-300:]))
+        head = s.buf.split("shelp: thinking…")[0]
+        results.check("fish: status is colored",
+                      re.search(r"\x1b\[[0-9;]*m$", head) is not None, repr(head[-80:]))
         s.send("\x03")
         ok = s.expect(re.escape("shelp what's my ip"), timeout=6)
         results.check("fish: Ctrl-C restores original line", ok, s.buf[-500:])
         no_exec = suggest_cmd("what's my ip") not in strip_ansi(s.buf).split("shelp what's my ip")[-1]
         results.check("fish: Ctrl-C did not execute the suggestion", no_exec, s.buf[-500:])
+
+        # NO_COLOR: same status, no SGR; and it is gone once shelp returns
+        s.send("\x15")
+        s.send("set -x NO_COLOR 1; set -x SHELP_STUB_SLEEP 1\r")
+        s.read_available(0.5)
+        s.buf = ""
+        s.send("shelp status probe\r")
+        s.expect(r"shelp: thinking…", timeout=2)
+        head = s.buf.split("shelp: thinking…")[0]
+        results.check("fish: NO_COLOR status shown, uncolored",
+                      "shelp: thinking…" in s.buf and "\x1b[90m" not in s.buf
+                      and "\x1b[2;90m" not in s.buf, repr(s.buf[-200:]))
+        s.expect(re.escape(suggest_cmd("status probe")), timeout=8)
+        s.read_available(0.4)
+        s.buf = ""
+        s.send("\x15")
+        s.read_available(0.4)
+        results.check("fish: status gone after completion",
+                      "thinking" not in strip_ansi(s.buf), repr(s.buf[-200:]))
     finally:
         s.close()
 

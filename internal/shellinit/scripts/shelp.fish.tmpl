@@ -69,7 +69,12 @@ function _shelp_raw_dispatch
         return
     end
 
-    printf '\e[2m…\e[0m' >&2
+    # dim gray status (plain text when NO_COLOR is set), cleared below
+    if test -n "$NO_COLOR"
+        printf 'shelp: thinking…' >&2
+    else
+        printf '\e[2;90mshelp: thinking…\e[0m' >&2
+    end
     set -l errfile (mktemp 2>/dev/null; or echo /tmp/shelp-fish-err.$fish_pid)
     set -l cmd (command shelp suggest --shell fish -- $body 2>$errfile)
     set -l rc $status

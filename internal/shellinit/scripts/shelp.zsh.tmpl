@@ -22,15 +22,46 @@ shelp() {
 # script, a keybinding, or `zsh -c`.)
 alias shelp='noglob shelp'
 
+# In-progress status: drawn like zsh-autosuggestions' gray suggestion --
+# appended to the line via POSTDISPLAY and colored by one region_highlight
+# entry (offsets are relative to BUFFER, so the entry starts at $#BUFFER and
+# spans POSTDISPLAY; no `P` flag, which only matters when PREDISPLAY is
+# highlighted). `zle -R` repaints it BEFORE the blocking shelp call. The
+# prior POSTDISPLAY is saved and the one entry we added is removed by its
+# range, so other plugins' highlights survive. NO_COLOR skips the color.
+typeset -g _shelp_saved_post _shelp_status_entry _shelp_status_range
+_shelp_status_show() {
+  _shelp_saved_post=$POSTDISPLAY
+  _shelp_status_entry=''
+  _shelp_status_range=''
+  POSTDISPLAY='  shelp: thinking…'
+  if [[ -z ${NO_COLOR-} ]]; then
+    _shelp_status_range="$#BUFFER $(( $#BUFFER + $#POSTDISPLAY )) "
+    _shelp_status_entry="${_shelp_status_range}fg=8"
+    region_highlight+=("$_shelp_status_entry")
+  fi
+  zle -R
+}
+_shelp_status_clear() {
+  if [[ -n $_shelp_status_range ]]; then
+    # match by range, not full string: zsh rewrites the style of an entry
+    # it can't render (e.g. fg=8 on an 8-color TERM becomes `none`)
+    region_highlight=("${(@)region_highlight:#${_shelp_status_range}*}")
+    _shelp_status_range=''
+  fi
+  _shelp_status_entry=''
+
+  POSTDISPLAY=$_shelp_saved_post
+}
+
 # Widget: turn the text on the command line into a command in place.
 {{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bindkey '^G' shelp-widget{{end}}
 shelp-widget() {
   [[ -z $BUFFER ]] && return
   local cmd
-  zle -I
-  print -rn -- $'\e[2m…\e[0m' >&2
+  _shelp_status_show
   cmd=$(SHELP_SHELL=zsh command shelp suggest -- "$BUFFER" 2>/dev/null)
-  print -rn -- $'\r\e[K' >&2
+  _shelp_status_clear
   [[ -n $cmd ]] && BUFFER=$cmd && CURSOR=${#BUFFER}
   zle reset-prompt
 }
@@ -67,22 +98,18 @@ _shelp_raw_dispatch() {
     return
   fi
   errfile=$(mktemp "${TMPDIR:-/tmp}/shelp-line.XXXXXX" 2>/dev/null) || errfile=/dev/null
-  zle -M 'shelp: thinking…'  # zle -M prints escapes literally, so no dim styling
+  _shelp_status_show
   cmd=$(command shelp suggest --shell zsh -- "$body" 2>"$errfile")
   rc=$?
+  _shelp_status_clear
   if (( rc == 0 )) && [[ -n $cmd ]]; then
     print -s -- "$orig"
     BUFFER=$cmd
     CURSOR=${#BUFFER}
-    zle -M ''
   else
     BUFFER=$orig
     CURSOR=${#BUFFER}
-    if [[ -s $errfile ]]; then
-      zle -M "shelp: $(<$errfile)"
-    else
-      zle -M ''
-    fi
+    [[ -s $errfile ]] && zle -M "shelp: $(<$errfile)"
   fi
   command rm -f "$errfile" 2>/dev/null
   zle reset-prompt
