@@ -164,76 +164,56 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
 #### Shortcut format versions, update detection, and the update flow
 
 - `ShortcutFormatVersion` (Go const in `shortcutgen.go`) is the current
-  generated shortcut's plist format: **1** was the original, marker-less,
-  2-action (Use Model + Stop and Output) shape above; **2** (current) adds
-  a leading version-marker `If` block ahead of it: "If Shortcut Input is
-  `__shelp_shortcut_version__`, Stop and Output the text `shelp-shortcut
-  2` (no model call); Otherwise, `<the v1 pair above>`; End If" -- 6
-  actions total (`currentShortcutActionCount()` computes this from the
-  real generator rather than hardcoding it). This lets shelp ask an
-  already-installed shortcut what format it is without ever risking a
-  real model call to find out.
+  generated shortcut's plist format: **1** (shelp 0.1.x) was the
+  original, marker-less, 2-action (Use Model + Stop and Output) shape
+  above; **2** (shelp 0.2.0-0.2.1) added a leading version-marker `If`
+  block but stored its `WFInput` wrong, so a v2 shortcut fails EVERY run,
+  real prompts included, with "Please choose a value for each parameter
+  in this action." (+ a notification); **3** (current) fixes that
+  `WFInput`. The block: "If Shortcut Input is `__shelp_shortcut_version__`,
+  Stop and Output the text `shelp-shortcut 3` (no model call); Otherwise,
+  `<the v1 pair>`; End If" -- 6 actions (`currentShortcutActionCount()`).
 - The `is.workflow.actions.conditional` action (`If`/`Otherwise`/`End If`)
-  repeats the same action identifier three times, sharing one
-  `GroupingIdentifier` (a fresh UUID) and varying only
-  `WFControlFlowMode`: `0` = If (opens the group), `1` = Otherwise (branch
-  boundary), `2` = End If (closes it, and is the only one of the three
-  that also carries its own `UUID`). Only the `If` entry sets
-  `WFCondition`/`WFConditionalActionString`/`WFInput`. `WFCondition: 4` is
-  "Is" (equals) on text; `WFConditionalActionString` holds the literal
-  comparison value; `WFInput` references Shortcut Input the same way
-  `WFFile`/`WFURLActionURL` reference a value elsewhere in Shortcuts --
-  `{"WFSerializationType":"WFTextTokenAttachment","Value":{"Type":"ExtensionInput"}}`
-  -- distinct from `WFLLMPrompt`/`WFOutput`'s `WFTextTokenString` shape
-  (a string with a U+FFFC placeholder + `attachmentsByRange`), since
-  `WFInput` references the value directly rather than interpolating it
-  into text.
-  **No macOS 27 `Gallery.bundle/*.wflow` contains a conditional action**
-  (`Haiku`/`ActionItems`/`SummarizePDF`/`MorningReport`/
-  `GetStartedWithModels`/`LeftoverRecipes`/`DocumentReview` -- none of
-  them use `is.workflow.actions.conditional`), so this shape was verified
-  two other ways instead: (1) `DocumentReview.wflow`'s real, on-disk
-  `is.workflow.actions.repeat.count`/`.choosefrommenu` actions confirm the
-  general `WFControlFlowMode` 0/1/2 + shared `GroupingIdentifier` +
-  UUID-only-on-the-closing-action scaffold every control-flow action
-  uses; (2) `github.com/electrikmilk/cherri`, a real, actively maintained
-  Shortcuts compiler, whose `shortcutgen.go` (`makeConditionalAction`)
-  builds exactly this shape for `is.workflow.actions.conditional`, and
-  whose `shortcut.go` `conditions` map gives `WFCondition` code `4` for
-  `Is`. The direct system-binary route (extracting `WorkflowKit` from the
-  dyld shared cache, as CLAUDE.md's askllm enum values above were gotten)
-  was not available in the environment this was written in.
-- **Detection** (`shortcuts.go`): Shortcuts Events' AppleScript dictionary
-  exposes each shortcut's action count -- read-only, never runs the
-  shortcut:
-  ```
-  osascript -e 'tell application "Shortcuts Events" to get action count of shortcut "Ask AI"'
-  ```
-  verified live (~150-170ms; a nonexistent name exits 1 with "Can't get
-  shortcut ... (-1728)" on stderr). A v1 shortcut has exactly 2 actions;
-  `Detect` compares an installed shortcut's count against
-  `currentShortcutActionCount()` (6) and, on a mismatch, still reports the
-  provider `Available: true` (it still works) with a `Reason` like
-  `outdated shortcut (format v1, current v2): run \`shelp setup
-  shortcuts\` to update`, which `shelp providers` now shows appended to
-  an "ok" row's description (it previously only ever printed
-  `Description` for an available provider, dropping `Detect`'s `Reason`
-  entirely). An action-count check that itself fails (Shortcuts Events
-  unavailable, transient) is never treated as outdated.
+  repeats one identifier three times, sharing a `GroupingIdentifier` and
+  varying `WFControlFlowMode` (`0` If, `1` Otherwise, `2` End If, which
+  alone carries a `UUID`). Only the `If` sets `WFCondition` (`4` = "Is"
+  on text), `WFConditionalActionString` (the literal), and `WFInput`,
+  which is wrapped: `{"Type":"Variable","Variable":{"Value":{"Type":
+  "ExtensionInput"},"WFSerializationType":"WFTextTokenAttachment"}}`. v2
+  put the inner attachment there bare; Shortcuts imported it silently and
+  then treated the input as unset. No Gallery `.wflow` has a conditional;
+  the shape comes from the 20 If actions in Eric's own library.
+- **Reading what Shortcuts actually stored** (no side effects, the way
+  the v2 bug was found): copy `~/Library/Shortcuts/Shortcuts.sqlite*` to
+  the scratchpad, then `ZSHORTCUT` (`ZNAME`, `ZACTIONCOUNT`, `ZACTIONS`)
+  -> `ZSHORTCUTACTIONS.ZDATA`, a binary plist of the action array
+  (`plutil -convert json`). Private schema: for debugging, never for
+  shelp itself.
+- **Detection** (`installedShortcutVersion`, `shortcuts.go`): Shortcuts
+  Events' read-only `action count` (`osascript -e 'tell application
+  "Shortcuts Events" to get action count of shortcut "NAME"'`, ~150ms,
+  never runs it) is a count Shortcuts caches on save -- a shortcut
+  imported from a `.shortcut` file, i.e. every one shelp installs, reads
+  **0** ("No actions") with all its actions stored (verified 2026-10-07).
+  So: count 2 -> v1 (never sent the marker: its only real action is Use
+  Model); count 0 or >= 6 -> run it with the marker as input and parse
+  `shelp-shortcut N` (`shortcutMarkerVersionCmd`); anything else -> not a
+  shelp format. Any failure (Shortcuts Events down, a v2 that fails every
+  run) is "unknown", never outdated. `Detect` reports an outdated
+  shortcut as available with a `Reason` (`outdated shortcut (format vN,
+  current vM): run \`shelp setup shortcuts\` to update`), which `shelp
+  providers` appends to the "ok" row. The marker run against a REAL
+  installed v3 has not been done yet -- see Open items.
 - **Update flow** (`shelp setup shortcuts`): each variant in the install
-  list -- now also including any `shortcutVariants` entry that's already
-  installed even if not named in `[shortcuts].install`/
-  `$SHELP_SHORTCUTS`, so an upgrade run covers everything the user
-  already has -- is one of three states: *missing* (generate, sign, open,
-  user clicks "Add Shortcut", poll `shortcuts list` for the name, as
-  before); *outdated* (regenerate, sign, open -- user clicks **"Replace"**
-  this time, since a shortcut of that name already exists; then poll the
-  *action count* via the same AppleScript query until it matches the
-  current generator's, with a timeout, since the name doesn't change so
-  presence alone can't tell an accepted replace from a declined one);
-  *current* (skip with a message). **The "Replace" button/dialog behavior
-  is unverified without a human actually doing it** -- see the shortcut-
-  update branch's MERGE NOTES.
+  list -- plus any `shortcutVariants` entry already installed, so an
+  upgrade covers everything the user has -- is *missing* (generate, sign,
+  open, user clicks "Add Shortcut", poll `shortcuts list`), *outdated*
+  (regenerate, sign, open, user clicks **"Replace"**, poll the version
+  until it's current: the name doesn't change, so presence can't tell),
+  *current/newer* (skip), or *unknown version* (left alone, with a note
+  to delete a broken one by hand and rerun -- replacing it would mean
+  polling a shortcut that fails every run, one notification per poll).
+  **The "Replace" dialog is unverified with a human.**
 - **Runtime hint**: a normal `shelp suggest`/`explain` call whose resolved
   provider chain names a `shortcuts:*` provider runs a best-effort,
   once-per-shelp-binary-version check (`provider.CheckShortcutsFreshness`,
@@ -245,6 +225,8 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   ```
   shelp: your Apple Shortcuts are from an older shelp; run `shelp setup shortcuts` to update them
   ```
+  Its version check is a marker run (see Detection), so on a v2 it fails
+  once per binary version, posting one notification.
   Recorded in `$XDG_CACHE_HOME/shelp/shortcut-check.json`
   (`~/.cache/shelp/...` by default, alongside `cooldown.json`) so it only
   ever runs once per binary version. This is what a `brew upgrade shelp`
@@ -395,15 +377,24 @@ limit instead of tripping the breaker at all.
   fakes, or `shortcuts sign` (which imports nothing).
 - Never `open` a `.shortcut` file or run `shelp setup shortcuts` from an
   agent: the import dialog needs the user's click.
+- A generated shortcut's shape is only proven by running it once
+  imported; tests, `plutil`, and `shortcuts sign` all accepted v2, and a
+  successful import did too. Have the user run that first check
+  themselves.
 
-## Open items (2026-10-01)
+## Open items (2026-10-07)
 
-- Unverified with a human: re-importing an outdated shortcut. The user's
-  hand-made "Ask AI" (format v1, 2 actions) can test it:
-  `SHELP_CONFIG=<toml with [shortcuts] names = {"apple-pro" = "Ask AI"},
-  install = ["apple-pro"]> shelp setup shortcuts`, then click "Replace".
-  Afterwards the user deletes "Ask AI" by hand (no delete API exists) and
-  runs `shelp setup shortcuts` for "shelp · Apple Intelligence Pro".
+- The user's "shelp · Apple Intelligence Pro" (installed 2026-10-07) is
+  a broken v2; "Ask AI" is gone. They delete it by hand, `shelp setup
+  shortcuts` (Add flow) installs a v3, and then THEY run, via `!`, the
+  first live check of v3: the marker
+  (`printf __shelp_shortcut_version__ | shortcuts run "shelp · Apple
+  Intelligence Pro" -o - --output-type public.plain-text` -> `shelp-shortcut 3`)
+  and one real prompt.
+- Still unverified with a human: the "Replace" re-import. Testing it
+  needs a throwaway build with `ShortcutFormatVersion` bumped past the
+  installed one; the replace poll runs the installed shortcut's marker
+  every 2s, so only test it over a shortcut whose marker already works.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
   chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
   them (`--min-interval`) to stay under the limit.
