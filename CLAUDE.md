@@ -235,11 +235,15 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Model (that model, web flag) on the prompt value; Stop and Output its
   Response"), the innermost Otherwise a Stop and Output of
   `shelp-shortcut-error: unknown model <model-Text>`, then seven End Ifs.
-  **6** (current; NOT yet verified live) adds one Text action holding the
+  **6** (current; verified live 2026-10-09: install, marker, a ChatGPT
+  prompt, and a delete-first update to a throwaway v7) adds one Text action holding the
   "prompt" Dictionary Value and feeds Use Model that Text (41 actions):
   with the bare Dictionary Value, ChatGPT's consent dialog ("Allow
   "shelp" to share 1 dictionary with ChatGPT?") showed the whole JSON
-  request, system prompt included -- a Text output is just the prompt.
+  request, system prompt included. It still does with the Text (the
+  dialog seems to show what the shared value was derived from, i.e. the
+  parsed input); whether Use Model itself gets the prompt or the JSON is
+  for an echo test to settle (open item).
   The reply has no trailing newline, so when checking it by hand pipe it
   through `od -c`: an interactive prompt can draw over it and make it
   look empty.
@@ -530,14 +534,14 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- Format 6 (the prompt through a Text action) needs the same live check
-  format 5 got: install, marker (`printf __shelp_shortcut_version__ |
-  shortcuts run shelp -o - --output-type public.plain-text | od -c`), one
-  prompt each for apple-pro, apple and chatgpt (ChatGPT's consent dialog
-  should now show only the prompt text), then the delete-first update
-  with a throwaway build claiming format 7. Format 5's delete-first update
-  ran clean once live (2026-10-09); a second try failed only at Apple's
-  signing server, before the retry existed.
+- Settle what Use Model receives: send `{"model":"apple-pro","prompt":"Repeat
+  this message back word for word, and nothing else."}` through the
+  shortcut. Echoing JSON means the model gets the whole request, not
+  the prompt (ChatGPT's consent dialog shows the JSON either way).
+- Signing can stall ~20s at Apple's server; an embedded pre-signed
+  shortcut per format (or a per-format cache) would remove the round trip
+  from setup, if a signed file stays importable long enough -- check the
+  signing certificate chain's lifetime first.
 - The Keep Both branch of the update wait is covered by scripted tests
   only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
