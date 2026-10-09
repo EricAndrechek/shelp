@@ -240,10 +240,12 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   "prompt" Dictionary Value and feeds Use Model that Text (41 actions):
   with the bare Dictionary Value, ChatGPT's consent dialog ("Allow
   "shelp" to share 1 dictionary with ChatGPT?") showed the whole JSON
-  request, system prompt included. It still does with the Text (the
-  dialog seems to show what the shared value was derived from, i.e. the
-  parsed input); whether Use Model itself gets the prompt or the JSON is
-  for an echo test to settle (open item).
+  request, system prompt included. It still does with the Text: the
+  dialog shows what the shared value was derived from (the parsed input),
+  not what the model gets. An echo test settled that (2026-10-09):
+  `{"model":"apple-pro","prompt":"Repeat this message back word for
+  word, and nothing else."}` came back as that sentence, no JSON -- every
+  branch reads the same Text, so Use Model gets only the prompt.
   The reply has no trailing newline, so when checking it by hand pipe it
   through `od -c`: an interactive prompt can draw over it and make it
   look empty.
@@ -534,10 +536,6 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- Settle what Use Model receives: send `{"model":"apple-pro","prompt":"Repeat
-  this message back word for word, and nothing else."}` through the
-  shortcut. Echoing JSON means the model gets the whole request, not
-  the prompt (ChatGPT's consent dialog shows the JSON either way).
 - Signing can stall ~20s at Apple's server; an embedded pre-signed
   shortcut per format (or a per-format cache) would remove the round trip
   from setup, if a signed file stays importable long enough -- check the
