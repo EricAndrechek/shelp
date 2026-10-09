@@ -1603,6 +1603,53 @@ def fish_failure_check(s, results, label, top):
     s.read_available(0.5)
 
 
+def fish_explain_interrupt_check(s, results, label, top):
+    """Ctrl-C while a raw-mode explain waits on shelp (whose spinner runs
+    on the row below the typed line): the spinner row is left blank, then
+    the prompt (top: its lines above the last) with the typed line back in
+    the buffer and the cursor at its end -- no status, no error. shelp
+    runs here as a foreground job and takes the SIGINT itself (exit 130,
+    nothing printed), so fish doesn't cancel the function the way it did
+    raw-line suggest's command substitution. The line is typed first and
+    Enter sent after it has been drawn, as a person would: fish 4 runs the
+    Enter binding before drawing a line typed in the same burst."""
+    line = "shelp explain ls -la"
+    typed = "TESTPROMPT% " + line
+    s.send("set -x SHELP_STUB_SLEEP 3\r")
+    s.read_available(0.5)
+    s.send(line)
+    s.read_available(0.5)
+    s.buf = ""
+    s.send("\r")
+    seen = s.expect(re.escape(SPIN_TEXT), timeout=3, bounded=True)
+    s.read_for(0.3)
+    s.send("\x03")
+    s.read_for(1.0)
+    s.read_available(0.3)
+    rows = s.screen()
+    if rows is None:
+        ok = (seen and "\r\x1b[K" in s.buf.split(SPIN_TEXT)[-1]
+              and re.search(r"shelp: (?!thinking)", strip_ansi(s.buf)) is None)
+    else:
+        y, x = s.cursor()
+        at = y - len(top) - 2  # the row the line was typed on
+        ok = (seen and at >= 0 and rows[at] == typed and rows[at + 1] == ""
+              and rows[at + 2:y] == top and rows[y] == typed and x == len(typed)
+              and no_status(rows, at) and not any(r.startswith("shelp:") for r in rows[at:]))
+    results.check(f"{label}: Ctrl-C mid-explain leaves a clean screen, the line back below",
+                  ok, view(rows))
+    s.buf = ""
+    s.send("\x14")
+    ok = s.expect(r"BUF=<[^>\r\n]*>", timeout=4) and f"BUF=<{line}>" in strip_ansi(s.buf)
+    results.check(f"{label}: Ctrl-C mid-explain puts the typed line back in the buffer", ok,
+                  s.buf[-200:])
+    s.read_available(0.3)
+    s.send("\x15")
+    s.read_available(0.3)
+    s.send("set -e SHELP_STUB_SLEEP\r")
+    s.read_available(0.5)
+
+
 def run_fish(tmpdir, results, host):
     ok, detail = host.prepare()
     if not results.check("fish: fish available", ok, detail):
@@ -1635,6 +1682,7 @@ def run_fish(tmpdir, results, host):
         s.read_available(0.3)
         explain_screen_check(s, results, "fish", start, ["TESTPROMPT%"])
         fish_failure_check(s, results, "fish", [])
+        fish_explain_interrupt_check(s, results, "fish", [])
 
         # the same under a two-line prompt (fish redraws it with
         # `commandline -f repaint` after the output)
@@ -1648,6 +1696,7 @@ def run_fish(tmpdir, results, host):
         s.read_available(0.3)
         explain_screen_check(s, results, "fish two-line prompt", start, ["TESTTOP", "TESTPROMPT%"])
         fish_failure_check(s, results, "fish two-line prompt", ["TESTTOP"])
+        fish_explain_interrupt_check(s, results, "fish two-line prompt", ["TESTTOP"])
         s.send("function fish_prompt; printf 'TESTPROMPT%% '; end\r")
         s.read_available(0.8)
 
