@@ -698,6 +698,8 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
         ("shelp help conf", "shelp help config", "help topic"),
         ("shelp providers --res", "shelp providers --reset-cooldowns", "providers flag"),
         ("shelp completion ba", "shelp completion bash", "completion shell"),
+        ("shelp config ch", "shelp config chain", "config subcommand"),
+        ("shelp config chain zzhost:al", "shelp config chain zzhost:alpha-1", "config chain provider id"),
     ]
     # the first Tab loads the completion machinery: warm it up, generously
     s.send("shelp vers\t")
@@ -743,6 +745,13 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
     s.send("shelp completion zs\t\r")
     ok = s.expect(r"compdef _shelp shelp", timeout=8)
     results.check(f"{label}: completed line then Enter runs it", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.expect(prompt_re, timeout=8)
+    s.read_available(0.3)
+    # `shelp config` typed at the prompt runs the command, not the model
+    s.buf = ""
+    s.send("shelp config\r")
+    ok = s.expect(r"path from \$SHELP_CONFIG", timeout=8)
+    results.check(f"{label}: `shelp config` runs as a command", ok, repr(strip_ansi(s.buf)[-300:]))
     s.expect(prompt_re, timeout=8)
     s.read_available(0.3)
 
@@ -1805,6 +1814,8 @@ def fish_completion_checks(s, results, home, shell_home):
         ("shelp help conf", r"[\r\n]config[\r\n]", "help topic"),
         ("shelp providers --res", r"[\r\n]--reset-cooldowns[\r\n]", "providers flag"),
         ("shelp completion ba", r"[\r\n]bash[\r\n]", "completion shell"),
+        ("shelp config ch", r"[\r\n]chain[\r\n]", "config subcommand"),
+        ("shelp config chain zzhost:al", r"[\r\n]zzhost:alpha-1[\r\n]", "config chain provider id"),
     ]
     for line, rx, name in cases:
         s.buf = ""
@@ -1824,6 +1835,11 @@ def fish_completion_checks(s, results, home, shell_home):
     s.send("shelp completion fi\t\r")
     ok = s.expect(r"complete -c shelp -f", timeout=8)
     results.check("fish: completed line then Enter runs it", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.expect(r"TESTPROMPT% \r?$", timeout=6)
+    s.buf = ""
+    s.send("shelp config\r")
+    ok = s.expect(r"path from \$SHELP_CONFIG", timeout=8)
+    results.check("fish: `shelp config` runs as a command", ok, repr(strip_ansi(s.buf)[-300:]))
     s.expect(r"TESTPROMPT% \r?$", timeout=6)
 
 

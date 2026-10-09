@@ -6,7 +6,7 @@ typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # (print -z), ready to edit or run. Other subcommands pass straight through.
 shelp() {
   case "${1-}" in
-    ''|-h|--help|help|explain|-e|init|setup|providers|completion|version|--version)
+    ''|-h|--help|help|explain|-e|init|setup|providers|config|completion|version|--version)
       SHELP_SHELL=zsh command shelp "$@" ;;
     *)
       local cmd
@@ -207,7 +207,7 @@ shelp-accept-line() {
           else
             _shelp_raw_dispatch explain "$raw" "$tail"
           fi ;;
-        -*|providers|completion|setup|init|version|help)
+        -*|providers|config|completion|setup|init|version|help)
           zle accept-line ;;
         *)
           _shelp_raw_dispatch suggest "$raw" "$rest" ;;

@@ -22,7 +22,7 @@ _shelp_suggest_flow() {
 
 shelp() {
   case "${1-}" in
-    ''|-h|--help|help|init|setup|providers|completion|version|--version)
+    ''|-h|--help|help|init|setup|providers|config|completion|version|--version)
       SHELP_SHELL=bash command shelp "$@" ;;
     explain|-e)
       # On a terminal, a blank line after the explanation so it doesn't
@@ -120,7 +120,7 @@ case $- in
           READLINE_LINE="shelp explain -- $(printf '%q' "$tail")"
           READLINE_POINT=${#READLINE_LINE}
           ;;
-        -* | providers | completion | setup | init | version | help)
+        -* | providers | config | completion | setup | init | version | help)
           return 0 ;;
         *)
           history -s -- "$line" 2>/dev/null
