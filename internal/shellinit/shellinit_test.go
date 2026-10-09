@@ -148,3 +148,35 @@ func TestRender_ZshAnimatedStatus(t *testing.T) {
 		}
 	}
 }
+
+// fish's raw-line suggest leaves room for a multi-line prompt after an
+// error, as explain does after its explanation.
+func TestRender_FishSuggestCleanup(t *testing.T) {
+	got, err := Render("fish", Options{LineMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"printf '%s\\n' (string collect <$errfile) >&2\n            _shelp_prompt_room",
+		"echo\n        _shelp_prompt_room",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("fish: missing %q", want)
+		}
+	}
+	syntaxCheck(t, "fish", got, "--no-execute")
+}
+
+// syntaxCheck runs `<shell> <flag>` on script when that shell is installed.
+func syntaxCheck(t *testing.T, shell, script, flag string) {
+	t.Helper()
+	bin, err := exec.LookPath(shell)
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(bin, flag)
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("%s %s: %v\n%s", shell, flag, err, out)
+	}
+}

@@ -47,6 +47,16 @@ function _shelp_history_add
     builtin history merge
 end
 
+# Call after printing below the prompt, before `commandline -f repaint`.
+# The repaint doesn't know about the output: it starts the prompt as many
+# lines above the cursor as the prompt has extra lines, so a multi-line
+# prompt would be drawn over the last of that output. Give it those lines
+# first, as fish's own __fish_list_current_token does.
+function _shelp_prompt_room
+    set -l extra (math (count (fish_prompt)) - 1)
+    test $extra -gt 0; and string repeat -N \n --count=$extra
+end
+
 function _shelp_raw_dispatch
     # $argv[1]: mode (suggest|explain); $argv[2]: original typed line (for
     # history); $argv[3]: raw payload, byte-for-byte.
@@ -59,13 +69,7 @@ function _shelp_raw_dispatch
         command shelp explain --shell fish -- $body
         set -l rc $status
         echo
-        # `commandline -f repaint` doesn't know about the output: it starts
-        # the prompt as many lines above the cursor as the prompt has extra
-        # lines, so a multi-line prompt would be drawn over the blank line
-        # (and more). Give it those lines first, as fish's own
-        # __fish_list_current_token does.
-        set -l extra (math (count (fish_prompt)) - 1)
-        test $extra -gt 0; and string repeat -N \n --count=$extra
+        _shelp_prompt_room
         if test $rc -eq 0
             _shelp_history_add $orig
             commandline -r -- ''
@@ -92,7 +96,9 @@ function _shelp_raw_dispatch
     else
         commandline -r -- $orig
         if test -s $errfile
-            cat $errfile >&2
+            # exactly one trailing newline, then room for the prompt
+            printf '%s\n' (string collect <$errfile) >&2
+            _shelp_prompt_room
         end
     end
     command rm -f $errfile

@@ -513,6 +513,17 @@ def last_row(rows, text):
     return hits[-1] if hits else None
 
 
+def view(rows, around=None, n=8):
+    """The screen near row `around` (default: the last non-blank row), for
+    a failure message."""
+    if rows is None:
+        return "(no pyte)"
+    end = max((i for i, r in enumerate(rows) if r), default=0)
+    if around is not None:
+        end = min(len(rows) - 1, around + 2)
+    return "screen:\n" + "\n".join(f"  |{r}" for r in rows[max(0, end - n):end + 1])
+
+
 def explain_screen_check(s, results, label, start, after_rows):
     """What a raw-mode explain left on screen: the stub's header, blank
     line and all six explanation rows, then exactly ONE blank row, then
@@ -1249,6 +1260,9 @@ def fish_home(tmpdir):
         f.write("function fish_prompt; printf 'TESTPROMPT%% '; end\n")
         f.write("function fish_greeting; end\n")
         f.write('eval (command shelp init fish | string collect)\n')
+        # test-only: ^T prints the command line (fish_failure_check)
+        f.write("function _t_buf; printf '\\nBUF=<%s>\\n' (commandline); commandline -f repaint; end\n")
+        f.write("bind \\ct _t_buf; bind -M insert \\ct _t_buf\n")
     return d
 
 
@@ -1263,6 +1277,44 @@ def fish_suggest_roundtrip(s, raw):
     s.send("\r")
     got_echo = s.expect(re.escape(raw), timeout=8)
     return got_echo, ("" if got_echo else f"echoed output missing; buf={s.buf[-400:]!r}")
+
+
+def fish_failure_check(s, results, label, top):
+    """A failing raw-mode suggest: shelp's error stays on screen, followed
+    by the prompt (top: its lines above the last) with the typed line back
+    in the buffer. The bug this guards against: `commandline -f repaint`
+    after the error drew a multi-line prompt over it (the explain blind
+    spot, see _shelp_prompt_room)."""
+    line = "shelp fail probe"
+    s.send("set -x SHELP_STUB_FAIL 1\r")
+    s.read_available(0.5)
+    s.buf = ""
+    s.send(line + "\r")
+    s.expect(re.escape("stub forced failure"), timeout=8)
+    s.expect(re.escape("TESTPROMPT% " + line), timeout=8)
+    s.read_available(0.4)
+    rows = s.screen()
+    if rows is None:
+        ok = "shelp: stub forced failure" in strip_ansi(s.buf)
+        results.check(f"{label}: failed suggest shows the error, keeps the line (bytes)", ok, s.buf[-300:])
+    else:
+        at = last_row(rows, "shelp: stub forced failure")
+        want = top + ["TESTPROMPT% " + line]
+        ok = (at is not None and at + len(want) < len(rows)
+              and rows[at + 1:at + len(want)] == want[:-1]
+              and rows[at + len(want)].startswith(want[-1])
+              and s.cursor() == (at + len(want), len(want[-1])))
+        results.check(f"{label}: failed suggest leaves the error on screen, the line below it",
+                      ok, view(rows, at))
+    s.buf = ""
+    s.send("\x14")
+    ok = s.expect(r"BUF=<[^>\r\n]*>", timeout=4) and f"BUF=<{line}>" in strip_ansi(s.buf)
+    results.check(f"{label}: failed suggest puts the typed line back in the buffer", ok, s.buf[-200:])
+    s.read_available(0.3)
+    s.send("\x15")
+    s.read_available(0.3)
+    s.send("set -e SHELP_STUB_FAIL\r")
+    s.read_available(0.5)
 
 
 def run_fish(tmpdir, results, host):
@@ -1296,6 +1348,7 @@ def run_fish(tmpdir, results, host):
         results.check("fish: explain returns to empty prompt", ok, s.buf[-300:])
         s.read_available(0.3)
         explain_screen_check(s, results, "fish", start, ["TESTPROMPT%"])
+        fish_failure_check(s, results, "fish", [])
 
         # the same under a two-line prompt (fish redraws it with
         # `commandline -f repaint` after the output)
@@ -1308,6 +1361,7 @@ def run_fish(tmpdir, results, host):
         s.expect(r"TESTPROMPT% \r?$", timeout=8)
         s.read_available(0.3)
         explain_screen_check(s, results, "fish two-line prompt", start, ["TESTTOP", "TESTPROMPT%"])
+        fish_failure_check(s, results, "fish two-line prompt", ["TESTTOP"])
         s.send("function fish_prompt; printf 'TESTPROMPT%% '; end\r")
         s.read_available(0.8)
 
