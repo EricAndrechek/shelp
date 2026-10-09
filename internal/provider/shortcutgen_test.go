@@ -122,14 +122,14 @@ func TestBuildWorkflowMatchesReference(t *testing.T) {
 	}
 }
 
-// TestCurrentShortcutActionCount pins today's generator at 40 actions:
+// TestCurrentShortcutActionCount pins today's generator at 41 actions:
 // Text + the marker If/Stop and Output/Otherwise (4), Get Dictionary from
 // Input + 2 Get Dictionary Value + Text (4), six If/Use Model/Stop and
 // Output/Otherwise branches (24), the fallback Stop and Output (1), and
 // seven End Ifs.
 func TestCurrentShortcutActionCount(t *testing.T) {
-	if got := currentShortcutActionCount(); got != 40 {
-		t.Errorf("currentShortcutActionCount() = %d, want 40", got)
+	if got := currentShortcutActionCount(); got != 41 {
+		t.Errorf("currentShortcutActionCount() = %d, want 41", got)
 	}
 }
 

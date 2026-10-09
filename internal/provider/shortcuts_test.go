@@ -309,7 +309,7 @@ func TestShortcutsProviderDetect(t *testing.T) {
 		{"newer", "apple", []string{"shelp"}, map[string]int{"shelp": ShortcutFormatVersion + 1}, true, "", ""},
 		{"not installed, only legacy ones", "apple-pro", legacy, nil, false, "not installed", "shelp setup shortcuts"},
 		{"chatgpt not installed", "chatgpt-web", nil, nil, false, "ChatGPT extension", "shelp setup shortcuts"},
-		{"outdated", "apple-pro", []string{"shelp"}, map[string]int{"shelp": 4}, false, "format v4, current v5", "to update it"},
+		{"outdated", "apple-pro", []string{"shelp"}, map[string]int{"shelp": 4}, false, "format v4, current v" + strconv.Itoa(ShortcutFormatVersion) + "", "to update it"},
 		{"marker fails", "apple-pro", []string{"shelp"}, nil, false, "version check", "shelp setup shortcuts"},
 	}
 	for _, c := range cases {
@@ -702,7 +702,7 @@ func TestRunShortcutsSetupInstallsMissing(t *testing.T) {
 	if len(lib.opened) != 1 || filepath.Base(lib.opened[0]) != "shelp.shortcut" {
 		t.Fatalf("opened %q, want one shelp.shortcut", lib.opened)
 	}
-	if !strings.Contains(stdout, `"Add Shortcut"`) || !strings.Contains(stdout, `"shelp" installed (v5)`) || !strings.Contains(stdout, "serves shortcuts:apple,") {
+	if !strings.Contains(stdout, `"Add Shortcut"`) || !strings.Contains(stdout, `"shelp" installed (v`+strconv.Itoa(ShortcutFormatVersion)+`)`) || !strings.Contains(stdout, "serves shortcuts:apple,") {
 		t.Errorf("stdout:\n%s", stdout)
 	}
 	if stderr != "" {
@@ -750,7 +750,7 @@ func TestRunShortcutsSetupUpdateDeletesFirst(t *testing.T) {
 	if at := lib.states[lib.openedAt[0]]; slices.Contains(at.names, "shelp") {
 		t.Errorf("opened the new file while the old shortcut was still listed (state %d)", lib.openedAt[0])
 	}
-	for _, want := range []string{"outdated (v4, current v5)", "right-click \"shelp\" › Delete", "waiting for \"shelp\" to be deleted", `"shelp" installed (v5)`} {
+	for _, want := range []string{"outdated (v4, current v" + strconv.Itoa(ShortcutFormatVersion) + ")", "right-click \"shelp\" › Delete", "waiting for \"shelp\" to be deleted", `"shelp" installed (v` + strconv.Itoa(ShortcutFormatVersion) + `)`} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, stdout)
 		}

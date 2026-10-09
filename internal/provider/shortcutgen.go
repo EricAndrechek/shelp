@@ -249,7 +249,7 @@ const conditionIsEquals = 4
 // way Apple-built shortcuts do text comparisons. 1-4 were one shortcut per
 // (model, web) pair, named "shelp · <Model>[ + Web]". 5 is one shortcut
 // for all of them, its input a JSON {"model", "prompt"} object.
-const ShortcutFormatVersion = 5
+const ShortcutFormatVersion = 6
 
 // shortcutVersionMarker is the literal Shortcut Input value that asks a
 // generated shortcut to report its own format version instead of calling
@@ -398,6 +398,11 @@ func buildWorkflow() workflow {
 	b.add("getvalueforkey", getValueForKeyParams{UUID: modelValue, WFDictionaryKey: "model", WFInput: tokenAttachment(actionOutput(dict, outputNameDictionary))})
 	b.add("getvalueforkey", getValueForKeyParams{UUID: promptValue, WFDictionaryKey: "prompt", WFInput: tokenAttachment(actionOutput(dict, outputNameDictionary))})
 	modelText := b.text(actionOutput(modelValue, outputNameDictionaryValue))
+	// Format 6: the prompt goes through a Text action too. Use Model fed
+	// the bare Dictionary Value (format 5) shared "1 dictionary" -- the
+	// whole JSON request -- in ChatGPT's consent dialog (seen live,
+	// 2026-10-09); a Text output is just the prompt.
+	promptText := b.text(actionOutput(promptValue, outputNameDictionaryValue))
 
 	groups := make([]string, 0, len(shortcutVariants))
 	for _, v := range shortcutVariants {
@@ -410,7 +415,7 @@ func buildWorkflow() workflow {
 			WFGenerativeResultType: "Text",
 			FollowUp:               false,
 			WFAllowWebSearch:       v.web,
-			WFLLMPrompt:            textWith("", actionOutput(promptValue, outputNameDictionaryValue)),
+			WFLLMPrompt:            textWith("", actionOutput(promptText, outputNameText)),
 		})
 		b.output(textWith("", actionOutput(ask, outputNameResponse)))
 		b.otherwise(g)

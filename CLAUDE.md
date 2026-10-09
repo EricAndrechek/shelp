@@ -223,7 +223,8 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   4`, a real prompt -> a command): "Text: Shortcut Input. If Text is
   `__shelp_shortcut_version__`, Stop and Output the text `shelp-shortcut
   4` (no model call); Otherwise, `<the v1 pair>`; End If" -- 7 actions.
-  **5** (current; NOT yet verified live) is one shortcut for every model,
+  **5** (verified live 2026-10-09: marker, unknown model, one prompt each
+  through apple-pro, apple and chatgpt) is one shortcut for every model,
   40 actions (`currentShortcutActionCount()`; `buildWorkflow`'s doc
   comment draws it): v4's marker block unchanged, then in its Otherwise
   Get Dictionary from Input (on the Text), Get Dictionary Value "model"
@@ -232,6 +233,11 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   Model (that model, web flag) on the prompt value; Stop and Output its
   Response"), the innermost Otherwise a Stop and Output of
   `shelp-shortcut-error: unknown model <model-Text>`, then seven End Ifs.
+  **6** (current; NOT yet verified live) adds one Text action holding the
+  "prompt" Dictionary Value and feeds Use Model that Text (41 actions):
+  with the bare Dictionary Value, ChatGPT's consent dialog ("Allow
+  "shelp" to share 1 dictionary with ChatGPT?") showed the whole JSON
+  request, system prompt included -- a Text output is just the prompt.
   The reply has no trailing newline, so when checking it by hand pipe it
   through `od -c`: an interactive prompt can draw over it and make it
   look empty.
@@ -522,13 +528,14 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- Format 5 (one `shelp` shortcut) is covered by scripted tests and an
-  interpreter test only: install it, check the marker (`printf
-  __shelp_shortcut_version__ | shortcuts run shelp -o - --output-type
-  public.plain-text | od -c`), one prompt each for apple-pro, apple and
-  chatgpt, and the delete-first update, before relying on it. Eric's
-  "shelp · Apple Intelligence Pro" (v4; a throwaway build once replaced
-  it claiming format 5) is now legacy: delete it once `shelp` works.
+- Format 6 (the prompt through a Text action) needs the same live check
+  format 5 got: install, marker (`printf __shelp_shortcut_version__ |
+  shortcuts run shelp -o - --output-type public.plain-text | od -c`), one
+  prompt each for apple-pro, apple and chatgpt (ChatGPT's consent dialog
+  should now show only the prompt text), then the delete-first update
+  with a throwaway build claiming format 7. Format 5's delete-first update
+  ran clean once live (2026-10-09); a second try failed only at Apple's
+  signing server, before the retry existed.
 - The Keep Both branch of the update wait is covered by scripted tests
   only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
