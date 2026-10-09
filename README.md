@@ -14,9 +14,21 @@ $ shelp what's my ip and is it behind a NAT
 dig +short myip.opendns.com @resolver1.opendns.com
 
 $ shelp explain 'lsof -nP -iTCP:8080 -sTCP:LISTEN'
-Lists processes with a listening TCP socket on port 8080; -n and -P skip
-DNS and service-name lookups for speed.
+$ lsof -nP -iTCP:8080 -sTCP:LISTEN
+
+  Lists the processes listening on TCP port 8080.
+
+  • -n — skip DNS lookups
+  • -P — show port numbers, not service names
+  • -iTCP:8080 — only TCP sockets on port 8080
+  • -sTCP:LISTEN — only sockets in the LISTEN state
+
+  man: lsof
 ```
+
+(On a terminal, explanations are short Markdown rendered with color and
+wrapping; command names link to their man pages. Piped, you get the raw
+text.)
 
 Status: early, local-only (no remote for this repo yet).
 
@@ -435,8 +447,12 @@ through documented flags:
   shelp fall under that permission. Use at your own risk.
 - The `shortcuts:*` providers all run one Apple Shortcut, "shelp", which
   you import by hand: one click on "Add Shortcut". `shelp setup
-  shortcuts` generates and signs it and opens it for you, but can't click
-  through the import dialog itself — there's no API for that. Which model
+  shortcuts` opens it for you, but can't click through the import dialog
+  itself — there's no API for that. Shortcuts only imports signed
+  shortcut files, and signing is a round trip to Apple's server that now
+  and then stalls, so shelp ships its shortcut already signed (an
+  Apple-issued certificate with nothing personal in it); it signs one at
+  setup only if that copy can't be used, retrying stalled attempts. Which model
   answers (Apple Intelligence, Apple Intelligence Pro, ChatGPT, each with
   or without web knowledge) is up to the provider you pick; the
   `shortcuts:chatgpt*` ones also need Apple's ChatGPT extension.
@@ -463,6 +479,20 @@ through documented flags:
   noticeably slower than the other backends: about 1-2s per call even
   hardened down to a plain completion (it's a full coding agent starting
   up in headless mode, not a lightweight API request).
+
+## Development
+
+```sh
+make build          # bin/shelp
+make test           # Go tests
+make test-shell     # pty tests of the shell integrations (zsh, bash >= 4,
+                    # fish: native if installed, else in Docker; uses uv/pyte)
+make ci             # exactly what CI runs: vet, build, shell suite, go test -race
+make sign-shortcut  # re-sign the embedded Apple Shortcut (after changing it)
+```
+
+`.github/workflows/ci.yml` only installs those prerequisites on macOS and
+Linux and runs `make ci`, so a green local `make ci` is a green CI run.
 
 ## License
 
