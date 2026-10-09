@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -46,8 +47,18 @@ func TestFormatCleanExplain(t *testing.T) {
 	}
 }
 
+// requireZsh skips a test that drives the real zsh (absent on most Linux
+// boxes; preinstalled on macOS).
+func requireZsh(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+}
+
 func TestParses(t *testing.T) {
 	ctx := context.Background()
+	requireZsh(t)
 	ok, msg := Parses(ctx, "zsh", "echo hi")
 	if ok == nil || !*ok {
 		t.Errorf("Parses(zsh, valid) = %v %q, want true", ok, msg)
@@ -56,9 +67,14 @@ func TestParses(t *testing.T) {
 	if ok == nil || *ok {
 		t.Errorf("Parses(zsh, invalid) should be false, got %v", ok)
 	}
-	// fish is not installed in this environment; must skip, not error.
+	// Without fish installed, Parses must skip (nil), not error; with it
+	// (CI installs it for the shell suite), it must really parse.
 	ok, _ = Parses(ctx, "fish", "echo hi")
-	if ok != nil {
+	if _, err := exec.LookPath("fish"); err == nil {
+		if ok == nil || !*ok {
+			t.Errorf("Parses(fish, valid) with fish installed: want true, got %v", ok)
+		}
+	} else if ok != nil {
 		t.Errorf("Parses(fish, ...) with fish not installed: want nil (skip), got %v", *ok)
 	}
 }
@@ -89,6 +105,7 @@ func TestCommandsExist(t *testing.T) {
 // plain command word, so none of them should ever reach CommandsExist's
 // missing list.
 func TestCommandsExist_FalsePositivesFixed(t *testing.T) {
+	requireZsh(t)
 	ctx := context.Background()
 	cases := []struct {
 		name, shell, cmd string
@@ -121,6 +138,7 @@ func TestCommandsExist_FalsePositivesFixed(t *testing.T) {
 // None of these four are installed on this machine (verified: battctl,
 // rename, ip, and jpegmini are all macOS-inapplicable/uninstalled tools).
 func TestCommandsExist_TruePositivesStillWork(t *testing.T) {
+	requireZsh(t)
 	ctx := context.Background()
 	cases := []struct {
 		shell, cmd, want string
@@ -160,6 +178,7 @@ func TestCommandsExist_FishSkipped(t *testing.T) {
 // regex splitter, but candidates containing characters that can't appear
 // in a real command name are dropped rather than reported as missing.
 func TestCommandsExist_ParseErrorFallsBackWithCharFilter(t *testing.T) {
+	requireZsh(t)
 	ctx := context.Background()
 
 	// Sanity: these really do fail to parse as bash, so this test is

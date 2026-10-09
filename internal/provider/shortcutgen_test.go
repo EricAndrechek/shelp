@@ -530,6 +530,11 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	if _, ok := LookPath("shortcuts"); !ok {
 		t.Skip("shortcuts not on PATH")
 	}
+	// `shortcuts sign` goes through Apple's server and needs an
+	// iCloud-signed-in Mac; a CI runner (GitHub sets CI=true) is not one.
+	if os.Getenv("CI") != "" {
+		t.Skip("CI runner: `shortcuts sign` needs an iCloud-signed-in Mac")
+	}
 
 	dir := t.TempDir()
 	ctx := context.Background()

@@ -567,6 +567,9 @@ func TestShortcutsProviderGenerateNotInstalled(t *testing.T) {
 	if _, ok := LookPath("shortcuts"); !ok {
 		t.Skip("shortcuts CLI not on PATH")
 	}
+	if os.Getenv("CI") != "" {
+		t.Skip("CI runner: runs the real `shortcuts` CLI, whose behavior there (no GUI session) is not ours to rely on")
+	}
 	p := variantProvider(t, "apple", "shelp-definitely-not-a-real-shortcut-name-xyz")
 	_, err := p.Generate(context.Background(), Request{Prompt: "hi"})
 	var ue *UnavailableError
