@@ -57,64 +57,18 @@ func exitCode(ctx context.Context, err error) (code int, show bool) {
 
 type usageError struct{ error }
 
+// run dispatches on commandFor (kind.go), the same decision `shelp
+// __kind` reports to the shell hooks: a subcommand, or a task.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		printHelp(stdout, "")
-		return nil
+	name := commandFor(args)
+	if name == "" {
+		return runTask(ctx, args, stdout, stderr)
 	}
-	rest := args[1:]
-	switch args[0] {
-	case "-h", "--help":
-		printHelp(stdout, "")
-		return nil
-	case "help":
-		// Bare "help" is help, and so is "help <command>". Anything else
-		// ("shelp help me find big files") is a task.
-		if len(rest) == 0 {
-			printHelp(stdout, "")
-			return nil
-		}
-		if len(rest) == 1 {
-			if _, ok := helpTopic(rest[0]); ok && rest[0] != "" {
-				printHelp(stdout, rest[0])
-				return nil
-			}
-			if rest[0] == "-h" || rest[0] == "--help" {
-				printHelp(stdout, "help")
-				return nil
-			}
-		}
-	case "version", "--version":
-		// Likewise "shelp version of node installed" is a task.
-		if len(rest) == 0 {
-			printVersion(stdout)
-			return nil
-		}
-		if len(rest) == 1 && (rest[0] == "-h" || rest[0] == "--help") {
-			printHelp(stdout, "version")
-			return nil
-		}
-	case "init":
-		return runInit(rest, stdout, stderr)
-	case "completion":
-		return runCompletion(rest, stdout, stderr)
-	case "__complete":
-		return runComplete(rest, stdout)
-	case "providers":
-		return runProviders(ctx, rest, stdout, stderr)
-	case "setup":
-		return runSetup(ctx, rest, stdout, stderr)
-	case "config":
-		// Likewise "shelp config of nginx" is a task.
-		if len(rest) == 0 || rest[0] == "chain" || rest[0] == "edit" || rest[0] == "-h" || rest[0] == "--help" {
-			return runConfig(ctx, rest, stdout, stderr)
-		}
-	case "explain", "-e":
-		return runGenerate(ctx, provider.Explain, rest, stdout, stderr)
-	case "suggest":
-		return runGenerate(ctx, provider.Suggest, rest, stdout, stderr)
+	cmd, ok := commands[name]
+	if !ok { // a name commandFor returns without a handler: a bug, never a task
+		return fmt.Errorf("internal error: no handler for command %q", name)
 	}
-	return runGenerate(ctx, provider.Suggest, args, stdout, stderr)
+	return cmd(ctx, args, stdout, stderr)
 }
 
 // flagErr ends a command whose flags did not parse: its help goes to
