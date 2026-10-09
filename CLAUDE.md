@@ -45,7 +45,9 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   (TIOCGWINSZ) and `Truncate`. Its consumers in `cmd/shelp/`:
   `providers_view.go` (grouped `providers` view with chain line,
   `--all`/`-v`; replaced the old `table.go`), `explain.go` (streaming explain
-  highlighter), `banner.go` (version/usage with the logo).
+  highlighter), `banner.go` (version with the logo), `help.go` (the short top-level
+  help and one help text per command, `shelp help <cmd>` / `shelp <cmd> -h`;
+  flag errors print that command's help on stderr, exit 2).
 - `internal/shellinit/` — `shelp init zsh|bash|fish` (raw line mode,
   `--bind`; embedded `scripts/shelp.<shell>.tmpl` templates rendered via
   `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,

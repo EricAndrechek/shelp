@@ -76,7 +76,13 @@ $ shelp providers                                       # what works on this mac
 $ shelp providers --json                                # same, machine-readable
 $ shelp providers --reset-cooldowns                     # clear recorded rate-limit cooldowns
 $ shelp setup shortcuts                                 # install the Apple Shortcut this needs
+$ shelp help                                            # short overview (also -h, --help)
+$ shelp help providers                                  # one command's flags (also: shelp providers -h)
 ```
+
+`shelp help` lists the commands; `shelp help <command>` (or `shelp <command>
+-h`) shows that command's flags. `help` and `version` followed by more words
+are a task, so `shelp help me find big files` still works.
 
 **Raw line mode (default on).** Once hooked into your shell, pressing
 Enter on a line that starts with `shelp ` (a task, or a `shelp
