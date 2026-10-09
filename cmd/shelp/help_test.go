@@ -11,12 +11,16 @@ import (
 // Every command's help is reachable three ways, on stdout with no error.
 func TestCommandHelpPaths(t *testing.T) {
 	setColorEnv(t, "")
-	for _, name := range []string{"suggest", "explain", "providers", "setup", "init", "version", "help"} {
+	t.Setenv("SHELP_PROVIDER", "nosuch:model") // a miss must never reach a real backend
+	for _, name := range []string{"suggest", "explain", "providers", "setup", "init", "version", "help", "config"} {
 		want := commandHelp[name]
 		if want == "" || !strings.HasPrefix(want, "shelp "+name+":") {
 			t.Fatalf("%s: help text missing or misnamed: %q", name, want)
 		}
 		paths := [][]string{{"help", name}, {name, "-h"}, {name, "--help"}}
+		if name == "config" { // a topic, not a command: only "help config"
+			paths = paths[:1]
+		}
 		if name == "version" {
 			paths = append(paths, []string{"--version", "-h"})
 		}
@@ -134,6 +138,34 @@ func TestFlagErrorsPrintCommandHelp(t *testing.T) {
 		}
 		if out != "" || errOut != commandHelp[c.help] {
 			t.Errorf("%v: got stdout %q, stderr %q; want only %s help on stderr", c.args, out, errOut, c.help)
+		}
+	}
+}
+
+// Nothing the pre-redesign usage block documented may be missing from
+// the per-command help.
+func TestOldOptionsStillDocumented(t *testing.T) {
+	var all strings.Builder
+	for _, h := range commandHelp {
+		all.WriteString(h)
+	}
+	for _, w := range []string{
+		"-p, --provider", "SHELP_PROVIDER", "--shell", "--template", "--context",
+		"--json", "-v, --verbose", "--force", "--all", "--reset-cooldowns",
+		"--bind", "--no-line-mode", "--dry-run", "-e", "--version",
+		"os,shell,cwd,tools", "shelp setup shell", "shelp setup shortcuts",
+		`eval "$(shelp init zsh)"`, `"providers"`, "line_mode",
+	} {
+		if !strings.Contains(all.String(), w) {
+			t.Errorf("no help topic mentions %q", w)
+		}
+	}
+	for _, w := range []string{"SHELP_CONFIG", "XDG_CONFIG_HOME", "~/.config/shelp/config.toml",
+		"providers", "template", "context", "cooldown", "[shortcuts]", "[shell]", "bind", "line_mode",
+		"[[openai.endpoint]]", "preset", "base_url", "api_key_env", "models", "temperature",
+		"[[openai.local]]", "[agentcli.claude]", "disabled", "SHELP_PROVIDER", "NO_COLOR", "CLICOLOR_FORCE"} {
+		if !strings.Contains(commandHelp["config"], w) {
+			t.Errorf("config help lacks %q", w)
 		}
 	}
 }

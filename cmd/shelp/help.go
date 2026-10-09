@@ -30,12 +30,15 @@ Commands
   version    print the version (also --version)
   help       show help for a command
 
+Topics
+  config     the config file and environment variables
+
 Flags
   -p, --provider IDS   providers to try, in order (default: config "providers")
   -v, --verbose        show which provider answered, and how fast
   -h, --help           show help
 
-Run "shelp help <command>" for a command's flags.
+Run "shelp help <command>" for a command's flags, "shelp help config" for settings.
 `
 
 const generateFlags = `
@@ -128,6 +131,76 @@ Usage
 
 Commands
   suggest, explain, providers, setup, init, version, help
+
+Topics
+  config
+`,
+
+	"config": `shelp config: the config file and environment variables.
+
+File
+  $SHELP_CONFIG                         if set, it must exist
+  $XDG_CONFIG_HOME/shelp/config.toml    else this, if XDG_CONFIG_HOME is set
+  ~/.config/shelp/config.toml           else this; missing means defaults
+  Every key and table is optional. Each provider family reads only its own
+  table.
+
+Keys
+  providers = ["shortcuts:apple-pro", "claude:sonnet", "fm"]
+      Fallback chain, tried in order; the first success wins. -p and
+      $SHELP_PROVIDER override it. Default: ["shortcuts:apple-pro", "fm"].
+  template = "` + prompt.Default + `"
+      Prompt template: v1 (minimal), v2 (rules), v3 (v2 + few-shot), v4
+      (v2 with Markdown explanations). Default: ` + prompt.Default + `.
+  context = ["os", "shell"]
+      What to tell the model: os, shell, cwd, tools. cwd and tools are
+      opt-in because they leave the machine with a cloud provider.
+  cooldown = "30m"
+      How long a rate-limited provider is skipped (a Go duration). Default 30m.
+
+[shortcuts]
+  name = "shelp"
+      The Apple Shortcut every shortcuts:* provider runs. Default "shelp".
+
+[shell]
+  bind = "^G"
+      Key bound to shelp-widget. "shelp init --bind" wins.
+  line_mode = true
+      Intercept Enter on lines starting with "shelp ". Default true.
+
+[[openai.endpoint]]   (repeatable; hosted, key-authenticated)
+  name = "openrouter"
+      Prefix of this endpoint's provider IDs, "<name>:<model>".
+  preset = "openrouter"
+      Fills base_url and api_key_env: openai, openrouter, groq, gemini,
+      anthropic, xai, mistral, deepseek, cerebras.
+  base_url = "https://llm.example.com/v1"
+      Required without a preset; overrides one.
+  api_key_env = "WORK_LLM_API_KEY"
+      Name of the environment variable holding the key.
+  models = ["gpt-4o-mini"]
+      One provider ID per entry.
+  temperature = 0.2
+      Sampling temperature. Default 0.
+
+[[openai.local]]   (repeatable; local OpenAI-compatible servers)
+  name = "fm-serve"
+  base_url = "http://127.0.0.1:11535/v1"
+      Adds to or overrides the built-ins: lmstudio :1234, ollama :11434,
+      llamacpp :8080.
+
+[agentcli.claude]
+  models = ["haiku", "opus"]
+      Replaces the built-in variants. A built-in id like "haiku" keeps its
+      flag value; any other string is passed to --model as is.
+  disabled = true
+      Drop the claude providers even when the binary is installed.
+
+Environment
+  SHELP_PROVIDER    provider chain, like -p (overrides config "providers")
+  SHELP_CONFIG      path of the config file
+  NO_COLOR          turn off colors
+  CLICOLOR_FORCE    keep colors when output is not a terminal
 `,
 }
 

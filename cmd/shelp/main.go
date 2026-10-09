@@ -59,8 +59,8 @@ type usageError struct{ error }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		printHelp(stderr, "")
-		return usageError{errors.New("no task given")}
+		printHelp(stdout, "")
+		return nil
 	}
 	rest := args[1:]
 	switch args[0] {

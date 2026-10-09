@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -41,12 +40,11 @@ func TestBannerPlain(t *testing.T) {
 		}
 	}
 	out, errOut, err := runOut(t)
-	var ue usageError
-	if !errors.As(err, &ue) || out != "" || errOut != usage {
-		t.Errorf("no args: got (stdout %q, err %v), want usage on stderr and a usageError:\n%s", out, err, errOut)
+	if err != nil || out != usage || errOut != "" {
+		t.Errorf("no args: got (stdout %q, stderr %q, err %v), want usage on stdout and no error", out, errOut, err)
 	}
 	// The short top-level help names every command and the help routes.
-	for _, w := range []string{"shelp turns a task", "explain ", "providers ", "setup ", "init ", "version ", "help ", "-h, --help", `Run "shelp help <command>"`} {
+	for _, w := range []string{"shelp turns a task", "explain ", "providers ", "setup ", "init ", "version ", "help ", "-h, --help", `Run "shelp help <command>"`, `"shelp help config"`, "Topics"} {
 		if !strings.Contains(usage, w) {
 			t.Errorf("usage lacks %q", w)
 		}
@@ -87,9 +85,9 @@ func TestBannerTerminal(t *testing.T) {
 		}
 	}
 
-	_, errOut, _ := runOut(t)
-	if got := style.Strip(errOut); got != logo+"\n\n"+usage {
-		t.Errorf("no args: stripped stderr is not logo + usage:\n%s", got)
+	out, errOut, _ := runOut(t)
+	if got := style.Strip(out); got != logo+"\n\n"+usage || errOut != "" {
+		t.Errorf("no args: stripped stdout is not logo + usage:\n%s", got)
 	}
 }
 
