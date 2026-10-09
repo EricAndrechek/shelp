@@ -361,28 +361,35 @@ func pickChain(ctx context.Context, cfg *config.Config, pr *prompter, stdout, st
 		}
 	}
 	width := style.TermWidth(stdout)
+	syms := make([]string, len(rows))
+	texts := make([]string, len(rows))
+	tw := 0
 	for i, r := range rows {
-		mark := "   "
-		if n, ok := pos[r.ID]; ok {
-			mark = pal.Accent(fmt.Sprintf("[%d]", n))
-		}
-		var sym, text string
 		switch r.Status {
 		case statusOK:
-			sym, text = pal.OK("✓"), r.Label
-			if text == "" {
-				text = r.Description
+			syms[i], texts[i] = pal.OK("✓"), r.Label
+			if texts[i] == "" {
+				texts[i] = r.Description
 			}
 		case statusCooldown:
-			sym, text = pal.Warn("◷"), pal.Warn("cooldown "+r.Reason)
+			syms[i], texts[i] = pal.Warn("◷"), pal.Warn("cooldown "+r.Reason)
 		default:
 			reason := r.Reason
 			if reason == "" {
 				reason = "unavailable"
 			}
-			sym, text = pal.Dim("·"), pal.Dim(reason)
+			syms[i], texts[i] = pal.Dim("·"), pal.Dim(reason)
 		}
-		l := fmt.Sprintf("%3d  %s %s %s  %s", i+1, mark, sym, style.PadRight(r.ID, idw), text)
+		if w := style.Width(texts[i]); w > tw {
+			tw = w
+		}
+	}
+	for i, r := range rows {
+		l := fmt.Sprintf("%3d  %s %s  %s", i+1, syms[i], style.PadRight(r.ID, idw), texts[i])
+		if n, ok := pos[r.ID]; ok {
+			l = fmt.Sprintf("%3d  %s %s  %s   %s", i+1, syms[i], style.PadRight(r.ID, idw),
+				style.PadRight(texts[i], tw), pal.Dim(fmt.Sprintf("chain #%d", n)))
+		}
 		if width > 0 {
 			l = style.Truncate(l, width-1)
 		}

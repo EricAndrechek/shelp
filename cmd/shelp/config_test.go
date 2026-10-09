@@ -272,7 +272,7 @@ func TestConfigChainInteractive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Listed in provider order; the current chain (the default) is marked.
-	for _, w := range []string{"1  [1] ✓ shortcuts:apple-pro", "2  [2] ✓ fm", "3      · claude:haiku", "not installed", "New order (numbers, e.g. 3 1 5; Enter keeps the current one): ", "9 is not in the list (1-4)", `"foo" is not a number`, "new  claude:haiku → shortcuts:apple-pro → fm", "saved"} {
+	for _, w := range []string{"1  ✓ shortcuts:apple-pro", "chain #1", "2  ✓ fm", "chain #2", "3  · claude:haiku", "not installed", "New order (numbers, e.g. 3 1 5; Enter keeps the current one): ", "9 is not in the list (1-4)", `"foo" is not a number`, "new  claude:haiku → shortcuts:apple-pro → fm", "saved"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("output lacks %q", w)
 		}
