@@ -84,6 +84,22 @@ Flags
   --json                machine-readable output
   --reset-cooldowns     clear all recorded rate-limit cooldowns
   -h, --help            show help
+
+How they differ (scores are from shelp's benchmark)
+  fm            on this Mac: offline, private, fastest, and the weakest
+                (31-36%).
+  Apple Intelligence, Apple Intelligence Pro
+                both run on Apple's Private Cloud Compute; Pro is the larger
+                model (98%). Apple sets a daily usage limit.
+  ChatGPT       OpenAI's model, through Apple's ChatGPT extension, which
+                must be enabled; it asks once to share your request.
+  -web          lets the model look things up online. It helps questions about
+                current things, not shell commands, and is slower.
+  claude        Anthropic models through your Claude Code login, run headless
+                with no tools; it counts against your plan (Sonnet ~98%,
+                Haiku ~84%).
+  local servers, API endpoints
+                whatever model you run or pay for.
 `,
 
 	"setup": `shelp setup: set up the shell hook or the Apple Shortcut.

@@ -238,13 +238,35 @@ func (p *agentcliProvider) Description() string {
 	return label + ", model " + m + " (headless, no tools)"
 }
 
-// Label is "<model> · headless, no tools".
+// Label is "Claude Haiku" for claude's built-in variants, else the model
+// name as configured. The headless, no-tools fact belongs in help.
 func (p *agentcliProvider) Label() string {
 	m := p.cliModel
 	if m == "" {
 		m = "default"
 	}
-	return m + " · headless, no tools"
+	if p.spec.name == "claude" && (m == "haiku" || m == "sonnet" || m == "default") {
+		if m == "default" {
+			return "Claude (account default)"
+		}
+		return "Claude " + strings.ToUpper(m[:1]) + m[1:]
+	}
+	return m
+}
+
+// Note says where the model runs; claude's two built-ins add how they
+// compare.
+func (p *agentcliProvider) Note() string {
+	if p.spec.name != "claude" {
+		return ""
+	}
+	switch p.cliModel {
+	case "haiku":
+		return "Anthropic, your Claude plan · faster"
+	case "sonnet":
+		return "Anthropic, your Claude plan · stronger"
+	}
+	return "Anthropic, your Claude plan"
 }
 
 func (p *agentcliProvider) Detect(ctx context.Context) Status {

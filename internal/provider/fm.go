@@ -41,6 +41,9 @@ func (*fmProvider) Description() string { return "Apple on-device model (fm CLI,
 
 func (*fmProvider) Label() string { return "Apple on-device model" }
 
+// Note says where fm runs and how it compares.
+func (*fmProvider) Note() string { return "this Mac, offline · fastest, weakest" }
+
 func (p *fmProvider) Detect(ctx context.Context) Status {
 	lic, err := RunCmd(ctx, nil, nil, "fm", "license", "--status")
 	if err != nil {

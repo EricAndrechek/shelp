@@ -178,13 +178,31 @@ func (p *shortcutsProvider) Description() string {
 }
 
 // Label is the short display name: the model, plus " + web search" for the
-// web variants,
+// web variants.
 func (p *shortcutsProvider) Label() string {
 	l := p.variant.model
 	if p.variant.web {
 		l += " + web search"
 	}
 	return l
+}
+
+// Note says where the model runs and how it compares; web twins add that
+// they look things up online.
+func (p *shortcutsProvider) Note() string {
+	var n string
+	switch p.variant.model {
+	case "Apple Intelligence":
+		n = "Apple's cloud · smaller model"
+	case "Apple Intelligence Pro":
+		n = "Apple's cloud · larger model"
+	case "ChatGPT":
+		n = "OpenAI, through Apple's extension"
+	}
+	if p.variant.web {
+		n += " · looks things up online"
+	}
+	return n
 }
 
 // Detect reports the provider available only when the shared shortcut is

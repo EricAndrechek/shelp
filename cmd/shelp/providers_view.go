@@ -22,6 +22,7 @@ type providerRow struct {
 	Available                                      bool
 	Fix, Detail                                    string
 	Label                                          string
+	Note                                           string `json:",omitempty"`
 	Group                                          string `json:",omitempty"`
 }
 
@@ -39,7 +40,7 @@ func buildProviderRows(ps []provider.Provider, sts []provider.Status, cds map[st
 	for i, p := range ps {
 		r := providerRow{
 			ID: p.ID(), Kind: string(p.Kind()), Description: p.Description(),
-			Label: provider.LabelOf(p),
+			Label: provider.LabelOf(p), Note: provider.NoteOf(p),
 		}
 		if e, ok := cooldown.Active(cds, p.ID()); ok {
 			r.Status = statusCooldown
@@ -199,20 +200,26 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 				fixes = append(fixes, f)
 			}
 		}
-		var firstHidden string
+		labw := 0
+		for _, r := range g {
+			if !hidden[r.ID] && r.Status == statusOK && r.Note != "" {
+				if w := style.Width(rowLabel(r)); w > labw {
+					labw = w
+				}
+			}
+		}
+		var hiddenIDs []string
 		for _, r := range g {
 			if hidden[r.ID] {
-				if firstHidden == "" {
-					firstHidden = r.ID
-				}
+				hiddenIDs = append(hiddenIDs, r.ID)
 				continue
 			}
 			id := style.PadRight(r.ID, idw)
 			switch r.Status {
 			case statusOK:
-				text := r.Label
-				if text == "" {
-					text = r.Description
+				text := rowLabel(r)
+				if r.Note != "" {
+					text = style.PadRight(text, labw) + "  " + p.Dim(r.Note)
 				}
 				if r.Reason != "" {
 					text += " · " + p.Warn(r.Reason)
@@ -233,14 +240,38 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 				}
 			}
 		}
-		if firstHidden != "" {
-			line("    " + p.Dim("add -web for web search, e.g. "+firstHidden))
+		if len(hiddenIDs) > 0 {
+			line("    " + p.Dim("add -web to let the model look things up online (slower), e.g. "+foldExample(hiddenIDs, chain)))
 		}
 		for _, f := range fixes {
 			line("    " + p.Dim("→") + " " + f)
 		}
 	}
 	return out.String()
+}
+
+// rowLabel is a row's label, falling back to its description.
+func rowLabel(r providerRow) string {
+	if r.Label != "" {
+		return r.Label
+	}
+	return r.Description
+}
+
+// foldExample picks the example for the fold line: the hidden twin of a
+// base row that is in the user's chain (first by chain order), else the
+// first hidden twin.
+func foldExample(hidden, chain []string) string {
+	set := map[string]bool{}
+	for _, id := range hidden {
+		set[id] = true
+	}
+	for _, id := range chain {
+		if set[id+"-web"] {
+			return id + "-web"
+		}
+	}
+	return hidden[0]
 }
 
 // webTwins returns the IDs of rows that are another row's ID + "-web" with

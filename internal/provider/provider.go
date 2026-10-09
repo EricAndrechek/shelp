@@ -79,8 +79,8 @@ type Status struct {
 }
 
 // Labeler is an optional interface a Provider implements to supply a short
-// display label for `shelp providers` ("Apple Intelligence Pro", "haiku ·
-// headless, no tools"). Use LabelOf to read it.
+// display label for `shelp providers` ("Apple Intelligence Pro", "Claude
+// Haiku"). Use LabelOf to read it.
 type Labeler interface{ Label() string }
 
 // LabelOf returns p's short label, falling back to its Description.
@@ -91,6 +91,19 @@ func LabelOf(p Provider) string {
 		}
 	}
 	return p.Description()
+}
+
+// Noter is an optional interface a Provider implements to supply a short
+// note on where it runs and how it compares ("Apple's cloud · larger
+// model"), shown dim after the label in `shelp providers`. Use NoteOf.
+type Noter interface{ Note() string }
+
+// NoteOf returns p's note, or "" when it has none.
+func NoteOf(p Provider) string {
+	if n, ok := p.(Noter); ok {
+		return n.Note()
+	}
+	return ""
 }
 
 // KindRank orders kinds for display: AppleCloud, OnDevice, API,

@@ -362,7 +362,12 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
 - **Setup wording**: short plain sentences, no `shortcuts:` prefix and no
   dot trails; waits show a `style.StartSpinner` line (terminal only).
   `shelp providers` folds `-web` twins with the same status into one `add -web
-  for web search` line (`webTwins`; `--all` shows them).
+  to let the model look things up online (slower), e.g. <id>` line (`webTwins`;
+  the example prefers a twin of a base row in the chain; `--all` shows them).
+  Available rows show a dim third column from the optional `provider.Noter`
+  (`NoteOf`; where it runs and how it compares); `--json` rows carry it as
+  `Note`. Labels stay short ("Claude Haiku"); the headless/no-tools fact lives
+  in `shelp help providers`.
 - **Update flow** (`shelp setup shortcuts`, `runShortcutsSetup`): the one
   shortcut is *missing* (generate, sign, open, user clicks "Add
   Shortcut", `waitForNewShortcut`), *outdated* (DELETE FIRST: generate

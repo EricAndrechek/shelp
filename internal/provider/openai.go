@@ -243,6 +243,28 @@ func (p *openaiProvider) Label() string {
 	return p.model
 }
 
+// Note says where the model runs: a local server by its friendly name, a
+// hosted endpoint by name and the env var holding its key.
+func (p *openaiProvider) Note() string {
+	if p.kind == API {
+		n := p.label + " API"
+		if p.apiKeyEnv != "" {
+			n += ", key in $" + p.apiKeyEnv
+		}
+		return n
+	}
+	name := p.label
+	switch strings.ToLower(name) {
+	case "lmstudio":
+		name = "LM Studio"
+	case "ollama":
+		name = "Ollama"
+	case "llamacpp":
+		name = "llama.cpp"
+	}
+	return "your local " + name + " server"
+}
+
 func hostOf(raw string) string {
 	if u, err := url.Parse(raw); err == nil && u.Host != "" {
 		return u.Host

@@ -21,17 +21,17 @@ func sampleRows() []providerRow {
 	}
 	return []providerRow{
 		notInstalled("shortcuts:apple", "not installed"),
-		{ID: "shortcuts:apple-pro", Kind: "apple-cloud", Status: "ok", Available: true, Label: "Apple Intelligence Pro"},
+		{ID: "shortcuts:apple-pro", Kind: "apple-cloud", Status: "ok", Available: true, Label: "Apple Intelligence Pro", Note: "Apple's cloud · larger model"},
 		notInstalled("shortcuts:apple-web", "not installed"),
 		notInstalled("shortcuts:apple-pro-web", "not installed"),
 		notInstalled("shortcuts:chatgpt", chatgpt),
 		notInstalled("shortcuts:chatgpt-web", chatgpt),
-		{ID: "fm", Kind: "on-device", Status: "ok", Available: true, Label: "Apple on-device model"},
+		{ID: "fm", Kind: "on-device", Status: "ok", Available: true, Label: "Apple on-device model", Note: "this Mac, offline · fastest, weakest"},
 		local("llamacpp", "127.0.0.1:8080"),
 		local("lmstudio", "127.0.0.1:1234"),
 		local("ollama", "127.0.0.1:11434"),
-		{ID: "claude:haiku", Kind: "agent-cli", Status: "ok", Available: true, Label: "haiku · headless, no tools"},
-		{ID: "claude:sonnet", Kind: "agent-cli", Status: "ok", Available: true, Label: "sonnet · headless, no tools"},
+		{ID: "claude:haiku", Kind: "agent-cli", Status: "ok", Available: true, Label: "Claude Haiku", Note: "Anthropic, your Claude plan · faster"},
+		{ID: "claude:sonnet", Kind: "agent-cli", Status: "ok", Available: true, Label: "Claude Sonnet", Note: "Anthropic, your Claude plan · stronger"},
 	}
 }
 
@@ -40,15 +40,15 @@ var sampleChain = []string{"shortcuts:apple-pro", "claude:sonnet", "fm"}
 const wantSample = `chain  shortcuts:apple-pro → claude:sonnet → fm   (config)
 
 Apple Shortcuts
-  ✓ shortcuts:apple-pro      Apple Intelligence Pro
+  ✓ shortcuts:apple-pro      Apple Intelligence Pro  Apple's cloud · larger model
   · shortcuts:apple          not installed
   · shortcuts:apple-pro-web  not installed
   · shortcuts:chatgpt        not installed; needs the ChatGPT extension (System Settings › Siri)
-    add -web for web search, e.g. shortcuts:apple-web
+    add -web to let the model look things up online (slower), e.g. shortcuts:apple-web
     → run ` + "`shelp setup shortcuts`" + `
 
 On-device
-  ✓ fm                       Apple on-device model
+  ✓ fm                       Apple on-device model  this Mac, offline · fastest, weakest
 
 Local servers
   · llamacpp                 not running (127.0.0.1:8080)
@@ -56,8 +56,8 @@ Local servers
   · ollama                   not running (127.0.0.1:11434)
 
 Claude Code
-  ✓ claude:haiku             haiku · headless, no tools
-  ✓ claude:sonnet            sonnet · headless, no tools
+  ✓ claude:haiku             Claude Haiku   Anthropic, your Claude plan · faster
+  ✓ claude:sonnet            Claude Sonnet  Anthropic, your Claude plan · stronger
 `
 
 func TestRenderProvidersPlain(t *testing.T) {
@@ -134,19 +134,19 @@ func TestRenderProvidersAllShowsDetail(t *testing.T) {
 
 // The installed-and-current view: three rows, the fold line, no -web twins.
 func TestRenderProvidersFoldsWebTwins(t *testing.T) {
-	ok := func(id, label string) providerRow {
-		return providerRow{ID: id, Kind: "apple-cloud", Status: "ok", Available: true, Label: label, Group: `"shelp" · v6`}
+	ok := func(id, label, note string) providerRow {
+		return providerRow{ID: id, Kind: "apple-cloud", Status: "ok", Available: true, Label: label, Note: note, Group: `"shelp" · v6`}
 	}
 	rows := []providerRow{
-		ok("shortcuts:apple", "Apple Intelligence"), ok("shortcuts:apple-web", "Apple Intelligence + web search"),
-		ok("shortcuts:apple-pro", "Apple Intelligence Pro"), ok("shortcuts:apple-pro-web", "Apple Intelligence Pro + web search"),
-		ok("shortcuts:chatgpt", "ChatGPT"), ok("shortcuts:chatgpt-web", "ChatGPT + web search"),
+		ok("shortcuts:apple", "Apple Intelligence", "Apple's cloud · smaller model"), ok("shortcuts:apple-web", "Apple Intelligence + web search", "Apple's cloud · smaller model · looks things up online"),
+		ok("shortcuts:apple-pro", "Apple Intelligence Pro", "Apple's cloud · larger model"), ok("shortcuts:apple-pro-web", "Apple Intelligence Pro + web search", "x"),
+		ok("shortcuts:chatgpt", "ChatGPT", "OpenAI, through Apple's extension"), ok("shortcuts:chatgpt-web", "ChatGPT + web search", "x"),
 	}
 	want := `Apple Shortcuts  "shelp" · v6
-  ✓ shortcuts:apple      Apple Intelligence
-  ✓ shortcuts:apple-pro  Apple Intelligence Pro
-  ✓ shortcuts:chatgpt    ChatGPT
-    add -web for web search, e.g. shortcuts:apple-web
+  ✓ shortcuts:apple      Apple Intelligence      Apple's cloud · smaller model
+  ✓ shortcuts:apple-pro  Apple Intelligence Pro  Apple's cloud · larger model
+  ✓ shortcuts:chatgpt    ChatGPT                 OpenAI, through Apple's extension
+    add -web to let the model look things up online (slower), e.g. shortcuts:apple-web
 `
 	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false); got != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
@@ -201,7 +201,7 @@ func TestRenderProviders_OfflineNote(t *testing.T) {
 	if !strings.Contains(on, "(config)  offline") {
 		t.Errorf("offline note missing:\n%s", on)
 	}
-	if strings.Contains(off, "offline") {
+	if strings.Contains(off, "(config)  offline") {
 		t.Errorf("unexpected offline note:\n%s", off)
 	}
 }
@@ -221,5 +221,36 @@ func TestRenderProvidersGroupNote(t *testing.T) {
 	rows[1].Group = `"other" · v6`
 	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false); !strings.Contains(got, "Apple Shortcuts\n") {
 		t.Errorf("rows that disagree must not show a Group:\n%s", got)
+	}
+}
+
+// The fold line's example prefers the twin of a base row in the chain.
+func TestFoldExample(t *testing.T) {
+	hidden := []string{"shortcuts:apple-web", "shortcuts:chatgpt-web"}
+	if got := foldExample(hidden, []string{"fm", "shortcuts:chatgpt"}); got != "shortcuts:chatgpt-web" {
+		t.Errorf("chain preference: got %q", got)
+	}
+	if got := foldExample(hidden, []string{"fm"}); got != "shortcuts:apple-web" {
+		t.Errorf("fallback: got %q", got)
+	}
+}
+
+func TestProviderRowJSONNote(t *testing.T) {
+	b, _ := json.Marshal(providerRow{ID: "fm", Note: "n"})
+	if !strings.Contains(string(b), `"Note":"n"`) {
+		t.Errorf("Note missing: %s", b)
+	}
+	b, _ = json.Marshal(providerRow{ID: "fm"})
+	if strings.Contains(string(b), "Note") {
+		t.Errorf("empty Note must be omitted: %s", b)
+	}
+}
+
+func TestProvidersHelpHowTheyDiffer(t *testing.T) {
+	h := commandHelp["providers"]
+	for _, w := range []string{"How they differ", "shelp's benchmark", "31-36%", "98%", "Private Cloud Compute", "ChatGPT extension", "-web", "headless", "~84%", "local servers"} {
+		if !strings.Contains(h, w) {
+			t.Errorf("providers help lacks %q", w)
+		}
 	}
 }
