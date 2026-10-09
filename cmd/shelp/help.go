@@ -294,7 +294,7 @@ func isHeading(l string) bool {
 		l = l[:i]
 	}
 	for _, r := range l {
-		if !unicode.IsLetter(r) {
+		if !unicode.IsLetter(r) && r != ' ' {
 			return false
 		}
 	}
