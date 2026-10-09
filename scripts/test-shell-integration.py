@@ -6,8 +6,9 @@ Drives zsh and bash directly via a pseudo-terminal. fish runs natively
 when a `fish` is on PATH (CI: `brew install fish` / `apt-get install
 fish`), otherwise inside a throwaway Docker container (`docker run --rm
 ...`, fish from Debian, a linux build of shelp); both run the same checks.
-SHELP_TEST_FISH=docker forces the container, SHELP_TEST_FISH=native
-requires a fish on PATH, and SHELP_TEST_FISH=/path/to/fish picks one.
+With neither, the fish checks fail (never skip). SHELP_TEST_FISH=docker
+forces the container, SHELP_TEST_FISH=native requires a fish on PATH, and
+SHELP_TEST_FISH=/path/to/fish picks one.
 
 Every session runs with its own temp HOME (and ZDOTDIR/XDG_* dirs as
 needed) and a minimal PATH pointed at a *stub* `shelp` binary -- never the
@@ -1428,17 +1429,21 @@ def docker_available():
 
 
 def docker_arch():
-    """The Docker daemon's architecture as a GOARCH -- the linux shelp
-    the container runs must match it -- or None when there's no daemon."""
+    """(arch, None): the Docker daemon's architecture as a GOARCH (the
+    linux shelp the container runs must match it); (None, why) when there
+    is no daemon to use."""
     if not docker_available():
-        return None
+        return None, "no `docker` on PATH"
     try:
         out = subprocess.run(["docker", "version", "--format", "{{.Server.Arch}}"],
                              capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"`docker version` failed ({e})"
     arch = out.stdout.strip()
-    return arch if out.returncode == 0 and arch else None
+    if out.returncode == 0 and arch:
+        return arch, None
+    err = (out.stderr.strip().splitlines() or ["no error output"])[-1]
+    return None, f"the Docker daemon isn't reachable ({err})"
 
 
 def find_fish():
@@ -1844,10 +1849,13 @@ def main():
         elif mode == "native":
             run_fish(tmproot, results, FishHost(mode, fish, tmproot, real_bin, stub_dir))
         else:
-            arch = docker_arch()
+            arch, why = docker_arch()
             if not arch:
+                # a failure, never a skip: a run without fish must not pass
                 results.check("fish: fish available", False,
-                              "no fish on PATH, and no Docker daemon to run it in")
+                              f"no `fish` on PATH and {why}, so the fish checks can't run. "
+                              "Install fish (brew install fish / apt-get install fish) or start "
+                              "Docker, or leave fish out with --shell zsh / --shell bash.")
             else:
                 real_linux = os.path.join(tmproot, "real-linux", "shelp")
                 os.makedirs(os.path.dirname(real_linux), exist_ok=True)
