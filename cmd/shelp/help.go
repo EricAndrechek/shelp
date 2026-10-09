@@ -25,20 +25,18 @@ Usage
 Commands
   explain    explain a command (alias -e)
   providers  list model providers and whether they work
-  setup      set up the shell hook or the Apple Shortcut
+  setup      guided setup: shell hook, Apple Shortcut, provider chain
+  config     show or change settings (the provider chain, the file)
   init       print the shell integration for your rc file
   version    print the version (also --version)
   help       show help for a command
-
-Topics
-  config     the config file and environment variables
 
 Flags
   -p, --provider IDS   providers to try, in order (default: config "providers")
   -v, --verbose        show which provider answered, and how fast
   -h, --help           show help
 
-Run "shelp help <command>" for a command's flags, "shelp help config" for settings.
+Run "shelp help <command>" for a command's flags, "shelp help config" for every setting.
 `
 
 const generateFlags = `
@@ -105,6 +103,9 @@ How they differ (scores are from shelp's benchmark)
 	"setup": `shelp setup: set up the shell hook or the Apple Shortcut.
 
 Usage
+  shelp setup                 on a terminal, a guided walk through the shell
+                              hook, the Apple Shortcut (macOS) and the
+                              provider chain; each step can be skipped
   shelp setup shell [flags]   add shelp's hook to your shell rc file
   shelp setup shortcuts       install the Apple Shortcut the shortcuts:*
                               providers run
@@ -146,13 +147,22 @@ Usage
   shelp <command> -h
 
 Commands
-  suggest, explain, providers, setup, init, version, help
-
-Topics
-  config
+  suggest, explain, providers, setup, config, init, version, help
 `,
 
-	"config": `shelp config: the config file and environment variables.
+	"config": `shelp config: show or change settings.
+
+Usage
+  shelp config                 the config file and the effective settings
+  shelp config chain [IDS]     set the provider chain: IDS (comma or space
+                               separated) saves it; with none, on a terminal,
+                               pick from a numbered list
+  shelp config edit            open the file in $VISUAL / $EDITOR / vi,
+                               creating it with a commented starter
+
+chain edits only the "providers" line and leaves the rest of the file as it
+is. If the file is managed by chezmoi or is a symlink, shelp does not write
+it and prints what to change instead.
 
 File
   $SHELP_CONFIG                         if set, it must exist

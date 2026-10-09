@@ -18,9 +18,6 @@ func TestCommandHelpPaths(t *testing.T) {
 			t.Fatalf("%s: help text missing or misnamed: %q", name, want)
 		}
 		paths := [][]string{{"help", name}, {name, "-h"}, {name, "--help"}}
-		if name == "config" { // a topic, not a command: only "help config"
-			paths = paths[:1]
-		}
 		if name == "version" {
 			paths = append(paths, []string{"--version", "-h"})
 		}

@@ -100,6 +100,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runProviders(ctx, rest, stdout, stderr)
 	case "setup":
 		return runSetup(ctx, rest, stdout, stderr)
+	case "config":
+		// Likewise "shelp config of nginx" is a task.
+		if len(rest) == 0 || rest[0] == "chain" || rest[0] == "edit" || rest[0] == "-h" || rest[0] == "--help" {
+			return runConfig(ctx, rest, stdout, stderr)
+		}
 	case "explain", "-e":
 		return runGenerate(ctx, provider.Explain, rest, stdout, stderr)
 	case "suggest":
@@ -370,24 +375,7 @@ func runProviders(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	cds := cooldown.Load()
 	ps := provider.All(cfg)
-	sts := make([]provider.Status, len(ps))
-	var wg sync.WaitGroup
-	for i, p := range ps {
-		// A cooled-down provider is reported as such without probing it --
-		// same reasoning as the CLI itself never calling Detect: don't
-		// touch a backend that just told us it's rate-limited.
-		if _, ok := cooldown.Active(cds, p.ID()); ok {
-			continue
-		}
-		wg.Add(1)
-		go func(i int, p provider.Provider) {
-			defer wg.Done()
-			c, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			sts[i] = p.Detect(c)
-		}(i, p)
-	}
-	wg.Wait()
+	sts := probeProviders(ctx, ps, cds)
 
 	rows := buildProviderRows(ps, sts, cds)
 
@@ -410,6 +398,9 @@ func runProviders(ctx context.Context, args []string, stdout, stderr io.Writer) 
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 && isInteractive(stdout) {
+		return runGuidedSetup(ctx, stdout, stderr)
+	}
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printHelp(stdout, "setup")
 		return nil

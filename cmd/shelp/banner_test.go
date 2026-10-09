@@ -44,7 +44,7 @@ func TestBannerPlain(t *testing.T) {
 		t.Errorf("no args: got (stdout %q, stderr %q, err %v), want usage on stdout and no error", out, errOut, err)
 	}
 	// The short top-level help names every command and the help routes.
-	for _, w := range []string{"shelp turns a task", "explain ", "providers ", "setup ", "init ", "version ", "help ", "-h, --help", `Run "shelp help <command>"`, `"shelp help config"`, "Topics"} {
+	for _, w := range []string{"shelp turns a task", "explain ", "providers ", "setup ", "init ", "version ", "help ", "-h, --help", `Run "shelp help <command>"`, `"shelp help config"`, "config "} {
 		if !strings.Contains(usage, w) {
 			t.Errorf("usage lacks %q", w)
 		}

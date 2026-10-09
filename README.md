@@ -175,6 +175,14 @@ location just means the defaults; a `$SHELP_CONFIG` that names a missing
 file is an error. Every key and table is optional; each provider family
 decodes only its own table, so unrelated tables are ignored.
 
+You don't have to edit it by hand: `shelp config` shows the file and your
+effective settings, `shelp config chain` picks the provider chain from a
+numbered list (or `shelp config chain fm,claude:haiku` sets it directly),
+and `shelp config edit` opens the file. Saving only touches the `providers`
+line; if the file is managed by chezmoi or is a symlink, shelp prints what
+to change instead of writing it. On a terminal, plain `shelp setup` walks
+through the shell hook, the Apple Shortcut and the chain.
+
 ```toml
 # Fallback chain shelp tries in order; first success wins. Overridden by
 # -p/--provider and $SHELP_PROVIDER. Default: ["shortcuts:apple-pro", "fm"]

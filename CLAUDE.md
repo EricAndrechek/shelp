@@ -13,7 +13,7 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 
 ## Layout
 
-- `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers,
+- `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers, config,
   setup, init, version. Suggest prints ONLY the command on stdout.
 - `internal/provider/` — `Provider` interface, family registry, fallback
   `Chain`, timing `Call` (`provider.go`), plus the `RunCmd` exec helper
@@ -101,6 +101,20 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   Homebrew's (0.8) only.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
+  `edit.go`: `SetProviders` (comment-preserving replace/insert of the
+  top-level `providers` assignment, multi-line arrays included),
+  `SaveProviders`/`WriteAtomic` (temp + rename), `Starter`.
+- `cmd/shelp/config.go` — `shelp config` (show: path/status + effective
+  settings and their source), `config chain [IDS]` (validate against
+  `provider.All`, warn on unavailable, interactive numbered picker on a
+  terminal, `$SHELP_PROVIDER` override warning), `config edit`, and the
+  guided `shelp setup` (no target, terminal only: shell hook, Apple
+  Shortcut, chain). A config file that is chezmoi-managed or a symlink is
+  never written (`shellinit.ManagedElsewhere`): the exact change is printed.
+  Prompts are line-based on one shared `bufio.Reader` (`prompter`); the
+  seams at the top (`stdin`, `isInteractive`, `listProviders`,
+  `probeProviders`, `runEditor`, the guided-setup `*Fn` vars) let tests run
+  everything without a terminal, backend, rc file or Shortcut.
 - `internal/cooldown/` — the rate-limit cooldown store
   (`$XDG_CACHE_HOME/shelp/cooldown.json`) `provider.Chain` and `shelp
   providers` read/write; see "Rate limits and cooldowns" below.
