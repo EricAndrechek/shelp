@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build install test vet test-shell bench-build bench sign-shortcut
+.PHONY: build install test vet test-shell bench-build bench sign-shortcut ci
 build:
 	go build -ldflags '$(LDFLAGS)' -o bin/shelp ./cmd/shelp
 
@@ -11,6 +11,13 @@ install:
 
 test:
 	go test ./...
+
+# Exactly what CI (.github/workflows/ci.yml) runs, and what to run before
+# tagging: vet, the race-enabled Go tests, a build, and the shell suite.
+# Never signs anything (sign-shortcut is a manual, iCloud-Mac-only step);
+# tests that need a real Mac skip themselves when CI is set.
+ci: vet build test-shell
+	go test -race ./...
 
 vet:
 	gofmt -l . | (! grep .) && go vet ./...
