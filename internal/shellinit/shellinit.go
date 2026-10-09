@@ -36,8 +36,9 @@ type Options struct {
 
 // view is what each template sees.
 type view struct {
-	Bind     string
-	LineMode bool
+	Bind       string
+	LineMode   bool
+	Completion string
 }
 
 // Render renders shell's integration script under opts.
@@ -55,8 +56,12 @@ func Render(shell string, opts Options) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("shellinit: parse %s template: %w", shell, err)
 	}
+	comp, err := Completion(shell)
+	if err != nil {
+		return "", err
+	}
 	var buf strings.Builder
-	if err := t.Execute(&buf, view{Bind: bind, LineMode: opts.LineMode}); err != nil {
+	if err := t.Execute(&buf, view{Bind: bind, LineMode: opts.LineMode, Completion: comp}); err != nil {
 		return "", fmt.Errorf("shellinit: render %s template: %w", shell, err)
 	}
 	return buf.String(), nil

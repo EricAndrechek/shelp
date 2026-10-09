@@ -6,7 +6,7 @@ set -gx SHELP_HOOKS fish $SHELP_HOOKS
 # prints the command; the widget replaces the command line in place.
 function shelp
     switch "$argv[1]"
-        case '' -h --help help explain -e init setup providers version --version
+        case '' -h --help help explain -e init setup providers completion version --version
             SHELP_SHELL=fish command shelp $argv
         case '*'
             SHELP_SHELL=fish command shelp suggest $argv
@@ -134,7 +134,7 @@ function _shelp_on_enter
             else
                 _shelp_raw_dispatch explain "$line" "$tail"
             end
-        case '-*' providers setup init version help
+        case '-*' providers completion setup init version help
             commandline -f execute
         case '*'
             _shelp_raw_dispatch suggest "$line" "$rest"
@@ -145,3 +145,6 @@ bind \n _shelp_on_enter
 bind -M insert \r _shelp_on_enter
 bind -M insert \n _shelp_on_enter
 {{end}}
+
+# Tab completion (the same text as `shelp completion fish`).
+{{.Completion}}

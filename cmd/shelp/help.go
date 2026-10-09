@@ -28,6 +28,7 @@ Commands
   setup      guided setup: shell hook, Apple Shortcut, provider chain
   config     show or change settings (the provider chain, the file)
   init       print the shell integration for your rc file
+  completion print the tab-completion script for a shell
   version    print the version (also --version)
   help       show help for a command
 
@@ -133,6 +134,20 @@ Flags
   -h, --help       show help
 `,
 
+	"completion": `shelp completion: print the tab-completion script for a shell.
+
+Usage
+  shelp completion <` + strings.Join(shellinit.Shells(), "|") + `>
+
+The shell hook ("shelp init") and Homebrew already set this up. Otherwise:
+  zsh:   shelp completion zsh > "${fpath[1]}/_shelp"
+  bash:  shelp completion bash > ~/.local/share/bash-completion/completions/shelp
+  fish:  shelp completion fish > ~/.config/fish/completions/shelp.fish
+
+Flags
+  -h, --help   show help
+`,
+
 	"version": `shelp version: print the version.
 
 Usage
@@ -147,7 +162,7 @@ Usage
   shelp <command> -h
 
 Commands
-  suggest, explain, providers, setup, config, init, version, help
+  suggest, explain, providers, setup, config, init, completion, version, help
 `,
 
 	"config": `shelp config: show or change settings.

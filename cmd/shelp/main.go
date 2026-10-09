@@ -96,6 +96,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 	case "init":
 		return runInit(rest, stdout, stderr)
+	case "completion":
+		return runCompletion(rest, stdout, stderr)
+	case "__complete":
+		return runComplete(rest, stdout)
 	case "providers":
 		return runProviders(ctx, rest, stdout, stderr)
 	case "setup":

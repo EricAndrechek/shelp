@@ -134,7 +134,9 @@ func TestRender_ZshAnimatedStatus(t *testing.T) {
 		}
 		// the only blocking `$(command shelp ...)` left is the fallback
 		// for when no temp dir can be made
-		if n := strings.Count(got, "$(command shelp"); n != 1 {
+		// (not counting the completion's `__complete` lookups, which run on Tab)
+		comp, _ := Completion("zsh")
+		if n := strings.Count(strings.Replace(got, comp, "", 1), "$(command shelp"); n != 1 {
 			t.Errorf("zsh %+v: %d blocking $(command shelp ...) calls, want 1 (the no-temp-dir fallback)", o, n)
 		}
 		zsh, err := exec.LookPath("zsh")
