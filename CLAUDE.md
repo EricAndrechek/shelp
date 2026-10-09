@@ -88,8 +88,13 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   overrides. The pty answers DA1 and CPR like a terminal: fish 4 waits
   10s for DA1, then warns and degrades. fish 4 pages interactive
   `history` output (pipe it). The stub draws shelp's spinner when its
-  stderr is a terminal and answers Ctrl-C like shelp (`shelp: context
-  canceled`, exit 1). Debian/Ubuntu's zsh-syntax-highlighting 0.7.1
+  stderr is a terminal and answers Ctrl-C like shelp: exit 130, nothing
+  printed (`exitCode` in cmd/shelp), re-enabling an inherited ignored
+  SIGINT as Go's `signal.NotifyContext` does -- shelp must catch SIGINT
+  and EXIT 130, never die of it, or fish would cancel the raw-line
+  explain function. Raw-line explain needs no SIGINT handler: shelp runs
+  there as a foreground job and takes the SIGINT itself (suggest runs in
+  a command substitution, which fish does cancel). Debian/Ubuntu's zsh-syntax-highlighting 0.7.1
   empties `region_highlight` on every redraw, so the plugin run uses
   Homebrew's (0.8) only.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
@@ -588,14 +593,16 @@ chain line.
   successful import did too. Have the user run that first check
   themselves.
 
-## Open items (2026-10-07)
+## Open items (2026-10-09)
 
-- The Keep Both branch of the update wait is covered by scripted tests
-  only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
-  chatgpt, chatgpt-web) once installed and Apple's limit has reset; pace
-  them (`--min-interval`) to stay under the limit.
-- Codex is quota-locked until 2026-10-30; it's dropped anyway.
-- The repo is local-only; the Homebrew tap points at this folder
-  (`Formula/shelp.rb` uses a file:// git URL). Publishing means a remote,
-  a release tarball URL in the formula, and a real tap repo.
+  chatgpt, chatgpt-web) -- one installed shortcut serves them all now --
+  and grade v4's Markdown explain output; pace them (`--min-interval`) to
+  stay under Apple's limit. Plain "Apple Intelligence" (also PCC) earns
+  its place only if it's faster or limited separately from Pro.
+- The Keep Both branch of the update wait is covered by scripted tests
+  only (delete-first makes it rare); Replace was run live with format 4.
+- Publishing (on hold, Eric's call): a GitHub remote, release tarballs
+  for the formula's url + sha256 (today a file:// git URL to this
+  folder), a real tap repo; CI (`.github/workflows/ci.yml`) is ready and
+  only runs `make ci`.
