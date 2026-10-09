@@ -3,7 +3,8 @@
 # `shelp setup shell` can tell the hook is already active.
 typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # `shelp <task>` puts the suggested command on your next prompt line
-# (print -z), ready to edit or run. Other subcommands pass straight through.
+# (print -rz: -r, or print would turn a `\n` in the command into a real
+# newline), ready to edit or run. Other subcommands pass straight through.
 shelp() {
   case "${1-}" in
     ''|-h|--help|help|explain|-e|init|setup|providers|config|completion|version|--version)
@@ -11,7 +12,7 @@ shelp() {
     *)
       local cmd
       cmd=$(SHELP_SHELL=zsh command shelp suggest "$@") || return
-      [[ -n $cmd ]] && print -z -- "$cmd" ;;
+      [[ -n $cmd ]] && print -rz -- "$cmd" ;;
   esac
 }
 
