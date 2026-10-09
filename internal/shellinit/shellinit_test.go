@@ -149,14 +149,17 @@ func TestRender_ZshAnimatedStatus(t *testing.T) {
 	}
 }
 
-// fish's raw-line suggest leaves room for a multi-line prompt after an
-// error, as explain does after its explanation.
+// fish's raw-line suggest: a SIGINT handler only for the duration of the
+// call (else Ctrl-C cancels the function with the status still drawn), and
+// room for a multi-line prompt after an error as after an explanation.
 func TestRender_FishSuggestCleanup(t *testing.T) {
 	got, err := Render("fish", Options{LineMode: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"function _shelp_on_sigint --on-signal SIGINT",
+		"functions -e _shelp_on_sigint",
 		"printf '%s\\n' (string collect <$errfile) >&2\n            _shelp_prompt_room",
 		"echo\n        _shelp_prompt_room",
 	} {

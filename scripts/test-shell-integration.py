@@ -357,7 +357,9 @@ STUB_SOURCE = textwrap.dedent(
         try:
             time.sleep(float(sleep_s))
         except KeyboardInterrupt:
-            sys.exit(130)
+            # as real shelp does when Ctrl-C cancels its context
+            sys.stderr.write("shelp: context canceled\\n")
+            sys.exit(1)
 
     marker = os.environ.get("SHELP_STUB_MARKER")
     if marker:
@@ -522,6 +524,17 @@ def view(rows, around=None, n=8):
     if around is not None:
         end = min(len(rows) - 1, around + 2)
     return "screen:\n" + "\n".join(f"  |{r}" for r in rows[max(0, end - n):end + 1])
+
+
+# what every in-progress status has in common: STATUS_TEXT (zsh's
+# spinner, fish's and bash's shelp-widget's status) and shelp's own
+# spinner, `<frame> thinking…` (the stub draws it too)
+SPIN_TEXT = "thinking…"
+
+
+def no_status(rows, start):
+    """No status left on screen from row start down."""
+    return not any(SPIN_TEXT in r for r in rows[max(0, start):])
 
 
 def explain_screen_check(s, results, label, start, after_rows):
@@ -1401,6 +1414,22 @@ def run_fish(tmpdir, results, host):
         results.check("fish: Ctrl-C restores original line", ok, s.buf[-500:])
         no_exec = suggest_cmd("what's my ip") not in strip_ansi(s.buf).split("shelp what's my ip")[-1]
         results.check("fish: Ctrl-C did not execute the suggestion", no_exec, s.buf[-500:])
+        s.read_available(0.4)
+        rows = s.screen()
+        typed = "TESTPROMPT% shelp what's my ip"
+        if rows is None:
+            ok = "\r\x1b[K" in s.buf.split("shelp: thinking…")[-1] and "context canceled" not in s.buf
+        else:
+            y, x = s.cursor()
+            ok = (rows[y] == typed and x == len(typed) and no_status(rows, 0)
+                  and not any("context canceled" in r for r in rows))
+        results.check("fish: Ctrl-C clears the status, line back in place, no error", ok, view(rows))
+        s.send(" please")
+        s.read_available(0.4)
+        rows = s.screen()
+        ok = (rows is None and " please" in s.buf) or \
+            (rows is not None and rows[s.cursor()[0]] == typed + " please")
+        results.check("fish: line still editable after Ctrl-C", ok, view(rows))
 
         # NO_COLOR: same status, no SGR; and it is gone once shelp returns
         s.send("\x15")

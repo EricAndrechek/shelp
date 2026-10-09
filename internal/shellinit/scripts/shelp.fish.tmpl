@@ -87,15 +87,26 @@ function _shelp_raw_dispatch
         printf '\e[2;90mshelp: thinking…\e[0m' >&2
     end
     set -l errfile (mktemp 2>/dev/null; or echo /tmp/shelp-fish-err.$fish_pid)
+    # Ctrl-C reaches shelp, which stops. Unless a SIGINT handler exists,
+    # fish also cancels this function on the spot, leaving the status on
+    # screen and the line redrawn at the wrong column; with one, it
+    # carries on: status cleared, the typed line back, no error shown.
+    set -g _shelp_interrupted 0
+    function _shelp_on_sigint --on-signal SIGINT
+        set -g _shelp_interrupted 1
+    end
     set -l cmd (command shelp suggest --shell fish -- $body 2>$errfile)
     set -l rc $status
+    functions -e _shelp_on_sigint
+    set -l intr $_shelp_interrupted
+    set -e _shelp_interrupted
     printf '\r\e[K' >&2
-    if test $rc -eq 0 -a -n "$cmd"
+    if test $rc -eq 0 -a -n "$cmd" -a $intr -eq 0
         _shelp_history_add $orig
         commandline -r -- $cmd
     else
         commandline -r -- $orig
-        if test -s $errfile
+        if test $intr -eq 0 -a -s $errfile
             # exactly one trailing newline, then room for the prompt
             printf '%s\n' (string collect <$errfile) >&2
             _shelp_prompt_room
