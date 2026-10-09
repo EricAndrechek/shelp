@@ -15,6 +15,10 @@ class Shelp < Formula
 
   def install
     system "go", "build", *std_go_args(ldflags: "-X main.version=#{version}"), "./cmd/shelp"
+    # Runs `shelp completion bash|zsh|fish` (the default shell parameter is
+    # just the shell's name) into Homebrew's completion directories, so Tab
+    # works even without the shell hook.
+    generate_completions_from_executable(bin/"shelp", "completion")
   end
 
   def caveats
@@ -30,6 +34,9 @@ class Shelp < Formula
         zsh:  echo 'eval "$(shelp init zsh)"' >> ~/.zshrc
         bash: echo 'eval "$(shelp init bash)"' >> ~/.bashrc
         fish: echo 'shelp init fish | source' >> ~/.config/fish/config.fish
+
+      Tab completion is installed for bash, zsh and fish (zsh needs compinit,
+      which most setups run already); the shell hook loads it too.
 
       Then see which models work on this Mac:
         shelp providers
@@ -51,5 +58,6 @@ class Shelp < Formula
     assert_match version.to_s, shell_output("#{bin}/shelp version")
     assert_match "print -z", shell_output("#{bin}/shelp init zsh")
     assert_match "fm", shell_output("#{bin}/shelp providers")
+    assert_match "compdef", shell_output("#{bin}/shelp completion zsh")
   end
 end

@@ -14,7 +14,7 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 ## Layout
 
 - `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers, config,
-  setup, init, version. Suggest prints ONLY the command on stdout.
+  setup, init, completion, version. Suggest prints ONLY the command on stdout.
 - `internal/provider/` — `Provider` interface, family registry, fallback
   `Chain`, timing `Call` (`provider.go`), plus the `RunCmd` exec helper
   (`execx.go`). One file per family: `fm.go` (Apple on-device), `openai.go`
@@ -99,6 +99,21 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   a command substitution, which fish does cancel). Debian/Ubuntu's zsh-syntax-highlighting 0.7.1
   empties `region_highlight` on every redraw, so the plugin run uses
   Homebrew's (0.8) only.
+  Tab completion lives here too: `completion.go` (the command/flag spec,
+  checked against help.go by a test in `cmd/shelp/completion_test.go`) renders
+  `completions/<shell>.tmpl` (delimiters `⟦ ⟧`, since bash uses `<<<`);
+  `shelp completion <shell>` prints that text and `Render` embeds the same
+  text in `shelp init`, so there is one source. Dynamic values come from the
+  hidden `shelp __complete providers|templates` (config + LookPath, no
+  Detect). zsh defines `_shelp` and registers with `compdef` at once, or,
+  when `compdef` does not exist yet (init ran before compinit), from a
+  one-shot precmd hook; it never calls compinit, and as a `#compdef` file
+  on fpath (Homebrew) it runs itself. bash's reply drops the part of a
+  provider ID before its colon (COMP_WORDBREAKS) and has no `-o default`, so
+  a task never completes as a filename. fish is one
+  `complete -c shelp -f -a '(__shelp_complete)'` (`complete -e` first, so
+  loading twice is harmless). The pty suite's Tab checks use a config with
+  deterministic `zzhost:*` IDs; bash needs a third Tab to list.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
   `edit.go`: `SetProviders` (comment-preserving replace/insert of the

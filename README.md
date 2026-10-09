@@ -150,6 +150,20 @@ recognizes as managed (the chezmoi check is skipped entirely when
 chezmoi isn't on PATH) — either way it prints the exact line to add to
 your dotfiles yourself and exits cleanly.
 
+## Tab completion
+
+Subcommands, flags, provider IDs (`-p`), template names and the other
+flag values complete with Tab in zsh, bash and fish. A task is free text,
+so nothing completes after its first word. It is on automatically with the
+shell hook (`shelp init`, `shelp setup shell`) and with the Homebrew
+formula. Otherwise generate the script yourself:
+
+```console
+$ shelp completion zsh > "${fpath[1]}/_shelp"
+$ shelp completion bash > ~/.local/share/bash-completion/completions/shelp
+$ shelp completion fish > ~/.config/fish/completions/shelp.fish
+```
+
 ## Providers
 
 | ID pattern | kind | needs | setup |
