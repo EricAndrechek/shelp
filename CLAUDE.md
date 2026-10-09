@@ -21,7 +21,10 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   (OpenAI-compatible hosted endpoints + local servers, +`openai_test.go`),
   `shortcuts.go` (the `shortcuts:*` providers, +`shortcuts_test.go`),
   `shortcutgen.go` (builds/signs the "Use Model" `.shortcut` plist,
-  +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`), and
+  +`shortcutgen_test.go`, `testdata/shortcuts/reference.json`),
+  `signed.go` (the embedded pre-signed shortcut, `signed/shelp.shortcut`
+  + `signed/shelp.json`, written by `make sign-shortcut` =
+  `internal/tools/signshortcut`), and
   `agentcli.go` (the `claude` headless-CLI provider, +`agentcli_test.go`,
   `testdata/agentcli/claude` — a fake CLI script driven entirely by
   `SHELP_FAKE_*` env vars, see its doc comment; gemini, codex, antigravity
@@ -205,6 +208,22 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `instruct_300m.safety` classifier. ChatGPT asks once per shortcut for
   consent to share the input ("Always Allow"). Verify backends with
   `/usr/bin/log show` (never bare `log` in zsh: builtin).
+- **Pre-signed shortcut**: each release embeds the current format already
+  signed (`internal/provider/signed/`), so setup opens it with no trip to
+  Apple; it signs at runtime only when the copy is another format, its
+  `WorkflowFingerprint` (the generated workflow with UUIDs normalized)
+  differs, or its signature is within 30 days of expiring. **Whenever
+  the generator changes, run `make sign-shortcut` and commit the result**
+  -- `TestEmbeddedShortcutCurrent` fails until you do, and also when the
+  copy is within 60 days of expiry (re-sign before releasing). A
+  `--mode anyone` signature is an Apple-issued certificate with no
+  personal identity (CN = random hex, O=Apple Inc., chaining to Apple
+  Root CA - G3); the leaf is valid ~13 months (2026-10-09's: to
+  2027-11-04). The file is an AEA1 archive: "AEA1", a 4-byte profile, a
+  little-endian uint32 auth length, then a binary plist auth blob,
+  `{SigningCertificateChain: [<DER>...]}` (plutil's JSON output can't
+  hold <data>; the tool converts to XML). Signed copies import under
+  whatever file name setup gives them, so `[shortcuts] name` still works.
 - `shortcuts sign` is a round trip to Apple's server and fails now and
   then (HTTP 500s; once a 20s stall reported as "The file doesn't exist."
   with the input file present, after a ~20s stall -- a good attempt
@@ -536,10 +555,9 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- Signing can stall ~20s at Apple's server; an embedded pre-signed
-  shortcut per format (or a per-format cache) would remove the round trip
-  from setup, if a signed file stays importable long enough -- check the
-  signing certificate chain's lifetime first.
+- The embedded pre-signed shortcut (format 6) still needs one live
+  import: delete "shelp", run `./bin/shelp setup shortcuts` (no signing
+  line should print), Add, expect `installed (v6)`.
 - The Keep Both branch of the update wait is covered by scripted tests
   only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,

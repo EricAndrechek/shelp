@@ -630,8 +630,9 @@ func scriptLibrary(t *testing.T, states ...shortcutState) *scriptedLibrary {
 		s.openedAt = append(s.openedAt, s.i)
 		return nil
 	}
-	origGen := generateShortcut
-	t.Cleanup(func() { generateShortcut = origGen })
+	origGen, origEmbedded := generateShortcut, embeddedShortcut
+	t.Cleanup(func() { generateShortcut, embeddedShortcut = origGen, origEmbedded })
+	embeddedShortcut = func(time.Time) ([]byte, string) { return nil, "switched off in tests" }
 	generateShortcut = func(ctx context.Context, dir, name string) (string, error) {
 		path := filepath.Join(dir, sanitizeFilename(name)+".shortcut")
 		return path, os.WriteFile(path, []byte("fake"), 0o600)

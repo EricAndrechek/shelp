@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build install test vet test-shell bench-build bench
+.PHONY: build install test vet test-shell bench-build bench sign-shortcut
 build:
 	go build -ldflags '$(LDFLAGS)' -o bin/shelp ./cmd/shelp
 
@@ -14,6 +14,13 @@ test:
 
 vet:
 	gofmt -l . | (! grep .) && go vet ./...
+
+# Sign the current shortcut format with Apple and store it (plus its
+# expiry and generator fingerprint) in internal/provider/signed/, which
+# shelp embeds so `shelp setup shortcuts` needs no trip to Apple. Run on
+# macOS whenever the generator changes; see internal/provider/signed.go.
+sign-shortcut:
+	go run ./internal/tools/signshortcut
 
 # Real interactive pty tests for the shell integration (raw line mode,
 # --bind) across zsh/bash (run directly) and fish (a throwaway Docker
