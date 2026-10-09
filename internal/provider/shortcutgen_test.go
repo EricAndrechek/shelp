@@ -615,22 +615,35 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	}
 }
 
-// Apple's signing server fails now and then; signShortcut retries.
+// Apple's signing server fails now and then, sometimes after a long
+// stall; signShortcut times a stalled attempt out and retries.
 func TestSignShortcutRetries(t *testing.T) {
-	origCmd, origDelays := signCmd, signRetryDelays
-	t.Cleanup(func() { signCmd, signRetryDelays = origCmd, origDelays })
-	signRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	origCmd, origTimeout, origAttempts, origDelay, origNotice := signCmd, signAttemptTimeout, signAttempts, signRetryDelay, signNotice
+	t.Cleanup(func() {
+		signCmd, signAttemptTimeout, signAttempts, signRetryDelay, signNotice = origCmd, origTimeout, origAttempts, origDelay, origNotice
+	})
+	signAttemptTimeout, signAttempts, signRetryDelay = 50*time.Millisecond, 4, time.Millisecond
+	var notices []int
+	signNotice = func(attempt, total int, reason string) { notices = append(notices, attempt) }
 
+	// a stall, a failure, then success
 	calls := 0
 	signCmd = func(ctx context.Context, in, out string) (CmdResult, error) {
 		calls++
-		if calls < 3 {
+		switch calls {
+		case 1:
+			<-ctx.Done() // Apple's server never answers
+			return CmdResult{}, ctx.Err()
+		case 2:
 			return CmdResult{ExitCode: 1, Stderr: "Error: The file doesn’t exist."}, nil
 		}
 		return CmdResult{}, nil
 	}
 	if err := signShortcut(context.Background(), "in", "out"); err != nil || calls != 3 {
 		t.Fatalf("got %v after %d calls; want success on the third", err, calls)
+	}
+	if len(notices) != 2 {
+		t.Errorf("signNotice called %v, want for attempts 1 and 2", notices)
 	}
 
 	calls = 0
@@ -639,7 +652,7 @@ func TestSignShortcutRetries(t *testing.T) {
 		return CmdResult{ExitCode: 1, Stderr: "Error: The file doesn’t exist."}, nil
 	}
 	err := signShortcut(context.Background(), "in", "out")
-	if err == nil || calls != 3 || !strings.Contains(err.Error(), "3 times") || !strings.Contains(err.Error(), "doesn’t exist") {
-		t.Fatalf("got %v after %d calls; want a 3-attempt failure naming the last error", err, calls)
+	if err == nil || calls != 4 || !strings.Contains(err.Error(), "4 times") || !strings.Contains(err.Error(), "doesn’t exist") {
+		t.Fatalf("got %v after %d calls; want a 4-attempt failure naming the last error", err, calls)
 	}
 }

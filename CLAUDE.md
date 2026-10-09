@@ -207,7 +207,9 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `/usr/bin/log show` (never bare `log` in zsh: builtin).
 - `shortcuts sign` is a round trip to Apple's server and fails now and
   then (HTTP 500s; once a 20s stall reported as "The file doesn't exist."
-  with the input file present); `signShortcut` retries twice (2s, 5s).
+  with the input file present, after a ~20s stall -- a good attempt
+  takes ~2s); `signShortcut` gives each attempt 10s and makes up to 4,
+  and setup prints a line per retry (`signNotice`).
 - PCC has an unpublished daily cap (higher with iCloud+).
 
 #### Shortcut format versions, update detection, and the update flow

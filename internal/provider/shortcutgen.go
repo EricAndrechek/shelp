@@ -512,25 +512,42 @@ func GenerateShortcut(ctx context.Context, dir, name string) (string, error) {
 	return signedPath, nil
 }
 
-// signRetryDelays are the waits between `shortcuts sign` attempts. Signing
-// is a round trip to Apple's server, which fails now and then for no
-// reason of ours -- HTTP 500s, and once (2026-10-09) a 20-second stall
-// reported as "The file doesn't exist." with the input file right there --
-// and the next attempt usually works. A package var so tests can shrink it.
-var signRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+// Signing is a round trip to Apple's server: a good attempt takes about
+// 2s, but now and then one stalls ~20s and then fails -- HTTP 500s, or
+// "The file doesn't exist." with the input file right there (seen
+// 2026-10-09: two stalled attempts, then a third done in 2s). So each
+// attempt gets signAttemptTimeout and a stalled one is retried at once
+// rather than waited out. Package vars so tests can shrink them.
+var (
+	signAttemptTimeout = 10 * time.Second
+	signAttempts       = 4
+	signRetryDelay     = time.Second
+)
+
+// signNotice, when set, hears about each failed attempt that will be
+// retried. Only the interactive setup step signs, and it sets this to
+// print a line, so the user isn't left staring at a silent stall.
+var signNotice func(attempt, total int, reason string)
 
 // signCmd runs `shortcuts sign` once; a package var so tests can fake it.
 var signCmd = func(ctx context.Context, in, out string) (CmdResult, error) {
 	return RunCmd(ctx, nil, nil, "shortcuts", "sign", "--mode", "anyone", "-i", in, "-o", out)
 }
 
-// signShortcut signs in to out, retrying a failed attempt after each of
-// signRetryDelays.
+// signShortcut signs in to out, giving each attempt signAttemptTimeout and
+// making up to signAttempts of them.
 func signShortcut(ctx context.Context, in, out string) error {
 	var last string
-	for attempt := 0; ; attempt++ {
-		res, err := signCmd(ctx, in, out)
+	for attempt := 1; ; attempt++ {
+		actx, cancel := context.WithTimeout(ctx, signAttemptTimeout)
+		res, err := signCmd(actx, in, out)
+		stalled := actx.Err() == context.DeadlineExceeded
+		cancel()
 		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case stalled:
+			last = fmt.Sprintf("no answer from Apple's signing server in %s", signAttemptTimeout)
 		case err != nil:
 			last = err.Error()
 		case res.ExitCode == 0:
@@ -541,13 +558,16 @@ func signShortcut(ctx context.Context, in, out string) error {
 				last = FirstLine(res.Stdout)
 			}
 		}
-		if attempt >= len(signRetryDelays) {
-			return fmt.Errorf("shortcuts sign failed %d times (it goes through Apple's signing server, which fails now and then; try again in a minute): %s", attempt+1, last)
+		if attempt >= signAttempts {
+			return fmt.Errorf("shortcuts sign failed %d times (it goes through Apple's signing server, which fails now and then; try again in a minute): %s", attempt, last)
+		}
+		if signNotice != nil {
+			signNotice(attempt, signAttempts, last)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(signRetryDelays[attempt]):
+		case <-time.After(signRetryDelay):
 		}
 	}
 }

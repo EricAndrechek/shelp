@@ -885,6 +885,11 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s look(s) like a copy left by an earlier update; delete it in the Shortcuts app if you don't use it", quoteAll(copies))))
 	}
 
+	signNotice = func(attempt, total int, reason string) {
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: signing attempt %d of %d failed (%s); retrying...", attempt, total, reason)))
+	}
+	defer func() { signNotice = nil }()
+
 	tmpDir, err := os.MkdirTemp("", "shelp-shortcuts-*")
 	if err != nil {
 		return err
@@ -894,7 +899,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	current := false
 	switch {
 	case !installed[name]:
-		fmt.Fprintf(stdout, "shortcuts: generating %q...\n", name)
+		fmt.Fprintf(stdout, "shortcuts: generating %q and signing it with Apple...\n", name)
 		path, err := generateShortcut(ctx, tmpDir, name)
 		if err != nil {
 			return fmt.Errorf("generate: %w", err)
@@ -917,7 +922,7 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is v%d, newer than this shelp (v%d); leaving it alone", name, have, ShortcutFormatVersion)))
 			current = true
 		default:
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is outdated (v%d, current v%d); generating the new one...", name, have, ShortcutFormatVersion)))
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is outdated (v%d, current v%d); generating the new one and signing it with Apple...", name, have, ShortcutFormatVersion)))
 			// Generate (and sign) before asking for the deletion: a signing
 			// failure must not cost the user their working shortcut.
 			path, err := generateShortcut(ctx, tmpDir, name)
