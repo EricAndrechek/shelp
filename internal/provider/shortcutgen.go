@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf16"
 )
 
@@ -500,16 +501,48 @@ func GenerateShortcut(ctx context.Context, dir, name string) (string, error) {
 	}
 
 	signedPath := filepath.Join(dir, base+".shortcut")
-	res, err = RunCmd(ctx, nil, nil, "shortcuts", "sign", "--mode", "anyone", "-i", unsignedPath, "-o", signedPath)
-	if err != nil {
-		return "", fmt.Errorf("shortcuts sign: %w", err)
-	}
-	if res.ExitCode != 0 {
-		msg := FirstLine(res.Stderr)
-		if msg == "" {
-			msg = FirstLine(res.Stdout)
-		}
-		return "", fmt.Errorf("shortcuts sign failed: %s", msg)
+	if err := signShortcut(ctx, unsignedPath, signedPath); err != nil {
+		return "", err
 	}
 	return signedPath, nil
+}
+
+// signRetryDelays are the waits between `shortcuts sign` attempts. Signing
+// is a round trip to Apple's server, which fails now and then for no
+// reason of ours -- HTTP 500s, and once (2026-10-09) a 20-second stall
+// reported as "The file doesn't exist." with the input file right there --
+// and the next attempt usually works. A package var so tests can shrink it.
+var signRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// signCmd runs `shortcuts sign` once; a package var so tests can fake it.
+var signCmd = func(ctx context.Context, in, out string) (CmdResult, error) {
+	return RunCmd(ctx, nil, nil, "shortcuts", "sign", "--mode", "anyone", "-i", in, "-o", out)
+}
+
+// signShortcut signs in to out, retrying a failed attempt after each of
+// signRetryDelays.
+func signShortcut(ctx context.Context, in, out string) error {
+	var last string
+	for attempt := 0; ; attempt++ {
+		res, err := signCmd(ctx, in, out)
+		switch {
+		case err != nil:
+			last = err.Error()
+		case res.ExitCode == 0:
+			return nil
+		default:
+			last = FirstLine(res.Stderr)
+			if last == "" {
+				last = FirstLine(res.Stdout)
+			}
+		}
+		if attempt >= len(signRetryDelays) {
+			return fmt.Errorf("shortcuts sign failed %d times (it goes through Apple's signing server, which fails now and then; try again in a minute): %s", attempt+1, last)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(signRetryDelays[attempt]):
+		}
+	}
 }

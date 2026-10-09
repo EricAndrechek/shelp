@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -611,5 +612,34 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	// If, Otherwise and End If for the marker and for each variant.
 	if want := 3 * (len(shortcutVariants) + 1); conds != want {
 		t.Errorf("%d conditional actions, want %d", conds, want)
+	}
+}
+
+// Apple's signing server fails now and then; signShortcut retries.
+func TestSignShortcutRetries(t *testing.T) {
+	origCmd, origDelays := signCmd, signRetryDelays
+	t.Cleanup(func() { signCmd, signRetryDelays = origCmd, origDelays })
+	signRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+
+	calls := 0
+	signCmd = func(ctx context.Context, in, out string) (CmdResult, error) {
+		calls++
+		if calls < 3 {
+			return CmdResult{ExitCode: 1, Stderr: "Error: The file doesn’t exist."}, nil
+		}
+		return CmdResult{}, nil
+	}
+	if err := signShortcut(context.Background(), "in", "out"); err != nil || calls != 3 {
+		t.Fatalf("got %v after %d calls; want success on the third", err, calls)
+	}
+
+	calls = 0
+	signCmd = func(ctx context.Context, in, out string) (CmdResult, error) {
+		calls++
+		return CmdResult{ExitCode: 1, Stderr: "Error: The file doesn’t exist."}, nil
+	}
+	err := signShortcut(context.Background(), "in", "out")
+	if err == nil || calls != 3 || !strings.Contains(err.Error(), "3 times") || !strings.Contains(err.Error(), "doesn’t exist") {
+		t.Fatalf("got %v after %d calls; want a 3-attempt failure naming the last error", err, calls)
 	}
 }

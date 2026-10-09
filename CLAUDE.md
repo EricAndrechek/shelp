@@ -198,8 +198,16 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   unknown model answers `shelp-shortcut-error: unknown model <key>` (exit
   0, no model call), which `Generate` turns into an Unavailable.
 - "Apple Intelligence Pro" verified in logs as
-  `instruct_server_v2.shortcuts_use_model_pro` via `privatecloudcomputed`.
-  Verify others with `/usr/bin/log show` (never bare `log` in zsh: builtin).
+  `instruct_server_v2.shortcuts_use_model_pro` via `privatecloudcomputed`;
+  plain "Apple Intelligence" as `instruct_server_v2.shortcuts_use_model_action`,
+  also on Private Cloud Compute (2026-10-09) -- NOT the on-device model `fm`
+  runs, so it isn't a duplicate of `fm`. Both also load the on-device
+  `instruct_300m.safety` classifier. ChatGPT asks once per shortcut for
+  consent to share the input ("Always Allow"). Verify backends with
+  `/usr/bin/log show` (never bare `log` in zsh: builtin).
+- `shortcuts sign` is a round trip to Apple's server and fails now and
+  then (HTTP 500s; once a 20s stall reported as "The file doesn't exist."
+  with the input file present); `signShortcut` retries twice (2s, 5s).
 - PCC has an unpublished daily cap (higher with iCloud+).
 
 #### Shortcut format versions, update detection, and the update flow
