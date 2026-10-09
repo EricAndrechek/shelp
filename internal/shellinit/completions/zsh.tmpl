@@ -64,6 +64,7 @@ _shelp() {
       if (( npos == 0 )) && [[ $cur != -* ]]; then compadd -- ⟦.Topics⟧; return; fi ;;
     config)
       if (( npos == 0 )) && [[ $cur != -* ]]; then compadd -- chain edit; return; fi
+      if [[ $arg1 == chain && $cur != -* ]]; then _shelp_values providers; return; fi
       flags=(⟦.Help⟧) ;;
     *) return ;;   # a task: free text
   esac

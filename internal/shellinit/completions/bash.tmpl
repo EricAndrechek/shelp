@@ -79,6 +79,7 @@ _shelp() {
       if (( npos == 0 )) && [[ $cur != -* ]]; then _shelp_reply '⟦.Topics⟧' "$cur"; return; fi ;;
     config)
       if (( npos == 0 )) && [[ $cur != -* ]]; then _shelp_reply 'chain edit' "$cur"; return; fi
+      if [[ $arg1 == chain && $cur != -* ]]; then _shelp_values providers "$cur"; return; fi
       flags='⟦.Help⟧' ;;
     *) return ;;   # a task: free text
   esac

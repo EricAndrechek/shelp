@@ -103,6 +103,9 @@ function __shelp_complete
             if test $npos = 0; and not string match -q -- '-*' $cur
                 printf '%s\n' chain edit; return
             end
+            if test "$arg1" = chain; and not string match -q -- '-*' $cur
+                __shelp_values providers "$prefix"; return
+            end
             set flags ⟦.Help⟧
         case '*'
             return
