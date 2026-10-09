@@ -2,12 +2,14 @@
 """Interactive pty tests for shelp's shell integration: raw line mode and
 the --bind keybinding option (see CLAUDE.md's shell-v2 plan, item 4).
 
-Drives zsh and bash directly via a pseudo-terminal (both are installed on
-this Mac); fish isn't installed here, so it's tested inside a throwaway
-Docker container (`docker run --rm ...`) with fish installed from the
-distro and a linux build of shelp.
+Drives zsh and bash directly via a pseudo-terminal. fish runs natively
+when a `fish` is on PATH (CI: `brew install fish` / `apt-get install
+fish`), otherwise inside a throwaway Docker container (`docker run --rm
+...`, fish from Debian, a linux build of shelp); both run the same checks.
+SHELP_TEST_FISH=docker forces the container, SHELP_TEST_FISH=native
+requires a fish on PATH, and SHELP_TEST_FISH=/path/to/fish picks one.
 
-Every session runs with its own temp HOME (and ZDOTDIR/XDG_CONFIG_HOME as
+Every session runs with its own temp HOME (and ZDOTDIR/XDG_* dirs as
 needed) and a minimal PATH pointed at a *stub* `shelp` binary -- never the
 user's real shell config. The stub delegates `init`/`version` to the real
 built binary (so the actual generated scripts are under test) but answers
@@ -18,14 +20,18 @@ byte-for-byte what the shell integration sent -- no model, no network.
 Usage:
   python3 scripts/test-shell-integration.py [--shell zsh|bash|fish|all] [-v]
 
-Exit status is nonzero if any case failed. Requires `make test-shell`'s
-build step to have produced ./bin/shelp, or builds it itself.
+Exit status is nonzero if any case failed. Builds shelp itself (`go
+build`, plus a linux cross-build for the Docker fish path), so it needs
+Go; zsh and a bash >= 4 (macOS: Homebrew's) must be installed, and fish
+or Docker. Works on macOS and Linux.
 
-The explain screen checks render each session's byte stream with pyte (a
-VT100 emulator) to see what is actually left on screen. pyte is a dev-only
+The screen checks render each session's byte stream with pyte (a VT100
+emulator) to see what is actually left on screen. pyte is a dev-only
 dependency: when it isn't importable and `uv` is on PATH, the suite re-runs
 itself under `uv run --with pyte`; with neither, those checks fall back to
-byte-stream assertions (see explain_screen_check).
+weaker byte-stream assertions (see explain_screen_check). The pty also
+answers the terminal queries fish 4 sends, as a terminal would (see
+Session._answer).
 """
 from __future__ import annotations
 
@@ -67,6 +73,12 @@ ANSI_RE = re.compile(
 def strip_ansi(s):
     return ANSI_RE.sub('', s)
 
+
+# terminal queries Session answers: DA1 and CPR
+QUERY_RE = re.compile(rb"\x1b\[0?c|\x1b\[6n")
+# a complete DCS string (ESC P ... ST), which pyte can't parse
+DCS_RE = re.compile(rb"\x1bP.*?\x1b\\", re.S)
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERBOSE = False
 # Every Session's window size (see Session).
@@ -101,6 +113,7 @@ class Session:
         self.raw = bytearray()
         self._screen = self._stream = None
         self._fed = 0
+        self._qpos = 0
         preexec = None
         if ctty:
             def preexec():
@@ -131,13 +144,61 @@ class Session:
                     break
                 if not data:
                     break
-                self.raw += data
-                self.buf += data.decode("utf-8", "replace")
+                self._got(data)
                 got = True
                 end = time.time() + 0.1
             elif got:
                 break
         return got
+
+    def _got(self, data):
+        self.raw += data
+        self.buf += data.decode("utf-8", "replace")
+        self._answer()
+
+    def _answer(self):
+        """Answer terminal queries the way a terminal emulator would. fish
+        4 sends Primary Device Attributes (DA1, ESC[c / ESC[0c) and waits
+        up to 10s for the reply -- then prints a warning and stops waiting
+        for any -- and asks for the cursor position (CPR, ESC[6n) at every
+        prompt. DA1 gets a VT220-ish reply; CPR the cursor as pyte sees it
+        right after the query (no reply without pyte, like a terminal
+        without CPR). Everything else (kitty keyboard, XTVERSION, OSC 11,
+        XTGETTCAP) goes unanswered: those are optional, and DA1's reply
+        tells fish none is coming."""
+        while True:
+            m = QUERY_RE.search(self.raw, self._qpos)
+            if not m:
+                # a query split across reads is searched again next time
+                self._qpos = max(self._qpos, len(self.raw) - 3)
+                return
+            self._qpos = m.end()
+            if m.group(0) == b"\x1b[6n":
+                if not self._feed(m.end()):
+                    continue
+                c = self._screen.cursor
+                reply = b"\x1b[%d;%dR" % (c.y + 1, c.x + 1)
+            else:
+                reply = b"\x1b[?62;22c"
+            os.write(self.master_fd, reply)
+
+    def _feed(self, upto):
+        """Feed pyte the bytes read so far, up to offset upto. pyte has no
+        DCS (ESC P ... ESC \\) parser and would print one's body as text
+        (fish 4's XTGETTCAP queries), so complete ones are dropped and an
+        unterminated one is held back until it ends."""
+        if pyte is None:
+            return False
+        if self._screen is None:
+            self._screen = pyte.Screen(COLS, ROWS)
+            self._stream = pyte.ByteStream(self._screen)
+        chunk = bytes(self.raw[self._fed:upto])
+        start = chunk.rfind(b"\x1bP")
+        if start >= 0 and chunk.find(b"\x1b\\", start) < 0:
+            chunk = chunk[:start]
+        self._fed += len(chunk)
+        self._stream.feed(DCS_RE.sub(b"", chunk))
+        return True
 
     def read_for(self, seconds):
         """Drain output for exactly `seconds`. Unlike read_available, a
@@ -160,20 +221,21 @@ class Session:
                     return
                 if not data:
                     return
-                self.raw += data
-                self.buf += data.decode("utf-8", "replace")
+                self._got(data)
 
     def screen(self):
         """The screen as the terminal would show it now (pyte), as a list
         of right-stripped rows; None without pyte. Fed incrementally."""
-        if pyte is None:
+        if not self._feed(len(self.raw)):
             return None
-        if self._screen is None:
-            self._screen = pyte.Screen(COLS, ROWS)
-            self._stream = pyte.ByteStream(self._screen)
-        self._stream.feed(bytes(self.raw[self._fed:]))
-        self._fed = len(self.raw)
         return [row.rstrip() for row in self._screen.display]
+
+    def cursor(self):
+        """(row, col) of the cursor as of the last screen() call."""
+        return (self._screen.cursor.y, self._screen.cursor.x) if self._screen else None
+
+    def cursor_visible(self):
+        return self._screen is not None and not self._screen.cursor.hidden
 
     def send(self, s):
         os.write(self.master_fd, s.encode())
@@ -335,7 +397,9 @@ STUB_SOURCE = textwrap.dedent(
 def build_real_binary(dest, goos=None, goarch=None):
     env = dict(os.environ)
     if goos:
+        # static: a container's libc may be older than this machine's
         env["GOOS"] = goos
+        env["CGO_ENABLED"] = "0"
     if goarch:
         env["GOARCH"] = goarch
     subprocess.run(
@@ -344,10 +408,36 @@ def build_real_binary(dest, goos=None, goarch=None):
     )
 
 
-def write_stub(path):
+def write_stub(path, python=None):
+    """python: the stub's interpreter, by absolute path (default: the
+    `python3` on its PATH -- what a container's stub needs). Host stubs
+    use the one running this suite, so they don't depend on a python3 in
+    /usr/bin or /bin, the only dirs on the shells' PATH."""
+    src = STUB_SOURCE
+    if python:
+        src = "#!" + python + src[src.index("\n"):]
     with open(path, "w") as f:
-        f.write(STUB_SOURCE)
+        f.write(src)
     os.chmod(path, 0o755)
+
+
+def utf8_locale():
+    """A UTF-8 locale this machine has, for LANG: en_US.UTF-8, else
+    C.UTF-8. The status text and spinner frames are multibyte, and zsh
+    counts them in characters only under a UTF-8 locale. (Linux lists them
+    as en_US.utf8/C.utf8; LANG takes either spelling.)"""
+    try:
+        out = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout
+    except OSError:
+        out = ""
+    have = {l.strip().lower().replace("-", "") for l in out.splitlines()}
+    for want in ("en_US.UTF-8", "C.UTF-8"):
+        if want.lower().replace("-", "") in have:
+            return want
+    return "en_US.UTF-8"
+
+
+LANG = utf8_locale()
 
 
 # --------------------------------------------------------------------
@@ -390,7 +480,7 @@ def raw_cases(tmpdir, text_prefix=None):
 
 
 # --------------------------------------------------------------------
-# Explain screen checks (every shell)
+# Screen checks (every shell)
 # --------------------------------------------------------------------
 
 # the stub's explanation rows (see STUB_SOURCE)
@@ -494,7 +584,7 @@ def zsh_env(stub_dir, real_bin, home, cwd):
         "HOME": home, "ZDOTDIR": home,
         "PATH": stub_dir + ":/usr/bin:/bin",
         "SHELP_REAL_BIN": real_bin,
-        "TERM": "xterm-256color", "LANG": "en_US.UTF-8",
+        "TERM": "xterm-256color", "LANG": LANG,
         "PWD": cwd,
     }
 
@@ -817,14 +907,14 @@ def zsh_anim_checks(s, results, label, scratch):
                   f"pids={pids} stray={stray_pid}")
 
 
-def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
+def run_zsh(tmpdir, results, real_bin, stub_dir, zsh_bin, with_plugins=None):
     label = "zsh" if not with_plugins else f"zsh+{with_plugins[0]}"
     cwd = os.path.join(tmpdir, "cwd-" + label.replace("/", "_"))
     os.makedirs(cwd, exist_ok=True)
     plugin_lines = with_plugins[1] if with_plugins else ""
     home = zsh_home(tmpdir + "-" + label.replace("/", "_"), plugin_lines)
     env = zsh_env(stub_dir, real_bin, home, cwd)
-    s = Session(["/bin/zsh", "-i"], env, cwd=cwd, ctty=True)
+    s = Session([zsh_bin, "-i"], env, cwd=cwd, ctty=True)
     try:
         ok = s.expect(r"TESTPROMPT% ", timeout=10)
         if not results.check(f"{label}: prompt ready", ok, s.buf[-300:]):
@@ -879,7 +969,7 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, with_plugins=None):
         s.close()
 
 
-def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, after_lines):
+def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, zsh_bin, after_lines):
     """Plugins sourced AFTER `shelp init` (run_zsh's with_plugins sources
     them before it)."""
     label = "zsh+plugins-after"
@@ -887,7 +977,7 @@ def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, after_lines):
     cwd = os.path.join(tmpdir, "cwd-plugins-after")
     os.makedirs(cwd, exist_ok=True)
     env = zsh_env(stub_dir, real_bin, home, cwd)
-    s = Session(["/bin/zsh", "-i"], env, cwd=cwd, ctty=True)
+    s = Session([zsh_bin, "-i"], env, cwd=cwd, ctty=True)
     try:
         ok = s.expect(r"TESTPROMPT% ", timeout=10)
         if not results.check(f"{label}: prompt ready", ok, s.buf[-300:]):
@@ -931,7 +1021,7 @@ def bash_env(stub_dir, real_bin, home, cwd):
         "HOME": home,
         "PATH": stub_dir + ":/usr/bin:/bin",
         "SHELP_REAL_BIN": real_bin,
-        "TERM": "xterm-256color", "LANG": "en_US.UTF-8",
+        "TERM": "xterm-256color", "LANG": LANG,
         "PWD": cwd,
     }
 
@@ -1022,7 +1112,7 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
 
 
 # --------------------------------------------------------------------
-# fish (Docker)
+# fish (native, or Docker)
 # --------------------------------------------------------------------
 
 FISH_DOCKERFILE = textwrap.dedent(
@@ -1040,27 +1130,118 @@ def docker_available():
     return shutil.which("docker") is not None
 
 
-def build_fish_image(tmpdir):
-    ddir = os.path.join(tmpdir, "docker")
-    os.makedirs(ddir, exist_ok=True)
-    with open(os.path.join(ddir, "Dockerfile"), "w") as f:
-        f.write(FISH_DOCKERFILE)
-    subprocess.run(["docker", "build", "-t", FISH_IMAGE, ddir], check=True,
-                    stdout=subprocess.DEVNULL if not VERBOSE else None)
+def docker_arch():
+    """The Docker daemon's architecture as a GOARCH -- the linux shelp
+    the container runs must match it -- or None when there's no daemon."""
+    if not docker_available():
+        return None
+    try:
+        out = subprocess.run(["docker", "version", "--format", "{{.Server.Arch}}"],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    arch = out.stdout.strip()
+    return arch if out.returncode == 0 and arch else None
 
 
-def fish_syntax_check(real_linux_bin, tmpdir):
-    """`fish --no-execute` syntax check, run in the container regardless of
-    whether the full interactive suite runs."""
-    out = subprocess.run(
-        ["docker", "run", "--rm", "-v", f"{real_linux_bin}:/usr/local/bin/shelp:ro",
-         FISH_IMAGE, "sh", "-c", "/usr/local/bin/shelp init fish > /tmp/i.fish && fish --no-execute /tmp/i.fish"],
-        capture_output=True, text=True,
-    )
-    return out.returncode == 0, out.stdout + out.stderr
+def find_fish():
+    """Where fish runs: ("native", path), ("docker", None), or ("error",
+    why). SHELP_TEST_FISH: auto (the default: native when a fish is on
+    PATH, else Docker), native, docker, or the path of a fish to run."""
+    want = os.environ.get("SHELP_TEST_FISH") or "auto"
+    if want == "docker":
+        return "docker", None
+    if want in ("auto", "native"):
+        path = shutil.which("fish")
+        if path:
+            return "native", path
+        if want == "native":
+            return "error", "SHELP_TEST_FISH=native, but there is no fish on PATH"
+        return "docker", None
+    if os.path.isfile(want) and os.access(want, os.X_OK):
+        return "native", os.path.abspath(want)
+    return "error", f"SHELP_TEST_FISH={want}: not an executable file"
 
 
-def fish_home(tmpdir, container_home):
+class FishHost:
+    """Runs fish for run_fish, natively or in a throwaway container, so
+    both get the same checks. The session's HOME is a fresh dir on this
+    machine (bind-mounted at /root in the container) and is also its cwd;
+    text_prefix is that dir's path as the shell sees it."""
+
+    def __init__(self, mode, fish, tmpdir, real_bin, stub_dir):
+        self.mode, self.fish, self.tmpdir = mode, fish, tmpdir
+        self.real_bin, self.stub_dir = real_bin, stub_dir
+        self.text_prefix = "/root" if mode == "docker" else None
+
+    def _docker(self, *args, **kw):
+        return subprocess.run(["docker", "run", "--rm"] + list(args), **kw)
+
+    def prepare(self):
+        """(ok, detail): ready to run, and which fish it is."""
+        if self.mode == "docker":
+            ddir = os.path.join(self.tmpdir, "docker")
+            os.makedirs(ddir, exist_ok=True)
+            with open(os.path.join(ddir, "Dockerfile"), "w") as f:
+                f.write(FISH_DOCKERFILE)
+            # BuildKit's progress goes to stderr: shown with -v or on failure
+            out = subprocess.run(["docker", "build", "-t", FISH_IMAGE, ddir],
+                                 capture_output=not VERBOSE, text=True)
+            if out.returncode != 0:
+                return False, f"docker image build failed: {(out.stderr or '')[-800:]}"
+            # the container's stub must be the container's python's
+            self.stub = os.path.join(self.tmpdir, "fish-stub", "shelp")
+            os.makedirs(os.path.dirname(self.stub), exist_ok=True)
+            write_stub(self.stub)
+            out = self._docker(FISH_IMAGE, "fish", "--version", capture_output=True, text=True)
+            return out.returncode == 0, f"docker image {FISH_IMAGE}: {(out.stdout + out.stderr).strip()}"
+        out = subprocess.run([self.fish, "--version"], capture_output=True, text=True)
+        return out.returncode == 0, f"native {self.fish}: {(out.stdout + out.stderr).strip()}"
+
+    def syntax_check(self):
+        """`fish --no-execute` on the generated script."""
+        if self.mode == "docker":
+            out = self._docker("-v", f"{self.real_bin}:/usr/local/bin/shelp:ro", FISH_IMAGE, "sh", "-c",
+                               "/usr/local/bin/shelp init fish > /tmp/i.fish && fish --no-execute /tmp/i.fish",
+                               capture_output=True, text=True)
+            return out.returncode == 0, out.stdout + out.stderr
+        script = os.path.join(self.tmpdir, "init.fish")
+        with open(script, "w") as f:
+            f.write(subprocess.run([self.real_bin, "init", "fish"], capture_output=True, text=True,
+                                   check=True).stdout)
+        out = subprocess.run([self.fish, "--no-execute", script], capture_output=True, text=True,
+                             env=self._env(os.path.join(self.tmpdir, "fish-syntax-home")))
+        return out.returncode == 0, out.stdout + out.stderr
+
+    def _env(self, home):
+        return {
+            "HOME": home,
+            "XDG_CONFIG_HOME": os.path.join(home, ".config"),
+            "XDG_DATA_HOME": os.path.join(home, ".local", "share"),
+            "XDG_CACHE_HOME": os.path.join(home, ".cache"),
+            "PATH": self.stub_dir + ":/usr/bin:/bin",
+            "SHELP_REAL_BIN": self.real_bin,
+            "TERM": "xterm", "LANG": LANG,
+        }
+
+    def session(self, home):
+        if self.mode == "docker":
+            argv = [
+                "docker", "run", "--rm", "-i", "-t",
+                "-v", f"{self.stub}:/usr/local/bin/shelp:ro",
+                "-v", f"{self.real_bin}:/usr/local/bin/shelp-real:ro",
+                "-v", f"{home}:/root", "-w", "/root",
+                "-e", "HOME=/root", "-e", "TERM=xterm", "-e", "LANG=C.UTF-8",
+                "-e", "SHELP_REAL_BIN=/usr/local/bin/shelp-real",
+                FISH_IMAGE, "fish", "-i",
+            ]
+            # no ctty needed: `docker run -t` gives fish a terminal of its
+            # own, which turns the ^C byte into SIGINT
+            return Session(argv, dict(os.environ))
+        return Session([self.fish, "-i"], self._env(home), cwd=home, ctty=True)
+
+
+def fish_home(tmpdir):
     d = os.path.join(tmpdir, "fish-home")
     fishd = os.path.join(d, ".config", "fish")
     os.makedirs(fishd, exist_ok=True)
@@ -1084,68 +1265,25 @@ def fish_suggest_roundtrip(s, raw):
     return got_echo, ("" if got_echo else f"echoed output missing; buf={s.buf[-400:]!r}")
 
 
-def run_fish(tmpdir, results, real_linux_bin):
-    if not docker_available():
-        results.check("fish: docker available", False, "docker not found; skipping fish interactive suite")
+def run_fish(tmpdir, results, host):
+    ok, detail = host.prepare()
+    if not results.check("fish: fish available", ok, detail):
         return
-    try:
-        build_fish_image(tmpdir)
-    except subprocess.CalledProcessError as e:
-        results.check("fish: docker image build", False, str(e))
-        return
-    results.check("fish: docker image build", True)
+    print(f"# fish: {detail}")
 
-    ok, detail = fish_syntax_check(real_linux_bin, tmpdir)
+    ok, detail = host.syntax_check()
     results.check("fish: `fish --no-execute` syntax check", ok, detail[-500:])
 
-    home = fish_home(tmpdir, "/home/tester")
-    argv = [
-        "docker", "run", "--rm", "-i", "-t",
-        "-v", f"{real_linux_bin}:/usr/local/bin/shelp:ro",
-        "-v", f"{home}:/root",
-        "-e", "HOME=/root",
-        "-e", "TERM=xterm",
-        "-e", "SHELP_REAL_BIN=/usr/local/bin/shelp",
-        "-e", "SHELP_STUB_SLEEP",
-        "-e", "SHELP_STUB_FAIL",
-        "--entrypoint", "fish",
-        FISH_IMAGE, "-i",
-    ]
-    # The stub needs to be `shelp` on PATH *ahead of* the real binary
-    # mount; simplest is to mount the stub itself at a PATH-first
-    # location and the real binary at a fixed path the stub delegates to.
-    stub_src = os.path.join(tmpdir, "fish-stub", "shelp")
-    os.makedirs(os.path.dirname(stub_src), exist_ok=True)
-    write_stub(stub_src)
-    argv = [
-        "docker", "run", "--rm", "-i", "-t",
-        "-v", f"{stub_src}:/usr/local/bin/shelp:ro",
-        "-v", f"{real_linux_bin}:/usr/local/bin/shelp-real:ro",
-        "-v", f"{home}:/root",
-        "-e", "HOME=/root",
-        "-e", "TERM=xterm",
-        "-e", "SHELP_REAL_BIN=/usr/local/bin/shelp-real",
-        "-e", "SHELP_STUB_SLEEP",
-        "-e", "SHELP_STUB_FAIL",
-        FISH_IMAGE, "fish", "-i",
-    ]
-    env = dict(os.environ)
-    env.pop("SHELP_STUB_SLEEP", None)
-    env.pop("SHELP_STUB_FAIL", None)
-    s = Session(argv, env)
+    home = fish_home(tmpdir)
+    s = host.session(home)
     try:
         ok = s.expect(r"TESTPROMPT% ", timeout=25)
         if not results.check("fish: prompt ready", ok, s.buf[-400:]):
             return
 
-        # dirs/files are created on the host (in `home`, bind-mounted at
-        # /root), but the task text must reference the container path.
-        cwd_cases = raw_cases(home, text_prefix="/root")
-        for name, raw in cwd_cases:
-            # skip the filesystem-dependent glob case (host-created files
-            # aren't in the container's cwd)
-            if name == "glob with match present":
-                continue
+        # files are created here, in HOME (the cwd); the task text names
+        # them as the shell sees them
+        for name, raw in raw_cases(home, text_prefix=host.text_prefix):
             ok, detail = fish_suggest_roundtrip(s, raw)
             results.check(f"fish: raw suggest -- {name}", ok, detail)
 
@@ -1174,7 +1312,8 @@ def run_fish(tmpdir, results, real_linux_bin):
         s.read_available(0.8)
 
         s.buf = ""
-        s.send("history search --contains -- \"shelp what's my ip\"\r")
+        # piped: fish 4 pages interactive `history` output
+        s.send("history search --contains -- \"shelp what's my ip\" | cat\r")
         s.expect(r"TESTPROMPT% \r?$", timeout=6)
         results.check("fish: history has original apostrophe line",
                        "shelp what's my ip" in strip_ansi(s.buf), s.buf[-500:])
@@ -1253,29 +1392,37 @@ def main():
 
     stub_dir = os.path.join(tmproot, "stub")
     os.makedirs(stub_dir, exist_ok=True)
-    write_stub(os.path.join(stub_dir, "shelp"))
+    write_stub(os.path.join(stub_dir, "shelp"), python=sys.executable)
 
     results = Results("all")
 
     if args.shell in ("zsh", "all"):
-        run_zsh(tmproot, results, real_bin, stub_dir)
-        # Homebrew zsh-autosuggestions / zsh-syntax-highlighting, if present:
-        # prove shelp-accept-line coexists with a wrapped accept-line.
-        candidates = [
-            ("zsh-autosuggestions",
-             "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh"),
-            ("zsh-syntax-highlighting",
-             "/opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"),
-        ]
-        found = [(n, p) for n, p in candidates if os.path.exists(p)]
-        if found:
-            before = "\n".join(f"source '{p}'" for _, p in found)
-            run_zsh(tmproot, results, real_bin, stub_dir,
-                    with_plugins=("plugins-before", before))
-            # and the reverse order: shelp init first, then the plugins
-            run_zsh_plugins_after(tmproot, results, real_bin, stub_dir, before)
+        zsh_bin = shutil.which("zsh")
+        if not zsh_bin:
+            results.check("zsh: zsh found", False, "no zsh on PATH")
         else:
-            print("  (no Homebrew zsh-autosuggestions/zsh-syntax-highlighting found; skipping plugin-coexistence run)")
+            run_zsh(tmproot, results, real_bin, stub_dir, zsh_bin)
+            # Homebrew's zsh-autosuggestions / zsh-syntax-highlighting, if
+            # installed: prove shelp-accept-line coexists with a wrapped
+            # accept-line. Not Debian/Ubuntu's: their zsh-syntax-highlighting
+            # 0.7.1 empties region_highlight on every redraw (0.8.0 removes
+            # only its own entries, by memo=), so no other plugin's entry
+            # survives it and the "foreign highlight kept" checks can't hold.
+            found = []
+            for name in ("zsh-autosuggestions", "zsh-syntax-highlighting"):
+                for prefix in ("/opt/homebrew/share", "/usr/local/share"):
+                    path = f"{prefix}/{name}/{name}.zsh"
+                    if os.path.exists(path):
+                        found.append(path)
+                        break
+            if found:
+                before = "\n".join(f"source '{p}'" for p in found)
+                run_zsh(tmproot, results, real_bin, stub_dir, zsh_bin,
+                        with_plugins=("plugins-before", before))
+                # and the reverse order: shelp init first, then the plugins
+                run_zsh_plugins_after(tmproot, results, real_bin, stub_dir, zsh_bin, before)
+            else:
+                print("  (no Homebrew zsh-autosuggestions/zsh-syntax-highlighting found; skipping plugin-coexistence run)")
 
     if args.shell in ("bash", "all"):
         bbin = bash_binary()
@@ -1285,18 +1432,37 @@ def main():
             results.check("bash: modern bash found", False, "need bash >= 4 (macOS system /bin/bash is 3.2)")
 
     if args.shell in ("fish", "all"):
-        real_linux = os.path.join(tmproot, "real-linux", "shelp")
-        os.makedirs(os.path.dirname(real_linux), exist_ok=True)
-        print("# cross-compiling shelp for linux/arm64...")
-        try:
-            build_real_binary(real_linux, goos="linux", goarch="arm64")
-            run_fish(tmproot, results, real_linux)
-        except subprocess.CalledProcessError as e:
-            results.check("fish: cross-compile", False, str(e))
+        mode, fish = find_fish()
+        if mode == "error":
+            results.check("fish: fish available", False, fish)
+        elif mode == "native":
+            run_fish(tmproot, results, FishHost(mode, fish, tmproot, real_bin, stub_dir))
+        else:
+            arch = docker_arch()
+            if not arch:
+                results.check("fish: fish available", False,
+                              "no fish on PATH, and no Docker daemon to run it in")
+            else:
+                real_linux = os.path.join(tmproot, "real-linux", "shelp")
+                os.makedirs(os.path.dirname(real_linux), exist_ok=True)
+                print(f"# cross-compiling shelp for linux/{arch} (fish runs in Docker)...")
+                try:
+                    build_real_binary(real_linux, goos="linux", goarch=arch)
+                except subprocess.CalledProcessError as e:
+                    results.check("fish: cross-compile", False, str(e))
+                else:
+                    run_fish(tmproot, results, FishHost(mode, None, tmproot, real_linux, stub_dir))
 
     print()
     total = len(results.cases)
     failed = results.failed
+    per = {}
+    for name, ok, _ in results.cases:
+        sh = re.match(r"(zsh|bash|fish)", name)
+        n = per.setdefault(sh.group(1) if sh else "other", [0, 0])
+        n[0] += ok
+        n[1] += 1
+    print("# " + ", ".join(f"{sh} {p}/{t}" for sh, (p, t) in per.items()))
     print(f"# {total - len(failed)}/{total} passed")
     if failed:
         print("# FAILURES:")
