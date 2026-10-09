@@ -30,10 +30,15 @@ sign-shortcut:
 	go run ./internal/tools/signshortcut
 
 # Real interactive pty tests for the shell integration (raw line mode,
-# --bind) across zsh/bash (run directly) and fish (a throwaway Docker
-# container, since fish isn't installed on this Mac). See
-# scripts/test-shell-integration.py's docstring and CLAUDE.md's shell-v2
-# plan for the test matrix. Needs python3 and, for fish, docker.
+# --bind, the thinking status, Ctrl-C) in zsh, bash and fish. fish runs
+# natively when a `fish` is on PATH, else in a throwaway `docker run --rm`
+# container; with neither, the fish checks fail rather than skip
+# (SHELP_TEST_FISH=docker|native|<path> overrides the choice). Needs
+# python3, Go, zsh, bash >= 4 (macOS: Homebrew's; /bin/bash is 3.2), uv or
+# pyte (the suite re-runs itself under `uv run --with pyte`; without either
+# the screen checks are weaker byte checks), and fish or Docker. See
+# scripts/test-shell-integration.py's docstring and CLAUDE.md's
+# internal/shellinit notes.
 test-shell:
 	python3 scripts/test-shell-integration.py
 

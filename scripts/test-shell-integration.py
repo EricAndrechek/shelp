@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Interactive pty tests for shelp's shell integration: raw line mode and
-the --bind keybinding option (see CLAUDE.md's shell-v2 plan, item 4).
+"""Interactive pty tests for shelp's shell integration: raw line mode, the
+--bind keybinding option, the thinking status and Ctrl-C (see CLAUDE.md's
+internal/shellinit notes).
 
 Drives zsh and bash directly via a pseudo-terminal. fish runs natively
 when a `fish` is on PATH (CI: `brew install fish` / `apt-get install
