@@ -12,8 +12,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Both jobs run `make ci` -- exactly what runs locally. The steps only
+# install its prerequisites: Go, uv (the shell suite renders screens with
+# pyte via `uv run --with pyte`), bash >= 4, zsh, and a native fish (the
+# suite uses Docker for fish only when no fish is installed, and runners
+# have none on macOS).
 jobs:
-  # Everything here is `make ci`; the steps only install its prerequisites.
   macos:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -23,18 +27,23 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: astral-sh/setup-uv@v5
-      - name: Install fish (shell suite)
-        run: brew install fish
+      # /bin/bash is 3.2; the zsh plugins add the suite's plugin-coexistence
+      # runs, as on a Mac that has them.
+      - name: Install shell-suite prerequisites
+        run: brew install bash fish zsh-autosuggestions zsh-syntax-highlighting
       - run: make ci
 
-  # Go parts only: the shell suite and the Shortcuts tests are macOS-first.
-  # Tests needing macOS tools (zsh, shortcuts, plutil) skip by capability.
+  # Shortcuts/fm tests skip by capability here; the rest, shell suite
+  # included, runs as on macOS.
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: make vet test build
+      - uses: astral-sh/setup-uv@v5
+      - name: Install shell-suite prerequisites
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+      - run: make ci
