@@ -835,6 +835,13 @@ CURSOR_HIDE = "\x1b[?25l"
 CURSOR_SHOW = "\x1b[?25h"
 
 
+# The Ctrl-C probes' stub sleep. They must send ^C while shelp is still
+# running; with a 1.5s stub, startup plus the status wait could eat the
+# whole budget on a loaded machine (a CI runner, or `make ci` running the
+# race tests alongside), and the probe failed intermittently.
+CTRLC_STUB_SLEEP = 4
+
+
 def frames_in(raw):
     return {c for c in strip_ansi(raw) if c in BRAILLE}
 
@@ -1004,7 +1011,7 @@ def zsh_anim_checks(s, results, label, scratch):
     fresh_pidfile()
     if os.path.exists(marker):
         os.remove(marker)
-    run("export SHELP_STUB_MARKER=" + shlex.quote(marker))
+    run("export SHELP_STUB_SLEEP=" + str(CTRLC_STUB_SLEEP) + " SHELP_STUB_MARKER=" + shlex.quote(marker))
     line = "shelp what's my ip"
     s.send(line)
     s.read_available(0.3)
@@ -1016,7 +1023,7 @@ def zsh_anim_checks(s, results, label, scratch):
     started = (wait_for_file(s, pidfile, 5)
                and s.expect(re.escape(STATUS_TEXT), timeout=1, bounded=True))
     s.read_for(0.3)  # a few frames
-    early = time.time() - t0 < 1.2  # the stub (1.5s) must still be running
+    early = time.time() - t0 < CTRLC_STUB_SLEEP - 1  # the stub must still be running
     s.send("\x03")
     s.read_for(0.6)  # INT, then TERM after at most ~250ms
     s.read_available(0.2)
@@ -1042,7 +1049,7 @@ def zsh_anim_checks(s, results, label, scratch):
     seen += s.buf
     results.check(f"{label}: line still editable after Ctrl-C",
                   f"BUF=<{line} please>" in rep, rep[-300:])
-    rest = t0 + 1.5 + 1.0 - time.time()  # well past when the stub would finish
+    rest = t0 + CTRLC_STUB_SLEEP + 1.0 - time.time()  # well past when the stub would finish
     if rest > 0:
         s.read_available(rest)
         seen += s.buf
@@ -1385,7 +1392,7 @@ def bash_widget_checks(s, results, scratch):
     for f in (pidfile, marker):
         if os.path.exists(f):
             os.remove(f)
-    run("export SHELP_STUB_MARKER=" + shlex.quote(marker))
+    run("export SHELP_STUB_SLEEP=" + str(CTRLC_STUB_SLEEP) + " SHELP_STUB_MARKER=" + shlex.quote(marker))
     line = "ctrlc probe"
     s.send(line)
     s.read_available(0.3)
@@ -1395,7 +1402,7 @@ def bash_widget_checks(s, results, scratch):
     started = (wait_for_file(s, pidfile, 5)
                and s.expect(re.escape(STATUS_TEXT), timeout=1, bounded=True))
     s.read_for(0.3)
-    early = time.time() - t0 < 1.2  # the stub (1.5s) must still be running
+    early = time.time() - t0 < CTRLC_STUB_SLEEP - 1  # the stub must still be running
     s.send("\x03")
     s.read_for(0.6)
     s.read_available(0.2)
@@ -1423,7 +1430,7 @@ def bash_widget_checks(s, results, scratch):
     ok = (rows is None and " more" in s.buf) or \
         (rows is not None and rows[s.cursor()[0]] == "TESTPROMPT$ " + line + " more")
     results.check("bash: line still editable after Ctrl-C in shelp-widget", ok, view(rows))
-    rest = t0 + 1.5 + 1.0 - time.time()  # well past when the stub would finish
+    rest = t0 + CTRLC_STUB_SLEEP + 1.0 - time.time()  # well past when the stub would finish
     if rest > 0:
         s.read_available(rest)
     results.check("bash: Ctrl-C'd shelp-widget stub never finished (no marker)",
