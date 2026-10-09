@@ -18,6 +18,10 @@ built binary (so the actual generated scripts are under test) but answers
 `suggest`/`explain` deterministically from its own arguments (a shell
 command that echoes the exact raw text it received), so a test can assert
 byte-for-byte what the shell integration sent -- no model, no network.
+`__kind`, which the hooks ask whether a `shelp ...` line is a command or a
+task, goes to the real binary too, unless a test knob makes the stub play
+a binary with a command the hook never heard of, or one too old to know
+`__kind` (see kind_checks).
 
 Usage:
   python3 scripts/test-shell-integration.py [--shell zsh|bash|fish|all] [-v]
@@ -320,10 +324,22 @@ STUB_SOURCE = textwrap.dedent(
     touch a real model: they answer purely from their own arguments, so a
     test can assert the exact raw text the shell integration sent.
 
+    Delegated calls run with SHELP_PROVIDER=nosuch:model, so even a task
+    the hook wrongly passed through as a command reaches no model.
+
     Test knobs (env): SHELP_STUB_SLEEP=<seconds> sleeps first;
     SHELP_STUB_PIDFILE=<path> gets this process's pid at start;
     SHELP_STUB_MARKER=<path> is created after the sleep (so a killed stub
     never creates it); SHELP_STUB_FAIL makes it fail.
+
+    SHELP_STUB_COMMANDS="zzcmd ...": commands only this binary has, as if
+    added by an upgrade after the hook was loaded: `__kind zzcmd ...`
+    answers "command" and `zzcmd ARGS` prints `STUB-CMD:zzcmd ARGS`.
+    SHELP_STUB_NO_KIND: `__kind` acts like a shelp from before it existed,
+    which takes `__kind ...` for a task: with SHELP_PROVIDER set (the
+    hook's guard) it fails at once, "unknown provider"; without, it "asks
+    the model" -- appends the line to SHELP_STUB_MODEL_LOG -- and prints a
+    suggestion.
 
     While it sleeps with stderr on a terminal it draws real shelp's own
     thinking spinner there (internal/style/spinner.go): after 120ms,
@@ -359,7 +375,26 @@ STUB_SOURCE = textwrap.dedent(
     def delegate():
         env = dict(os.environ)
         env["PATH"] = "/nonexistent-shelp-test-path"
+        env["SHELP_PROVIDER"] = "nosuch:model"
         os.execve(real, [real] + args, env)
+
+    added = os.environ.get("SHELP_STUB_COMMANDS", "").split()
+    if args[:1] == ["__kind"] and os.environ.get("SHELP_STUB_NO_KIND"):
+        if os.environ.get("SHELP_PROVIDER"):
+            sys.stderr.write('shelp: unknown provider "%s"\\n' % os.environ["SHELP_PROVIDER"])
+            sys.exit(1)
+        log = os.environ.get("SHELP_STUB_MODEL_LOG")
+        if log:
+            with open(log, "a") as f:
+                f.write(" ".join(args) + "\\n")
+        print("printf '%s\\\\n' " + shlex.quote(" ".join(args)))
+        sys.exit(0)
+    if args[:1] == ["__kind"] and args[1:2] and args[1] in added:
+        print("command")
+        sys.exit(0)
+    if args[:1] and args[0] in added:
+        print("STUB-CMD:" + " ".join(args))
+        sys.exit(0)
 
     if not args or args[0] not in ("suggest", "explain"):
         delegate()
@@ -607,6 +642,109 @@ def explain_screen_check(s, results, label, start, after_rows):
     ok = (last is not None and last + 1 + len(after_rows) < len(rows) and rows[last + 1] == ""
           and all(rows[last + 2 + j].startswith(p) for j, p in enumerate(after_rows)))
     results.check(f"{label}: explain then one blank line, then the prompt", ok, "screen:\n" + view)
+
+
+# --------------------------------------------------------------------
+# Command or task: the binary decides (`shelp __kind`), every shell
+# --------------------------------------------------------------------
+
+# how each shell sets/unsets a variable, and where a suggested task shows
+# up through raw line mode and through the wrapper: "line" (the command
+# line holds it; ^T reports the buffer: zsh's raw line mode and wrapper,
+# via print -z, and fish's raw line mode), "run>" (bash's editable run>
+# prompt), or "printed" (fish's wrapper)
+KIND_SHELL = {
+    "zsh": dict(setenv="export {0}={1}", unset="unset {0}", raw="line", wrapper="line"),
+    "bash": dict(setenv="export {0}={1}", unset="unset {0}", raw="run>", wrapper="run>"),
+    "fish": dict(setenv="set -gx {0} {1}", unset="set -e {0}", raw="line", wrapper="printed"),
+}
+
+CONFIG_SHOWN = r"line mode\s+(true|false)"  # `shelp config`'s last setting
+CONFIG_HELP = re.escape("shelp config: show or change settings.")
+
+
+def kind_checks(s, results, label, shell, prompt_re, model_log, model_log_shell=None):
+    """Which `shelp ...` lines are commands is the binary's call: the hook
+    asks `shelp __kind` instead of keeping a list. A command the binary
+    has but the hook never heard of (the stub's zzcmd, unknown to the real
+    binary that rendered this hook -- what an upgrade does to a shell
+    that's still running) runs as a command; `help me ...`, `version of
+    ...` are tasks; a pipeline after a command doesn't make it a task.
+    Each through raw line mode (Enter on a `shelp` line) and through the
+    wrapper function (`true && shelp ...`, which raw line mode leaves
+    alone). Then a shelp from before __kind: every line runs as typed,
+    and the hook's SHELP_PROVIDER guard keeps `__kind ...` from reaching a
+    model (model_log, as the host sees it, must stay absent;
+    model_log_shell is the same file as the shell sees it)."""
+    k = KIND_SHELL[shell]
+
+    def do(line, wait=0.5):
+        s.buf = ""
+        s.send(line + "\r")
+        s.expect(prompt_re, timeout=8)
+        s.read_available(wait)
+
+    def as_command(how, typed, want_re, tag=None):
+        task = typed.split("shelp ", 1)[1]
+        s.buf = ""
+        s.send(typed + "\r")
+        ran = s.expect(want_re, timeout=8)
+        s.expect(prompt_re, timeout=8)
+        s.read_available(0.3)
+        out = strip_ansi(s.buf)
+        ok = ran and suggest_cmd(task) not in out
+        results.check(f"{label}: {how}: `{typed}` runs as a command{tag or ''}", ok, repr(out[-400:]))
+
+    def as_task(how, typed, tag=None):
+        task = typed.split("shelp ", 1)[1]
+        shown = k["raw" if how == "raw line" else "wrapper"]
+        want = suggest_cmd(task)
+        s.buf = ""
+        s.send(typed + "\r")
+        ok = s.expect(re.escape(("run> " if shown == "run>" else "") + want), timeout=8)
+        s.read_available(0.3)
+        detail = strip_ansi(s.buf)[-400:]
+        if shown == "line":
+            s.buf = ""
+            s.send("\x14")  # ^T: report the buffer
+            ok = s.expect(r"BUF=<[^>\r\n]*>", timeout=4) and f"BUF=<{want}>" in strip_ansi(s.buf)
+            detail += " | ^T: " + strip_ansi(s.buf)[-200:]
+            s.read_available(0.2)
+            s.send("\x15")
+        elif shown == "run>":
+            s.send("\x15\r")  # empty answer: nothing runs
+            s.expect(prompt_re, timeout=8)
+        else:
+            s.expect(prompt_re, timeout=8)
+        results.check(f"{label}: {how}: `{typed}` is a task{tag or ''}", ok, repr(detail))
+        s.read_available(0.4)
+
+    # without the made-up command, zzcmd is a task like any unknown word
+    as_task("raw line", "shelp zzcmd one two", " (not a command yet)")
+    do(k["setenv"].format("SHELP_STUB_COMMANDS", "zzcmd"))
+    for how, pre in (("raw line", ""), ("wrapper", "true && ")):
+        as_command(how, pre + "shelp zzcmd one two", re.escape("STUB-CMD:zzcmd one two"),
+                   " (a command only the binary knows)")
+        as_command(how, pre + "shelp config", CONFIG_SHOWN)
+        as_command(how, pre + "shelp help config | cat", CONFIG_HELP)
+        as_task(how, pre + "shelp help me find files")
+        as_task(how, pre + "shelp version of node")
+    do(k["unset"].format("SHELP_STUB_COMMANDS"))
+
+    # a shelp from before __kind: runs everything as typed, asks no model
+    if os.path.exists(model_log):
+        os.remove(model_log)
+    do(k["setenv"].format("SHELP_STUB_MODEL_LOG", shlex.quote(model_log_shell or model_log)))
+    do(k["setenv"].format("SHELP_STUB_NO_KIND", "1"))
+    for how, pre in (("raw line", ""), ("wrapper", "true && ")):
+        as_command(how, pre + "shelp config", CONFIG_SHOWN, " (shelp without __kind)")
+        as_command(how, pre + "shelp zzfind big files", re.escape('unknown provider "nosuch:model"'),
+                   " (shelp without __kind: as typed)")
+    do(k["unset"].format("SHELP_STUB_NO_KIND"))
+    do(k["unset"].format("SHELP_STUB_MODEL_LOG"))
+    asked = open(model_log).read() if os.path.exists(model_log) else ""
+    results.check(f"{label}: a shelp without __kind is never asked to suggest for `__kind ...`",
+                  asked == "", repr(asked))
 
 
 # --------------------------------------------------------------------
@@ -1140,6 +1278,8 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, zsh_bin, with_plugins=None):
         ok = "hi" in lines
         results.check(f"{label}: plain `echo hi` still runs", ok, s.buf[-300:])
 
+        kind_checks(s, results, label, "zsh", r"TESTPROMPT% \r?$", os.path.join(home, "model.log"))
+
         # the animated status, Ctrl-C, NO_COLOR, job-control silence
         zsh_anim_checks(s, results, label, os.path.join(home, "anim"))
     finally:
@@ -1511,6 +1651,8 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         lines = [l.strip("\r") for l in strip_ansi(s.buf).split("\n")]
         ok = "hi" in lines
         results.check("bash: plain `echo hi` still runs", ok, s.buf[-300:])
+
+        kind_checks(s, results, "bash", "bash", r"TESTPROMPT\$ \r?$", os.path.join(home, "model.log"))
 
         # the in-progress status, raw line mode and shelp-widget
         bash_raw_status_checks(s, results)
@@ -1920,6 +2062,9 @@ def run_fish(tmpdir, results, host):
         lines = [l.strip("\r") for l in strip_ansi(s.buf).split("\n")]
         ok = "hi" in lines
         results.check("fish: plain `echo hi` still runs", ok, s.buf[-300:])
+
+        kind_checks(s, results, "fish", "fish", r"TESTPROMPT% \r?$", os.path.join(home, "model.log"),
+                    host.text_prefix and host.text_prefix + "/model.log")
 
         s.buf = ""
         s.send("set -x SHELP_STUB_SLEEP 3\r")

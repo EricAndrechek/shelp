@@ -2,14 +2,28 @@
 # SHELP_HOOKS lists the shells whose integration is loaded, so
 # `shelp setup shell` can tell the hook is already active.
 set -gx SHELP_HOOKS fish $SHELP_HOOKS
+# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
+# command for, false when the binary runs it as one of its commands. The
+# binary decides (`shelp __kind`, the decision it makes itself when it
+# runs ARGS), not a list here: a shell keeps this hook until it restarts,
+# so a list would miss commands added by an upgrade since and send
+# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
+# a shelp too old to know __kind fails at once instead of asking a model
+# about "__kind ..."; any answer but "task" runs ARGS as typed.
+function _shelp_is_task
+    set -l kind (SHELP_PROVIDER=__kind command shelp __kind $argv 2>/dev/null)
+    test "$kind" = task
+end
+
 # fish cannot pre-fill the next prompt from a function, so `shelp <task>`
 # prints the command; the widget replaces the command line in place.
+# Commands (`shelp providers`, `shelp help config`, ...) pass straight
+# through.
 function shelp
-    switch "$argv[1]"
-        case '' -h --help help explain -e init setup providers config completion version --version
-            SHELP_SHELL=fish command shelp $argv
-        case '*'
-            SHELP_SHELL=fish command shelp suggest $argv
+    if test -n "$argv[1]"; and _shelp_is_task $argv
+        SHELP_SHELL=fish command shelp suggest $argv
+    else
+        SHELP_SHELL=fish command shelp $argv
     end
 end
 
@@ -33,6 +47,21 @@ bind -M insert {{.Bind}} shelp-widget
 # typed. `shelp providers`, `shelp -p ... task`, and every other
 # subcommand/flag form still runs normally. Opt out with `shelp init fish
 # --no-line-mode` or config `[shell] line_mode = false`.
+
+# _shelp_line_is_task REST: _shelp_is_task on the words of REST, the line
+# after `shelp`, split on whitespace only (no quote removal, no expansion:
+# a quoted or globbed word is never a command) and cut where the shell
+# would end shelp's arguments, at the first operator or redirection --
+# `shelp help config | less` asks about `help config`.
+function _shelp_line_is_task
+    set -l args
+    for w in (string match -ar '\S+' -- $argv)
+        string match -qr '^[0-9]*[<>|&;()]' -- $w; and break
+        set -a args $w
+    end
+    _shelp_is_task $args
+end
+
 function _shelp_history_add
     # fish has no `history add`: search/delete/merge/save/clear are the
     # only sub-commands. The documented way to inject an entry without
@@ -125,8 +154,6 @@ function _shelp_on_enter
     set -l rest (string replace -r '^shelp\s+' '' -- $line)
     set -l word1 (string replace -r '^(\S*).*' '$1' -- $rest)
     switch $word1
-        case ''
-            commandline -f execute
         case explain -e
             set -l tail (string replace -r '^'"$word1"'\s+' '' -- $rest)
             if test -z "$tail"
@@ -134,10 +161,18 @@ function _shelp_on_enter
             else
                 _shelp_raw_dispatch explain "$line" "$tail"
             end
-        case '-*' providers config completion setup init version help
+        case '' '-*'
+            # Nothing after `shelp`, or flags first (`shelp -p fm <task>`):
+            # only the shell can parse those, so the line runs as typed.
             commandline -f execute
         case '*'
-            _shelp_raw_dispatch suggest "$line" "$rest"
+            # A command (`shelp providers`, `shelp help config`) runs as
+            # typed; a task goes to shelp raw. The binary says which.
+            if _shelp_line_is_task $rest
+                _shelp_raw_dispatch suggest "$line" "$rest"
+            else
+                commandline -f execute
+            end
     end
 end
 bind \r _shelp_on_enter

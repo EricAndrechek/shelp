@@ -14,7 +14,13 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 ## Layout
 
 - `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers, config,
-  setup, init, completion, version. Suggest prints ONLY the command on stdout.
+  setup, init, completion, version; hidden `__complete` and `__kind`. Suggest
+  prints ONLY the command on stdout. `kind.go`: `commandFor(args)`, the one
+  decision of which argument shapes a command claims (help, version and
+  config only some: `help me find files`, `version of node`, `config of
+  nginx` are tasks), the `commands` handler table `run` dispatches through,
+  and `__kind`, which prints that decision ("command"/"task") for the
+  shell hooks; `kind_test.go` checks run and `__kind` agree.
 - `internal/provider/` — `Provider` interface, family registry, fallback
   `Chain`, timing `Call` (`provider.go`), plus the `RunCmd` exec helper
   (`execx.go`). One file per family: `fm.go` (Apple on-device), `openai.go`
@@ -53,12 +59,30 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `Render`/`Options`, see `shellinit.go`, `bind.go`'s `ConvertBind`,
   `config.go`'s `[shell]` table) and `shelp setup shell`'s rc-file
   installer (`setup.go`: idempotent marked block, chezmoi/symlink
-  detection, the macOS `~/.bash_profile` note). zsh's suggest status is a
-  spinner: `_shelp_run_animated` runs `command shelp` as a background job
-  (`nomonitor`: no `[1] pid`/`done` chatter, and the job ignores SIGINT,
-  so a local INT trap kills it INT -> TERM -> KILL), redraws POSTDISPLAY
-  every 80ms via `zselect`, and on Ctrl-C hands the typed line back. Its
-  pty tests (`scripts/test-shell-integration.py`) run zsh with
+  detection, the macOS `~/.bash_profile` note). **The hooks keep no list
+  of commands**: the `shelp` wrapper and raw-line Enter ask the binary,
+  `_shelp_is_task` -> `SHELP_PROVIDER=__kind command shelp __kind ARGS`
+  (2026-10-09: a shell still running an older hook sent `shelp config` to
+  the model as the task "config" after `brew upgrade`, and the per-shell
+  lists had already drifted once). A shell keeps the hook it loaded until
+  `exec zsh`, so only the binary can know its commands. The SHELP_PROVIDER
+  guard makes a shelp older than `__kind` (which takes `__kind ...` for a
+  task) fail at once instead of calling a model; any answer but "task"
+  runs the line as typed. Raw line mode still decides `explain`/`-e` (raw
+  explain), `''` and `-*` (run as typed: flags need the shell's parsing)
+  itself; for anything else `_shelp_line_is_task` passes the words split
+  on whitespace only (a quoted word is never a command) and cut at the
+  first operator/redirection (`shelp help config | less` asks about `help
+  config`). Cost: one exec per `shelp` line, ~6ms (~7-9ms in-shell), two
+  for a command typed at the prompt (Enter, then the wrapper); none for
+  other lines. `TestRender_NoCommandLists` fails on any command name in
+  hook code outside comments and the completion. zsh's wrapper uses
+  `print -rz` (plain `-z` turned a `\n` in a suggestion into a newline).
+  zsh's suggest status is a spinner: `_shelp_run_animated` runs `command
+  shelp` as a background job (`nomonitor`: no `[1] pid`/`done` chatter,
+  and the job ignores SIGINT, so a local INT trap kills it INT -> TERM ->
+  KILL), redraws POSTDISPLAY every 80ms via `zselect`, and on Ctrl-C
+  hands the typed line back. Its pty tests (`scripts/test-shell-integration.py`) run zsh with
   `Session(..., ctty=True)`: without a controlling tty, ^C is a plain
   byte, never SIGINT, so a Ctrl-C test proves nothing. Raw-mode explain
   prints under `zle -I` and must NOT `zle reset-prompt` afterwards: zle
@@ -84,7 +108,12 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   suite renders sessions with pyte (40x120 pty; re-runs itself under `uv
   run --with pyte` when missing, byte-stream fallback otherwise) and
   checks every explanation line plus exactly one blank line before the
-  next prompt, with one- and two-line prompts. fish runs natively when a
+  next prompt, with one- and two-line prompts. Its stub delegates every
+  call but suggest/explain to the real binary with `PATH` emptied and
+  `SHELP_PROVIDER=nosuch:model`; `kind_checks` (all three shells, raw line
+  and wrapper via `true && shelp ...`) sets `SHELP_STUB_COMMANDS=zzcmd` (a
+  command only the binary has, as after an upgrade) and
+  `SHELP_STUB_NO_KIND` (a binary from before `__kind`). fish runs natively when a
   `fish` is on PATH (CI), else in `docker run --rm` (fish 3.6, a static
   linux shelp for the daemon's arch); `SHELP_TEST_FISH=docker|native|<path>`
   overrides. The pty answers DA1 and CPR like a terminal: fish 4 waits

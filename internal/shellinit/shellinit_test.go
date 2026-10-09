@@ -108,6 +108,52 @@ func TestRender_InvalidBindPropagatesError(t *testing.T) {
 	}
 }
 
+// Which `shelp ...` lines are commands is the binary's call (`shelp
+// __kind`), never a list in the hook: a shell keeps the hook it loaded
+// across upgrades, so a list there misses every command added since and
+// sends `shelp <new command>` to the model. So outside comments and the
+// completion (which lists commands to offer, not to dispatch), no command
+// name may appear at all, and the wrapper and raw line mode both ask.
+func TestRender_NoCommandLists(t *testing.T) {
+	names := regexp.MustCompile(`\b(help|version|init|setup|providers|config|completion)\b`)
+	for _, shell := range Shells() {
+		for _, o := range []Options{{}, {LineMode: true}, {LineMode: true, Bind: "^G"}} {
+			got, err := Render(shell, o)
+			if err != nil {
+				t.Fatalf("Render(%s, %+v): %v", shell, o, err)
+			}
+			comp, _ := Completion(shell)
+			var code strings.Builder
+			for i, l := range strings.Split(strings.Replace(got, comp, "", 1), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(l), "#") {
+					continue
+				}
+				if m := names.FindString(l); m != "" {
+					t.Errorf("%s %+v: line %d names the command %q (ask `shelp __kind` instead):\n%s", shell, o, i+1, m, l)
+				}
+				code.WriteString(l + "\n")
+			}
+			// one call, in _shelp_is_task, guarded: SHELP_PROVIDER names no
+			// provider, so a shelp from before __kind (which would take
+			// `__kind ...` for a task) fails at once instead of asking a model
+			if n := strings.Count(code.String(), "command shelp __kind"); n != 1 {
+				t.Errorf("%s %+v: %d `command shelp __kind` calls, want 1 (in _shelp_is_task)", shell, o, n)
+			}
+			if !strings.Contains(code.String(), "SHELP_PROVIDER=__kind command shelp __kind") {
+				t.Errorf("%s %+v: the __kind call is not guarded by SHELP_PROVIDER=__kind", shell, o)
+			}
+			uses := strings.Count(code.String(), "_shelp_is_task ")
+			want := 1 // the wrapper
+			if o.LineMode {
+				want = 2 // and raw line mode, via _shelp_line_is_task
+			}
+			if uses != want {
+				t.Errorf("%s %+v: _shelp_is_task used %d times, want %d", shell, o, uses, want)
+			}
+		}
+	}
+}
+
 // The zsh status spinner runs shelp in the background (so it can animate)
 // through one helper, for both the raw-line path and shelp-widget; the
 // pty suite (scripts/test-shell-integration.py) checks its behavior, this
@@ -133,8 +179,10 @@ func TestRender_ZshAnimatedStatus(t *testing.T) {
 			t.Errorf("zsh %+v: raw-line suggest doesn't use the animated helper", o)
 		}
 		// the only blocking `$(command shelp ...)` left is the fallback
-		// for when no temp dir can be made
-		// (not counting the completion's `__complete` lookups, which run on Tab)
+		// for when no temp dir can be made (not counting the completion's
+		// `__complete` lookups, which run on Tab, or _shelp_is_task's
+		// `$(SHELP_PROVIDER=__kind command shelp __kind ...)`, which reads
+		// nothing and answers in a few ms)
 		comp, _ := Completion("zsh")
 		if n := strings.Count(strings.Replace(got, comp, "", 1), "$(command shelp"); n != 1 {
 			t.Errorf("zsh %+v: %d blocking $(command shelp ...) calls, want 1 (the no-temp-dir fallback)", o, n)

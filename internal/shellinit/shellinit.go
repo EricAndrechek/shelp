@@ -8,6 +8,11 @@
 // with `shelp ` reaches shelp byte-for-byte instead of being parsed by
 // the shell first (see Options.LineMode and each scripts/*.tmpl file for
 // the per-shell mechanism).
+//
+// Neither the function nor raw line mode knows shelp's commands: both ask
+// the binary (`shelp __kind ARGS...` prints "command" or "task"), because a
+// shell keeps the integration it loaded across upgrades and a list here
+// would send every command added since to the model as a task.
 package shellinit
 
 import (

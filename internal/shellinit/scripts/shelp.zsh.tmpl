@@ -2,18 +2,32 @@
 # SHELP_HOOKS lists the shells whose integration is loaded, so
 # `shelp setup shell` can tell the hook is already active.
 typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
+# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
+# command for, false when the binary runs it as one of its commands. The
+# binary decides (`shelp __kind`, the decision it makes itself when it
+# runs ARGS), not a list here: a shell keeps this hook until it restarts,
+# so a list would miss commands added by an upgrade since and send
+# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
+# a shelp too old to know __kind fails at once instead of asking a model
+# about "__kind ..."; any answer but "task" runs ARGS as typed.
+_shelp_is_task() {
+  [[ $(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null) == task ]]
+}
+
 # `shelp <task>` puts the suggested command on your next prompt line
 # (print -rz: -r, or print would turn a `\n` in the command into a real
-# newline), ready to edit or run. Other subcommands pass straight through.
+# newline), ready to edit or run; so does `shelp suggest <task>`. Commands
+# (`shelp providers`, `shelp help config`, ...) pass straight through.
 shelp() {
-  case "${1-}" in
-    ''|-h|--help|help|explain|-e|init|setup|providers|config|completion|version|--version)
-      SHELP_SHELL=zsh command shelp "$@" ;;
-    *)
-      local cmd
-      cmd=$(SHELP_SHELL=zsh command shelp suggest "$@") || return
-      [[ -n $cmd ]] && print -rz -- "$cmd" ;;
-  esac
+  if [[ ${1-} == suggest ]]; then
+    shift
+  elif [[ -z ${1-} ]] || ! _shelp_is_task "$@"; then
+    SHELP_SHELL=zsh command shelp "$@"
+    return
+  fi
+  local cmd
+  cmd=$(SHELP_SHELL=zsh command shelp suggest "$@") || return
+  [[ -n $cmd ]] && print -rz -- "$cmd"
 }
 
 # Don't glob the task: `shelp find all *.log files` should reach shelp as
@@ -143,6 +157,24 @@ bindkey '{{.Bind}}' shelp-widget
 # typed. `shelp providers`, `shelp -p ... task`, and every other
 # subcommand/flag form still runs normally. Opt out with `shelp init zsh
 # --no-line-mode` or config `[shell] line_mode = false`.
+
+# _shelp_line_is_task REST: _shelp_is_task on the words of REST, the line
+# after `shelp`, split on whitespace only (no quote removal, no expansion:
+# a quoted or globbed word is never a command) and cut where the shell
+# would end shelp's arguments, at the first operator or redirection --
+# `shelp help config | less` asks about `help config`.
+_shelp_line_is_task() {
+  emulate -L zsh
+  setopt extendedglob
+  local IFS=$' \t\n' w
+  local -a args
+  for w in ${=1}; do
+    [[ $w == [0-9]#[\<\>\|\&\;\(\)]* ]] && break
+    args+=("$w")
+  done
+  _shelp_is_task "${args[@]}"
+}
+
 _shelp_raw_dispatch() {
   # $1: mode (suggest|explain); $2: original typed line (for history);
   # $3: raw payload, byte-for-byte.
@@ -198,8 +230,6 @@ shelp-accept-line() {
       rest=${rest#"${rest%%[^[:space:]]*}"}
       local word1=${rest%%[[:space:]]*}
       case $word1 in
-        '')
-          zle accept-line ;;
         explain|-e)
           local tail=${rest#"$word1"}
           tail=${tail#"${tail%%[^[:space:]]*}"}
@@ -208,10 +238,18 @@ shelp-accept-line() {
           else
             _shelp_raw_dispatch explain "$raw" "$tail"
           fi ;;
-        -*|providers|config|completion|setup|init|version|help)
+        ''|-*)
+          # Nothing after `shelp`, or flags first (`shelp -p fm <task>`):
+          # only the shell can parse those, so the line runs as typed.
           zle accept-line ;;
         *)
-          _shelp_raw_dispatch suggest "$raw" "$rest" ;;
+          # A command (`shelp providers`, `shelp help config`) runs as
+          # typed; a task goes to shelp raw. The binary says which.
+          if _shelp_line_is_task "$rest"; then
+            _shelp_raw_dispatch suggest "$raw" "$rest"
+          else
+            zle accept-line
+          fi ;;
       esac
       ;;
     (*)

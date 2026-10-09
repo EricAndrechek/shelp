@@ -20,9 +20,21 @@ _shelp_suggest_flow() {
   fi
 }
 
+# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
+# command for, false when the binary runs it as one of its commands. The
+# binary decides (`shelp __kind`, the decision it makes itself when it
+# runs ARGS), not a list here: a shell keeps this hook until it restarts,
+# so a list would miss commands added by an upgrade since and send
+# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
+# a shelp too old to know __kind fails at once instead of asking a model
+# about "__kind ..."; any answer but "task" runs ARGS as typed.
+_shelp_is_task() {
+  [ "$(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null)" = task ]
+}
+
 shelp() {
   case "${1-}" in
-    ''|-h|--help|help|init|setup|providers|config|completion|version|--version)
+    '')
       SHELP_SHELL=bash command shelp "$@" ;;
     explain|-e)
       # On a terminal, a blank line after the explanation so it doesn't
@@ -40,7 +52,13 @@ shelp() {
       shift
       _shelp_suggest_flow "$@" ;;
     *)
-      _shelp_suggest_flow "$@" ;;
+      # Commands (`shelp providers`, `shelp help config`, ...) pass
+      # straight through; the binary says which.
+      if _shelp_is_task "$@"; then
+        _shelp_suggest_flow "$@"
+      else
+        SHELP_SHELL=bash command shelp "$@"
+      fi ;;
   esac
 }
 
@@ -101,6 +119,23 @@ case $- in
     # history never records the line that's actually submitted this way
     # (only an explicit `history -s` does), so __shelp_preaccept pushes
     # the line as typed before rewriting READLINE_LINE.
+
+    # _shelp_line_is_task REST: _shelp_is_task on the words of REST, the
+    # line after `shelp`, split on whitespace only (no quote removal, no
+    # expansion: a quoted or globbed word is never a command) and cut
+    # where the shell would end shelp's arguments, at the first operator
+    # or redirection -- `shelp help config | less` asks about `help config`.
+    _shelp_line_is_task() {
+      local w op='^[0-9]*[<>|&;()]'
+      local -a words=() args=()
+      IFS=$' \t\n' read -r -d '' -a words <<<"$1" || :
+      for w in "${words[@]}"; do
+        [[ $w =~ $op ]] && break
+        args+=("$w")
+      done
+      _shelp_is_task "${args[@]}"
+    }
+
     __shelp_preaccept() {
       local line=$READLINE_LINE
       case $line in
@@ -111,7 +146,6 @@ case $- in
       rest=${rest#"${rest%%[^[:space:]]*}"}
       local word1=${rest%%[[:space:]]*}
       case $word1 in
-        '') return 0 ;;
         explain | -e)
           local tail=${rest#"$word1"}
           tail=${tail#"${tail%%[^[:space:]]*}"}
@@ -120,9 +154,14 @@ case $- in
           READLINE_LINE="shelp explain -- $(printf '%q' "$tail")"
           READLINE_POINT=${#READLINE_LINE}
           ;;
-        -* | providers | config | completion | setup | init | version | help)
+        '' | -*)
+          # Nothing after `shelp`, or flags first (`shelp -p fm <task>`):
+          # only the shell can parse those, so the line runs as typed.
           return 0 ;;
         *)
+          # A command (`shelp providers`, `shelp help config`) runs as
+          # typed; a task goes to shelp raw. The binary says which.
+          _shelp_line_is_task "$rest" || return 0
           history -s -- "$line" 2>/dev/null
           READLINE_LINE="shelp suggest -- $(printf '%q' "$rest")"
           READLINE_POINT=${#READLINE_LINE}
