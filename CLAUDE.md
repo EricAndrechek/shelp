@@ -64,11 +64,34 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   (1 + extra prompt lines) and redraws over the blank line and, under
   p10k's two-line prompt, the explanation's last line; `zle -I` already
   draws a fresh prompt below. fish's `commandline -f repaint` has the same
-  blind spot, hence the `count (fish_prompt) - 1` newlines first. The
+  blind spot, hence `_shelp_prompt_room`'s `count (fish_prompt) - 1`
+  newlines first, after an explanation and after a failed suggestion's
+  error alike (fish 3.6 and 4.9). fish's raw-line suggest also defines a
+  SIGINT handler (`_shelp_on_sigint`) for the call's duration: without
+  one, Ctrl-C makes fish cancel the bind function on the spot, leaving
+  the status drawn and the line redrawn at the wrong column; with one it
+  carries on (status cleared, line back, shelp's error not shown). bash:
+  raw-line Enter runs shelp as a command after readline is done, stderr
+  on the terminal, so shelp's own spinner is the status; `shelp-widget`
+  runs under `bind -x`, which clears the line (prompt's last line
+  included) to column 0 before calling it and redraws it after, so a dim
+  `shelp: thinking…` stands there and is erased (`\r\e[K`) before
+  returning. Ctrl-C needs a temporary `trap : INT` (the user's put back
+  from `$(trap -p INT)`): without it bash abandons the function with the
+  status on screen and drops the line; with it the line comes back. The
   suite renders sessions with pyte (40x120 pty; re-runs itself under `uv
   run --with pyte` when missing, byte-stream fallback otherwise) and
   checks every explanation line plus exactly one blank line before the
-  next prompt, with one- and two-line prompts.
+  next prompt, with one- and two-line prompts. fish runs natively when a
+  `fish` is on PATH (CI), else in `docker run --rm` (fish 3.6, a static
+  linux shelp for the daemon's arch); `SHELP_TEST_FISH=docker|native|<path>`
+  overrides. The pty answers DA1 and CPR like a terminal: fish 4 waits
+  10s for DA1, then warns and degrades. fish 4 pages interactive
+  `history` output (pipe it). The stub draws shelp's spinner when its
+  stderr is a terminal and answers Ctrl-C like shelp (`shelp: context
+  canceled`, exit 1). Debian/Ubuntu's zsh-syntax-highlighting 0.7.1
+  empties `region_highlight` on every redraw, so the plugin run uses
+  Homebrew's (0.8) only.
 - `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
   own `[table]` via `cfg.Section(name, &v)`.
 - `internal/cooldown/` — the rate-limit cooldown store
