@@ -86,8 +86,9 @@ are a task, so `shelp help me find big files` still works.
 
 **Raw line mode (default on).** Once hooked into your shell, pressing
 Enter on a line that starts with `shelp ` (a task, or a `shelp
-explain`/`shelp -e` target — not a flag or one of `providers setup init
-version help`) sends the REST OF THE LINE to shelp byte-for-byte: no
+explain`/`shelp -e` target — not a flag, and not one of shelp's own
+commands, which the binary itself decides via `shelp __kind`, so a hook
+never goes stale) sends the REST OF THE LINE to shelp byte-for-byte: no
 shell parsing, so an apostrophe (`shelp what's my ip`), a `*.log` glob, a
 literal `$HOME`, spaces, quotes, and backslashes all reach the model
 exactly as typed — the line is never left dangling on an open quote. The

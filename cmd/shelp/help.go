@@ -278,8 +278,6 @@ func printHelp(w io.Writer, name string) {
 	fmt.Fprint(w, styleHelp(p, text))
 }
 
-func printUsage(w io.Writer) { printHelp(w, "") }
-
 // isHeading reports whether a help line is a section heading: unindented,
 // a capitalized first word, and nothing but letters and spaces after it,
 // optionally followed by a parenthesized qualifier ("Flags (setup shell)").
