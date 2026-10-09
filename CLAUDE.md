@@ -224,6 +224,8 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   `{SigningCertificateChain: [<DER>...]}` (plutil's JSON output can't
   hold <data>; the tool converts to XML). Signed copies import under
   whatever file name setup gives them, so `[shortcuts] name` still works.
+  Verified live 2026-10-09: setup opened the embedded copy with no
+  signing, Add, `installed (v6)`.
 - `shortcuts sign` is a round trip to Apple's server and fails now and
   then (HTTP 500s; once a 20s stall reported as "The file doesn't exist."
   with the input file present, after a ~20s stall -- a good attempt
@@ -555,9 +557,6 @@ chain line.
 
 ## Open items (2026-10-07)
 
-- The embedded pre-signed shortcut (format 6) still needs one live
-  import: delete "shelp", run `./bin/shelp setup shortcuts` (no signing
-  line should print), Add, expect `installed (v6)`.
 - The Keep Both branch of the update wait is covered by scripted tests
   only; Replace was run live with format 4.
 - Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
