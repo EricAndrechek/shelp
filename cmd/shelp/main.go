@@ -27,43 +27,6 @@ import (
 
 var version = "dev"
 
-const usage = `shelp: turn a task into a shell command, or explain one.
-
-Usage:
-  shelp [flags] <task...>              suggest a command (same as: shelp suggest)
-  shelp explain [flags] <command...>   explain a command (alias: -e)
-  shelp providers [--json] [--all]     list model providers and whether they work
-  shelp providers --reset-cooldowns    clear all recorded rate-limit cooldowns
-  shelp setup [shortcuts]              install optional pieces (Apple Shortcuts)
-  shelp setup shell [--shell sh] [--bind KEY] [--dry-run]
-                                        add shelp's hook to your shell rc file
-  shelp init <zsh|bash|fish> [--bind KEY] [--no-line-mode]
-                                        print shell integration; add to your rc:
-                                         eval "$(shelp init zsh)"
-  shelp version
-
-Flags (suggest/explain):
-  -p, --provider ids   provider or comma-separated fallback chain
-                       (env SHELP_PROVIDER; config "providers")
-  --shell name         target shell (default: from shell integration or $SHELL)
-  --template name      prompt template (default: ` + prompt.Default + `)
-  --context fields     what to tell the model: os,shell,cwd,tools (default: os,shell)
-  --json               print {"text","provider","latency_ms"} instead of text
-  -v, --verbose        report provider and latency on stderr
-  --force              call a provider even if it's in a rate-limit cooldown
-
-Flags (init):
-  --bind KEY           bind shelp-widget to KEY (caret notation "^G", or a
-                       shell-native escape form); also config "[shell] bind"
-  --no-line-mode       disable raw-line Enter interception (default: on);
-                       also config "[shell] line_mode = false"
-
-Flags (setup shell):
-  --shell sh           zsh, bash, or fish (default: from $SHELL)
-  --bind KEY           keybinding to pass through to "shelp init ... --bind"
-  --dry-run            print what would change without writing it
-`
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -96,29 +59,65 @@ type usageError struct{ error }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		printUsage(stderr)
+		printHelp(stderr, "")
 		return usageError{errors.New("no task given")}
 	}
+	rest := args[1:]
 	switch args[0] {
-	case "-h", "--help", "help":
-		printUsage(stdout)
+	case "-h", "--help":
+		printHelp(stdout, "")
 		return nil
+	case "help":
+		// Bare "help" is help, and so is "help <command>". Anything else
+		// ("shelp help me find big files") is a task.
+		if len(rest) == 0 {
+			printHelp(stdout, "")
+			return nil
+		}
+		if len(rest) == 1 {
+			if _, ok := helpTopic(rest[0]); ok && rest[0] != "" {
+				printHelp(stdout, rest[0])
+				return nil
+			}
+			if rest[0] == "-h" || rest[0] == "--help" {
+				printHelp(stdout, "help")
+				return nil
+			}
+		}
 	case "version", "--version":
-		printVersion(stdout)
-		return nil
+		// Likewise "shelp version of node installed" is a task.
+		if len(rest) == 0 {
+			printVersion(stdout)
+			return nil
+		}
+		if len(rest) == 1 && (rest[0] == "-h" || rest[0] == "--help") {
+			printHelp(stdout, "version")
+			return nil
+		}
 	case "init":
-		return runInit(args[1:], stdout, stderr)
+		return runInit(rest, stdout, stderr)
 	case "providers":
-		return runProviders(ctx, args[1:], stdout)
+		return runProviders(ctx, rest, stdout, stderr)
 	case "setup":
-		return runSetup(ctx, args[1:], stdout, stderr)
+		return runSetup(ctx, rest, stdout, stderr)
 	case "explain", "-e":
-		return runGenerate(ctx, provider.Explain, args[1:], stdout, stderr)
+		return runGenerate(ctx, provider.Explain, rest, stdout, stderr)
 	case "suggest":
-		return runGenerate(ctx, provider.Suggest, args[1:], stdout, stderr)
-	default:
-		return runGenerate(ctx, provider.Suggest, args, stdout, stderr)
+		return runGenerate(ctx, provider.Suggest, rest, stdout, stderr)
 	}
+	return runGenerate(ctx, provider.Suggest, args, stdout, stderr)
+}
+
+// flagErr ends a command whose flags did not parse: its help goes to
+// stderr, and the error exits 2. -h/--help (flag.ErrHelp) is not an error:
+// the help goes to stdout.
+func flagErr(err error, name string, stdout, stderr io.Writer) error {
+	if errors.Is(err, flag.ErrHelp) {
+		printHelp(stdout, name)
+		return nil
+	}
+	printHelp(stderr, name)
+	return usageError{err}
 }
 
 func loadConfig() (*config.Config, error) { return config.LoadDefault() }
@@ -127,7 +126,6 @@ func loadConfig() (*config.Config, error) { return config.LoadDefault() }
 // runs at every shell start (via `eval "$(shelp init zsh)"`), so it stays
 // cheap: a config read (file I/O only, no probing) and a template render.
 func runInit(args []string, stdout, stderr io.Writer) error {
-	usage := fmt.Sprintf("usage: shelp init <%s> [--bind KEY] [--no-line-mode]", strings.Join(shellinit.Shells(), "|"))
 	var shellName, bind string
 	var noLineMode bool
 	var pos []string
@@ -137,6 +135,7 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 		case a == "--bind":
 			i++
 			if i >= len(args) {
+				printHelp(stderr, "init")
 				return usageError{errors.New("--bind needs a value, e.g. --bind '^G'")}
 			}
 			bind = args[i]
@@ -145,14 +144,15 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 		case a == "--no-line-mode":
 			noLineMode = true
 		case a == "-h" || a == "--help":
-			fmt.Fprintln(stdout, usage)
+			printHelp(stdout, "init")
 			return nil
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 1 {
-		return usageError{errors.New(usage)}
+		printHelp(stderr, "init")
+		return usageError{fmt.Errorf("init needs one shell: %s", strings.Join(shellinit.Shells(), ", "))}
 	}
 	shellName = pos[0]
 
@@ -178,8 +178,7 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 
 func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(string(mode), flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, usage) }
+	fs.SetOutput(io.Discard)
 	var provFlag, shell, tmpl, ctxFields string
 	var asJSON, verbose, force bool
 	fs.StringVar(&provFlag, "p", "", "")
@@ -191,11 +190,13 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	fs.BoolVar(&verbose, "v", false, "")
 	fs.BoolVar(&verbose, "verbose", false, "")
 	fs.BoolVar(&force, "force", false, "")
+	helpName := string(mode)
 	if err := fs.Parse(args); err != nil {
-		return usageError{err}
+		return flagErr(err, helpName, stdout, stderr)
 	}
 	input := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if input == "" {
+		printHelp(stderr, helpName)
 		return usageError{fmt.Errorf("usage: shelp %s <%s>", mode, map[provider.Mode]string{provider.Suggest: "task", provider.Explain: "command"}[mode])}
 	}
 
@@ -344,15 +345,16 @@ func splitList(s string) []string {
 	return out
 }
 
-func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
+func runProviders(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("providers", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	asJSON := fs.Bool("json", false, "")
 	resetCooldowns := fs.Bool("reset-cooldowns", false, "")
 	all := fs.Bool("all", false, "")
 	fs.BoolVar(all, "verbose", false, "")
 	fs.BoolVar(all, "v", false, "")
 	if err := fs.Parse(args); err != nil {
-		return usageError{err}
+		return flagErr(err, "providers", stdout, stderr)
 	}
 	if *resetCooldowns {
 		if err := cooldown.Reset(); err != nil {
@@ -408,43 +410,42 @@ func runProviders(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func runSetup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		printHelp(stdout, "setup")
+		return nil
+	}
 	// "shell" takes its own flags (--shell/--bind/--dry-run), unlike the
 	// registered provider.SetupStep steps below (which take none), so it's
 	// handled as its own subcommand rather than a step.
-	if len(args) > 0 && args[0] == "shell" {
-		return runSetupShell(ctx, args[1:], stdout)
+	if args[0] == "shell" {
+		return runSetupShell(ctx, args[1:], stdout, stderr)
 	}
-	cfg, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	steps := provider.SetupSteps()
-	if len(steps) == 0 {
-		fmt.Fprintln(stdout, "shelp setup: nothing to set up on this system")
-		return nil
-	}
-	ran := false
-	for _, s := range steps {
-		if len(args) > 0 && args[0] != s.Name {
+	for _, s := range provider.SetupSteps() {
+		if s.Name != args[0] {
 			continue
 		}
-		ran = true
-		fmt.Fprintln(stdout, style.For(stdout).Bold(style.For(stdout).Accent(fmt.Sprintf("== %s: %s", s.Name, s.Help))))
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			printHelp(stdout, "setup")
+			return nil
+		}
+		cfg, err := loadConfig()
+		if err != nil {
+			return err
+		}
 		if err := s.Run(ctx, cfg, stdout, stderr); err != nil {
 			return fmt.Errorf("setup %s: %w", s.Name, err)
 		}
+		return nil
 	}
-	if !ran {
-		return usageError{fmt.Errorf("unknown setup step %q", args[0])}
-	}
-	return nil
+	printHelp(stderr, "setup")
+	return usageError{fmt.Errorf("unknown setup target %q", args[0])}
 }
 
 // runSetupShell handles `shelp setup shell [--shell sh] [--bind KEY]
 // [--dry-run]`: it appends (or updates) shelp's hook in the target
 // shell's rc file. See internal/shellinit.Setup for the mechanics
 // (idempotency, chezmoi/symlink detection, the macOS bash_profile note).
-func runSetupShell(ctx context.Context, args []string, stdout io.Writer) error {
+func runSetupShell(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("setup shell", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var shell, bind string
@@ -453,10 +454,11 @@ func runSetupShell(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.StringVar(&bind, "bind", "", "")
 	fs.BoolVar(&dryRun, "dry-run", false, "")
 	if err := fs.Parse(args); err != nil {
-		return usageError{fmt.Errorf("usage: shelp setup shell [--shell zsh|bash|fish] [--bind KEY] [--dry-run]: %w", err)}
+		return flagErr(err, "setup", stdout, stderr)
 	}
 	if fs.NArg() > 0 {
-		return usageError{errors.New("usage: shelp setup shell [--shell zsh|bash|fish] [--bind KEY] [--dry-run]")}
+		printHelp(stderr, "setup")
+		return usageError{fmt.Errorf("setup shell takes no arguments, got %q", fs.Arg(0))}
 	}
 	res, err := shellinit.Setup(ctx, shellinit.SetupOptions{Shell: shell, Bind: bind, DryRun: dryRun})
 	if err != nil {

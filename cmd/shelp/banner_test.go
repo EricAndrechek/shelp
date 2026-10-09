@@ -25,8 +25,7 @@ func runOut(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	return out.String(), errb.String(), err
 }
 
-// TestBannerPlain pins the output scripts see (not a terminal): byte for
-// byte what shelp printed before it had a logo.
+// TestBannerPlain pins the output scripts see (not a terminal).
 func TestBannerPlain(t *testing.T) {
 	setColorEnv(t, "")
 	for _, arg := range []string{"version", "--version"} {
@@ -35,16 +34,25 @@ func TestBannerPlain(t *testing.T) {
 			t.Errorf("%s: got (%q, %q, %v), want (%q, \"\", nil)", arg, out, errOut, err, "shelp "+version+"\n")
 		}
 	}
-	for _, arg := range []string{"-h", "--help", "help"} {
-		out, errOut, err := runOut(t, arg)
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"help"}} {
+		out, errOut, err := runOut(t, args...)
 		if err != nil || out != usage || errOut != "" {
-			t.Errorf("%s: not exactly usage on stdout (err %v, stderr %q):\n%s", arg, err, errOut, out)
+			t.Errorf("%v: not exactly usage on stdout (err %v, stderr %q):\n%s", args, err, errOut, out)
 		}
 	}
 	out, errOut, err := runOut(t)
 	var ue usageError
 	if !errors.As(err, &ue) || out != "" || errOut != usage {
 		t.Errorf("no args: got (stdout %q, err %v), want usage on stderr and a usageError:\n%s", out, err, errOut)
+	}
+	// The short top-level help names every command and the help routes.
+	for _, w := range []string{"shelp turns a task", "explain ", "providers ", "setup ", "init ", "version ", "help ", "-h, --help", `Run "shelp help <command>"`} {
+		if !strings.Contains(usage, w) {
+			t.Errorf("usage lacks %q", w)
+		}
+	}
+	if n := strings.Count(usage, "\n"); n > 25 {
+		t.Errorf("top-level help is %d lines, want it short", n)
 	}
 }
 
@@ -73,7 +81,7 @@ func TestBannerTerminal(t *testing.T) {
 	if got := style.Strip(out); got != logo+"\n\n"+usage {
 		t.Errorf("--help: stripped output is not logo + usage:\n%s", got)
 	}
-	for _, h := range []string{"Usage:", "Flags (suggest/explain):", "Flags (init):", "Flags (setup shell):"} {
+	for _, h := range []string{"Usage", "Commands", "Flags"} {
 		if !strings.Contains(out, style.Forced(style.Color16).Bold(style.Forced(style.Color16).Accent(h))) {
 			t.Errorf("--help: heading %q is not bold+accent", h)
 		}
@@ -82,5 +90,37 @@ func TestBannerTerminal(t *testing.T) {
 	_, errOut, _ := runOut(t)
 	if got := style.Strip(errOut); got != logo+"\n\n"+usage {
 		t.Errorf("no args: stripped stderr is not logo + usage:\n%s", got)
+	}
+}
+
+// A command's help on a terminal has no logo, colored headings, and the
+// same text once stripped.
+func TestCommandHelpTerminal(t *testing.T) {
+	setColorEnv(t, "1")
+	out, _, err := runOut(t, "help", "setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := style.Strip(out); got != commandHelp["setup"] {
+		t.Errorf("stripped setup help differs:\n%s", got)
+	}
+	p := style.Forced(style.Color16)
+	for _, h := range []string{"Usage", "Flags (setup shell)"} {
+		if !strings.Contains(out, p.Bold(p.Accent(h))) {
+			t.Errorf("heading %q is not bold+accent", h)
+		}
+	}
+}
+
+func TestIsHeading(t *testing.T) {
+	for l, want := range map[string]bool{
+		"Usage": true, "Flags (setup shell)": true, "Commands": true,
+		"": false, "  Usage": false, "usage": false, "Usage:": false,
+		"Run \"shelp help <command>\" for a command's flags.":       false,
+		"shelp turns a task into a shell command, or explains one.": false,
+	} {
+		if got := isHeading(l); got != want {
+			t.Errorf("isHeading(%q) = %v, want %v", l, got, want)
+		}
 	}
 }
