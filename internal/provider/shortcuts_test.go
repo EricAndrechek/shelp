@@ -376,8 +376,8 @@ func TestShortcutsProvidersShareOneName(t *testing.T) {
 		if sp.name != "My shelp" || !strings.Contains(p.Description(), `"My shelp"`) {
 			t.Errorf("%s: name %q, description %q", p.ID(), sp.name, p.Description())
 		}
-		if chat := strings.HasPrefix(p.ID(), "shortcuts:chatgpt"); chat != strings.Contains(LabelOf(p), "ChatGPT extension") {
-			t.Errorf("%s: label %q", p.ID(), LabelOf(p))
+		if strings.Contains(LabelOf(p), "extension") {
+			t.Errorf("%s: label %q mentions the extension", p.ID(), LabelOf(p))
 		}
 	}
 }

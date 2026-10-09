@@ -134,9 +134,18 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 	}
 
 	byID := map[string]string{}
-	idw := 0
 	for _, r := range rows {
 		byID[r.ID] = r.Status
+	}
+	hidden := map[string]bool{}
+	if !all {
+		hidden = webTwins(rows)
+	}
+	idw := 0
+	for _, r := range rows {
+		if hidden[r.ID] {
+			continue
+		}
 		if w := style.Width(r.ID); w > idw {
 			idw = w
 		}
@@ -190,7 +199,14 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 				fixes = append(fixes, f)
 			}
 		}
+		var firstHidden string
 		for _, r := range g {
+			if hidden[r.ID] {
+				if firstHidden == "" {
+					firstHidden = r.ID
+				}
+				continue
+			}
 			id := style.PadRight(r.ID, idw)
 			switch r.Status {
 			case statusOK:
@@ -217,11 +233,35 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 				}
 			}
 		}
+		if firstHidden != "" {
+			line("    " + p.Dim("add -web for web search, e.g. "+firstHidden))
+		}
 		for _, f := range fixes {
 			line("    " + p.Dim("→") + " " + f)
 		}
 	}
 	return out.String()
+}
+
+// webTwins returns the IDs of rows that are another row's ID + "-web" with
+// the same status and reason: the default view folds them into one hint
+// line. A twin whose status differs from its base stays visible.
+func webTwins(rows []providerRow) map[string]bool {
+	byID := map[string]providerRow{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	out := map[string]bool{}
+	for _, r := range rows {
+		base, ok := strings.CutSuffix(r.ID, "-web")
+		if !ok {
+			continue
+		}
+		if b, ok := byID[base]; ok && b.Status == r.Status && b.Reason == r.Reason {
+			out[r.ID] = true
+		}
+	}
+	return out
 }
 
 // offlineNote flags the chain line when the machine has no network route.

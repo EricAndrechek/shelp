@@ -178,14 +178,11 @@ func (p *shortcutsProvider) Description() string {
 }
 
 // Label is the short display name: the model, plus " + web search" for the
-// web variants, plus what the ChatGPT ones need from macOS.
+// web variants, 
 func (p *shortcutsProvider) Label() string {
 	l := p.variant.model
 	if p.variant.web {
 		l += " + web search"
-	}
-	if p.variant.model == "ChatGPT" {
-		l += " (needs Apple's ChatGPT extension)"
 	}
 	return l
 }

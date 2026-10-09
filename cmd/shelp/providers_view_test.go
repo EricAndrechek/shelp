@@ -42,10 +42,9 @@ const wantSample = `chain  shortcuts:apple-pro → claude:sonnet → fm   (confi
 Apple Shortcuts
   ✓ shortcuts:apple-pro      Apple Intelligence Pro
   · shortcuts:apple          not installed
-  · shortcuts:apple-web      not installed
   · shortcuts:apple-pro-web  not installed
   · shortcuts:chatgpt        not installed; needs the ChatGPT extension (System Settings › Siri)
-  · shortcuts:chatgpt-web    not installed; needs the ChatGPT extension (System Settings › Siri)
+    add -web for web search, e.g. shortcuts:apple-web
     → run ` + "`shelp setup shortcuts`" + `
 
 On-device
@@ -130,6 +129,36 @@ func TestRenderProvidersAllShowsDetail(t *testing.T) {
 	}
 	if strings.Contains(renderProviders(style.Plain(), sampleRows(), sampleChain, "config", false, 0, false), "connection refused") {
 		t.Error("default view must not show details")
+	}
+}
+
+// The installed-and-current view: three rows, the fold line, no -web twins.
+func TestRenderProvidersFoldsWebTwins(t *testing.T) {
+	ok := func(id, label string) providerRow {
+		return providerRow{ID: id, Kind: "apple-cloud", Status: "ok", Available: true, Label: label, Group: `"shelp" · v6`}
+	}
+	rows := []providerRow{
+		ok("shortcuts:apple", "Apple Intelligence"), ok("shortcuts:apple-web", "Apple Intelligence + web search"),
+		ok("shortcuts:apple-pro", "Apple Intelligence Pro"), ok("shortcuts:apple-pro-web", "Apple Intelligence Pro + web search"),
+		ok("shortcuts:chatgpt", "ChatGPT"), ok("shortcuts:chatgpt-web", "ChatGPT + web search"),
+	}
+	want := `Apple Shortcuts  "shelp" · v6
+  ✓ shortcuts:apple      Apple Intelligence
+  ✓ shortcuts:apple-pro  Apple Intelligence Pro
+  ✓ shortcuts:chatgpt    ChatGPT
+    add -web for web search, e.g. shortcuts:apple-web
+`
+	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	if got := renderProviders(style.Plain(), rows, nil, "default", true, 0, false); strings.Count(got, "✓") != 6 || strings.Contains(got, "add -web") {
+		t.Errorf("--all must show all six rows and no fold line:\n%s", got)
+	}
+	// A twin with its own status stays visible.
+	rows[1].Status, rows[1].Reason = statusCooldown, "until 14:32 (usage limit)"
+	got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false)
+	if !strings.Contains(got, "◷ shortcuts:apple-web") || !strings.Contains(got, "e.g. shortcuts:apple-pro-web") {
+		t.Errorf("differing twin must stay visible:\n%s", got)
 	}
 }
 
