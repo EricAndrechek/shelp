@@ -71,6 +71,11 @@ type Status struct {
 	// --json.
 	Detail  string
 	Version string // backend version string when cheaply known
+	// Group is an optional short note about the backend a whole group of
+	// providers shares, shown dim after its heading in `shelp providers`
+	// when every row of the group that sets it agrees -- e.g. the Apple
+	// Shortcut all six shortcuts:* providers run: `"shelp" · v6`.
+	Group string
 }
 
 // Labeler is an optional interface a Provider implements to supply a short

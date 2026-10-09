@@ -176,3 +176,21 @@ func TestRenderProviders_OfflineNote(t *testing.T) {
 		t.Errorf("unexpected offline note:\n%s", off)
 	}
 }
+
+// A group whose rows agree on a Group note shows it after the heading;
+// rows that disagree show none.
+func TestRenderProvidersGroupNote(t *testing.T) {
+	rows := []providerRow{
+		{ID: "shortcuts:apple-pro", Kind: "apple-cloud", Status: statusOK, Label: "Apple Intelligence Pro", Group: `"shelp" · v6`},
+		{ID: "shortcuts:apple", Kind: "apple-cloud", Status: statusOK, Label: "Apple Intelligence", Group: `"shelp" · v6`},
+		{ID: "fm", Kind: "on-device", Status: statusOK, Label: "Apple on-device model"},
+	}
+	got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false)
+	if !strings.Contains(got, "Apple Shortcuts  \"shelp\" · v6\n") || !strings.Contains(got, "On-device\n") {
+		t.Errorf("want the shared Group after the Apple Shortcuts heading only:\n%s", got)
+	}
+	rows[1].Group = `"other" · v6`
+	if got := renderProviders(style.Plain(), rows, nil, "default", false, 0, false); !strings.Contains(got, "Apple Shortcuts\n") {
+		t.Errorf("rows that disagree must not show a Group:\n%s", got)
+	}
+}

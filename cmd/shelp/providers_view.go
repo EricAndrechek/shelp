@@ -22,6 +22,7 @@ type providerRow struct {
 	Available                                      bool
 	Fix, Detail                                    string
 	Label                                          string
+	Group                                          string `json:",omitempty"`
 }
 
 // Row status values.
@@ -48,7 +49,7 @@ func buildProviderRows(ps []provider.Provider, sts []provider.Status, cds map[st
 		}
 		st := sts[i]
 		r.Version, r.Available = st.Version, st.Available
-		r.Reason, r.Fix, r.Detail = st.Reason, st.Fix, st.Detail
+		r.Reason, r.Fix, r.Detail, r.Group = st.Reason, st.Fix, st.Detail, st.Group
 		r.Status = statusUnavailable
 		if st.Available {
 			r.Status = statusOK
@@ -90,6 +91,21 @@ func kindHeading(k provider.Kind, rows []providerRow) string {
 		return "Claude Code"
 	}
 	return string(k)
+}
+
+// groupNote is the Group every row of g that sets one agrees on, or "".
+func groupNote(g []providerRow) string {
+	note := ""
+	for _, r := range g {
+		switch {
+		case r.Group == "":
+		case note == "":
+			note = r.Group
+		case r.Group != note:
+			return ""
+		}
+	}
+	return note
 }
 
 func statusRank(s string) int {
@@ -161,7 +177,11 @@ func renderProviders(p style.Palette, rows []providerRow, chain []string, source
 		if out.Len() > 0 {
 			line("")
 		}
-		line(p.Bold(p.Accent(kindHeading(k, g))))
+		heading := p.Bold(p.Accent(kindHeading(k, g)))
+		if note := groupNote(g); note != "" {
+			heading += "  " + p.Dim(note)
+		}
+		line(heading)
 		var fixes []string
 		seen := map[string]bool{}
 		addFix := func(f string) {
