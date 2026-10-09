@@ -321,8 +321,34 @@ STUB_SOURCE = textwrap.dedent(
     Test knobs (env): SHELP_STUB_SLEEP=<seconds> sleeps first;
     SHELP_STUB_PIDFILE=<path> gets this process's pid at start;
     SHELP_STUB_MARKER=<path> is created after the sleep (so a killed stub
-    never creates it); SHELP_STUB_FAIL makes it fail."""
+    never creates it); SHELP_STUB_FAIL makes it fail.
+
+    While a suggest sleeps with stderr on a terminal it draws real
+    shelp's own thinking spinner there (internal/style/spinner.go): after
+    120ms, cursor hidden, CR + `<frame> thinking…` + EL every 80ms, then
+    CR + EL and the cursor shown again -- on Ctrl-C too, as real shelp
+    stops it when its context is cancelled."""
     import os, shlex, sys, time
+
+    def spin(seconds):
+        out = sys.stderr.buffer
+        end = time.time() + seconds
+        time.sleep(min(0.12, seconds))
+        if time.time() >= end:
+            return
+        dim, off = ("", "") if os.environ.get("NO_COLOR") else ("\\x1b[2m", "\\x1b[0m")
+        out.write(b"\\x1b[?25l")
+        try:
+            i = 0
+            while time.time() < end:
+                f = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[i % 10]
+                out.write(("\\r" + f + " " + dim + "thinking…" + off + "\\x1b[K").encode())
+                out.flush()
+                i += 1
+                time.sleep(max(0, min(0.08, end - time.time())))
+        finally:
+            out.write(b"\\r\\x1b[K\\x1b[?25h")
+            out.flush()
 
     args = sys.argv[1:]
     real = os.environ.get("SHELP_REAL_BIN")
@@ -355,7 +381,10 @@ STUB_SOURCE = textwrap.dedent(
     sleep_s = os.environ.get("SHELP_STUB_SLEEP")
     if sleep_s:
         try:
-            time.sleep(float(sleep_s))
+            if mode == "suggest" and sys.stderr.isatty():
+                spin(float(sleep_s))
+            else:
+                time.sleep(float(sleep_s))
         except KeyboardInterrupt:
             # as real shelp does when Ctrl-C cancels its context
             sys.stderr.write("shelp: context canceled\\n")
@@ -1037,6 +1066,8 @@ def bash_home(tmpdir):
         f.write("HISTFILE=%s/.bash_history\n" % d)
         f.write("HISTSIZE=200\n")
         f.write('eval "$(command shelp init bash)"\n')
+        # what `shelp init bash --bind '^X^G'` adds
+        f.write("bind -x '\"\\C-x\\C-g\": shelp-widget'\n")
     return d
 
 
@@ -1063,12 +1094,225 @@ def bash_suggest_roundtrip(s, raw):
     return got_echo, ("" if got_echo else f"echoed output missing; buf={s.buf[-400:]!r}")
 
 
+def bash_raw_status_checks(s, results):
+    """Raw line mode runs shelp as a command, after readline has accepted
+    the rewritten line, with stderr on the terminal, so shelp's own
+    spinner is the status (the stub draws the same): the rewritten line
+    stays put, the spinner runs on the row below, then the run> prompt
+    takes that row."""
+    task = "anim probe"
+    typed = "TESTPROMPT$ shelp suggest -- anim\\ probe"  # printf %q
+    s.send("export SHELP_STUB_SLEEP=1.5\r")
+    s.read_available(0.5)
+    s.buf = ""
+    start = len(s.raw)
+    s.send("shelp " + task + "\r")
+    seen = s.expect(re.escape(SPIN_TEXT), timeout=3, bounded=True)
+    s.read_for(0.3)
+    rows = s.screen()
+    if rows is None:
+        ok = seen
+    else:
+        r = last_row(rows, typed)
+        ok = seen and r is not None and r + 1 < len(rows) and SPIN_TEXT in rows[r + 1]
+    results.check("bash: status below the rewritten line while shelp runs (raw line)", ok, view(rows))
+    got = s.expect(re.escape("run> " + suggest_cmd(task)), timeout=8)
+    s.read_available(0.3)
+    rows = s.screen()
+    if rows is None:
+        seg = bytes(s.raw[start:])
+        i = seg.rfind(SPIN_TEXT.encode())
+        j = seg.find(b"run> ", i)
+        ok = got and 0 <= i < j and b"\r\x1b[K" in seg[i:j]
+    else:
+        r = last_row(rows, typed)
+        ok = (got and r is not None and r + 1 < len(rows)
+              and rows[r + 1] == "run> " + suggest_cmd(task) and no_status(rows, r)
+              and s.cursor_visible())
+    results.check("bash: status gone, run> line in its place (raw line)", ok, view(rows))
+    s.buf = ""
+    s.send("\r")
+    s.expect(r"TESTPROMPT\$ \r?$", timeout=8)
+    s.read_available(0.3)
+    s.send("unset SHELP_STUB_SLEEP\r")
+    s.read_available(0.5)
+
+
+def bash_widget_checks(s, results, scratch):
+    """shelp-widget (what --bind binds; ^X^G here) runs inside readline
+    via `bind -x`, which clears the line, prompt included, before calling
+    it and redraws both afterwards: the status stands on that row while
+    shelp runs and is gone before the redraw. Also NO_COLOR, a two-line
+    prompt, history untouched, a failing shelp, and Ctrl-C (shelp stopped,
+    status gone, the typed line back and editable, the INT trap
+    restored)."""
+    os.makedirs(scratch, exist_ok=True)
+    pidfile = os.path.join(scratch, "stub.pid")
+    marker = os.path.join(scratch, "stub.marker")
+
+    def run(line, wait=0.5):
+        s.buf = ""
+        s.send(line + "\r")
+        s.expect(r"TESTPROMPT\$ \r?$", timeout=6)
+        s.read_available(wait)
+
+    def history_tail(n):
+        run(f"history {n}", 0.3)
+        lines = strip_ansi(s.buf).replace("\r", "").split("\n")
+        return [re.sub(r"^\s*\d+\s+", "", l) for l in lines if re.match(r"^\s*\d+\s", l)]
+
+    run("unset NO_COLOR SHELP_STUB_MARKER SHELP_STUB_FAIL; export SHELP_STUB_SLEEP=1.5 "
+        "SHELP_STUB_PIDFILE=" + shlex.quote(pidfile))
+    run("echo hist-mark")
+    task = "widget probe"
+    want = "TESTPROMPT$ " + suggest_cmd(task)
+    for tag, setup, top in (
+        ("dim", None, None),
+        ("NO_COLOR", "export NO_COLOR=1", None),
+        ("two-line prompt", "unset NO_COLOR; PS1=$'TESTTOP\\nTESTPROMPT$ '", "TESTTOP"),
+    ):
+        if setup:
+            run(setup)
+        s.send(task)
+        s.read_available(0.3)
+        start = len(s.raw)
+        s.buf = ""
+        s.send("\x18\x07")
+        seen = s.expect(re.escape(STATUS_TEXT), timeout=3, bounded=True)
+        s.read_for(0.3)
+        rows = s.screen()
+        if rows is None:
+            ok = seen
+        else:
+            y, x = s.cursor()
+            ok = (seen and rows[y] == STATUS_TEXT and x == len(STATUS_TEXT)
+                  and (top is None or rows[y - 1] == top))
+        results.check(f"bash: shelp-widget status stands in place of the line ({tag})", ok, view(rows))
+        seg = bytes(s.raw[start:])
+        sgr = re.search(rb"\x1b\[[0-9;]*m" + re.escape(STATUS_TEXT.encode()), seg)
+        if tag == "dim":
+            results.check("bash: shelp-widget status is dim", sgr is not None, repr(seg[:200]))
+        elif tag == "NO_COLOR":
+            results.check("bash: shelp-widget NO_COLOR status is uncolored", seen and sgr is None,
+                          repr(seg[:200]))
+        got = s.expect(re.escape(want), timeout=8)
+        s.read_available(0.3)
+        rows = s.screen()
+        if rows is None:
+            seg = bytes(s.raw[start:])
+            i = seg.rfind(STATUS_TEXT.encode())
+            ok = got and i >= 0 and seg.find(b"\r\x1b[K", i) >= 0
+        else:
+            y, x = s.cursor()
+            ok = (got and rows[y] == want and x == len(want) and no_status(rows, y - 1)
+                  and (top is None or (rows[y - 1] == top and rows[y - 2] != top)))
+        results.check(f"bash: shelp-widget status gone, prompt + suggestion in place ({tag})",
+                      ok, view(rows))
+        s.send("\x15")  # unix-line-discard: drop the suggestion
+        s.read_available(0.3)
+        if tag == "dim":
+            tail = history_tail(2)
+            results.check("bash: shelp-widget leaves history unchanged",
+                          tail == ["echo hist-mark", "history 2"], repr(tail))
+    run("PS1='TESTPROMPT$ '")
+
+    # a failing shelp: status gone, the line as typed (the error is dropped)
+    run("export SHELP_STUB_FAIL=1")
+    s.send("fail probe")
+    s.read_available(0.3)
+    s.buf = ""
+    s.send("\x18\x07")
+    seen = s.expect(re.escape(STATUS_TEXT), timeout=3, bounded=True)
+    got = s.expect(re.escape("TESTPROMPT$ fail probe"), timeout=8)
+    s.read_available(0.3)
+    rows = s.screen()
+    if rows is None:
+        ok = seen and got
+    else:
+        y, x = s.cursor()
+        ok = seen and got and rows[y] == "TESTPROMPT$ fail probe" and no_status(rows, y - 1)
+    results.check("bash: failed shelp-widget clears the status, keeps the line", ok, view(rows))
+    s.send("\x15")
+    s.read_available(0.3)
+    run("unset SHELP_STUB_FAIL")
+
+    # Ctrl-C mid-call
+    for f in (pidfile, marker):
+        if os.path.exists(f):
+            os.remove(f)
+    run("export SHELP_STUB_MARKER=" + shlex.quote(marker))
+    line = "ctrlc probe"
+    s.send(line)
+    s.read_available(0.3)
+    s.buf = ""
+    t0 = time.time()
+    s.send("\x18\x07")
+    started = (wait_for_file(s, pidfile, 5)
+               and s.expect(re.escape(STATUS_TEXT), timeout=1, bounded=True))
+    s.read_for(0.3)
+    early = time.time() - t0 < 1.2  # the stub (1.5s) must still be running
+    s.send("\x03")
+    s.read_for(0.6)
+    s.read_available(0.2)
+    after = s.buf
+    try:
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        pid = None
+    results.check("bash: Ctrl-C in shelp-widget stops shelp",
+                  started and early and pid is not None and not pid_alive(pid),
+                  f"started={started} early={early} pid={pid} buf={after[-300:]!r}")
+    rows = s.screen()
+    if rows is None:
+        ok = ("TESTPROMPT$ " + line) in strip_ansi(after.split(STATUS_TEXT)[-1])
+    else:
+        y, x = s.cursor()
+        ok = (rows[y] == "TESTPROMPT$ " + line and x == len(rows[y])
+              and no_status(rows, y - 1))
+    results.check("bash: Ctrl-C in shelp-widget clears the status, hands the line back",
+                  ok, view(rows))
+    s.send(" more")
+    s.read_available(0.3)
+    rows = s.screen()
+    ok = (rows is None and " more" in s.buf) or \
+        (rows is not None and rows[s.cursor()[0]] == "TESTPROMPT$ " + line + " more")
+    results.check("bash: line still editable after Ctrl-C in shelp-widget", ok, view(rows))
+    rest = t0 + 1.5 + 1.0 - time.time()  # well past when the stub would finish
+    if rest > 0:
+        s.read_available(rest)
+    results.check("bash: Ctrl-C'd shelp-widget stub never finished (no marker)",
+                  not os.path.exists(marker), marker)
+    results.check("bash: Ctrl-C in shelp-widget ran nothing",
+                  suggest_cmd(line) not in strip_ansi(after + s.buf), after[-300:])
+    s.send("\x15")
+    s.read_available(0.3)
+
+    # the INT trap is put back: none, or the user's own
+    run("unset SHELP_STUB_SLEEP SHELP_STUB_PIDFILE SHELP_STUB_MARKER")
+    run("trap -p INT; echo trap-none-done")
+    none_ok = "SIGINT" not in strip_ansi(s.buf)
+    run("trap 'echo user-int' INT")
+    s.send("trap probe")
+    s.read_available(0.3)
+    s.send("\x18\x07")
+    s.expect(re.escape("TESTPROMPT$ " + suggest_cmd("trap probe")), timeout=8)
+    s.read_available(0.3)
+    s.send("\x15")
+    s.read_available(0.3)
+    run("trap -p INT")
+    user_ok = "trap -- 'echo user-int' SIGINT" in strip_ansi(s.buf)
+    results.check("bash: shelp-widget restores the INT trap (none, or the user's)",
+                  none_ok and user_ok, f"none={none_ok} user={user_ok} buf={s.buf[-200:]!r}")
+    run("trap - INT")
+
+
 def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
     cwd = os.path.join(tmpdir, "bash-cwd")
     os.makedirs(cwd, exist_ok=True)
     home = bash_home(tmpdir)
     env = bash_env(stub_dir, real_bin, home, cwd)
-    s = Session([bash_bin, "--noprofile", "-i"], env, cwd=cwd)
+    s = Session([bash_bin, "--noprofile", "-i"], env, cwd=cwd, ctty=True)
     try:
         ok = s.expect(r"TESTPROMPT\$ ", timeout=10)
         if not results.check("bash: prompt ready", ok, s.buf[-300:]):
@@ -1113,6 +1357,10 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         ok = "hi" in lines
         results.check("bash: plain `echo hi` still runs", ok, s.buf[-300:])
 
+        # the in-progress status, raw line mode and shelp-widget
+        bash_raw_status_checks(s, results)
+        bash_widget_checks(s, results, os.path.join(home, "widget"))
+
         # Ctrl-C while waiting: bash has already committed the rewritten
         # line by the time the slow call happens (bind -x can't keep a
         # command line "pending" the way zsh/fish's widgets can), so the
@@ -1123,12 +1371,16 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         s.read_available(0.5)
         s.buf = ""
         s.send("shelp what's my ip\r")
-        s.read_available(0.6)
+        s.read_for(0.6)  # not read_available: the spinner never pauses
         s.send("\x03")
         ok = s.expect(r"TESTPROMPT\$ \r?$", timeout=6)
         results.check("bash: Ctrl-C returns to a clean prompt", ok, s.buf[-500:])
         no_exec = suggest_cmd("what's my ip") not in strip_ansi(s.buf)
         results.check("bash: Ctrl-C did not execute the suggestion", no_exec, s.buf[-500:])
+        s.read_available(0.3)
+        rows = s.screen()
+        ok = rows is None or (no_status(rows, 0) and s.cursor_visible())
+        results.check("bash: Ctrl-C leaves no status behind", ok, view(rows))
         s.send("unset SHELP_STUB_SLEEP\r")
         s.read_available(0.5)
     finally:

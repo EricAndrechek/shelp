@@ -149,6 +149,32 @@ func TestRender_ZshAnimatedStatus(t *testing.T) {
 	}
 }
 
+// bash's shelp-widget runs inside readline (bind -x): its status must be
+// erased on every path, Ctrl-C included, which takes a temporary INT trap
+// that puts the user's own back. The pty suite checks the behavior; this
+// guards the shape and, when bash is installed, the syntax.
+func TestRender_BashWidgetStatus(t *testing.T) {
+	for _, o := range []Options{{}, {LineMode: true, Bind: "^G"}} {
+		got, err := Render("bash", o)
+		if err != nil {
+			t.Fatalf("Render(bash, %+v): %v", o, err)
+		}
+		for _, want := range []string{
+			`[ -t 2 ] && [ "${TERM-}" != dumb ]`,
+			`printf '\e[2;90mshelp: thinking…\e[0m' >&2`,
+			`saved_int=$(trap -p INT)`,
+			"trap : INT",
+			`if [ -n "$saved_int" ]; then eval "$saved_int"; else trap - INT; fi`,
+			`[ -n "$shown" ] && printf '\r\e[K' >&2`,
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("bash %+v: missing %q", o, want)
+			}
+		}
+		syntaxCheck(t, "bash", got, "-n")
+	}
+}
+
 // fish's raw-line suggest: a SIGINT handler only for the duration of the
 // call (else Ctrl-C cancels the function with the status still drawn), and
 // room for a multi-line prompt after an error as after an explanation.

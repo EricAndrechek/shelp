@@ -46,11 +46,37 @@ shelp() {
 
 # Widget: turn the text on the command line into a command in place.
 {{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bind -x '"\C-g": shelp-widget'{{end}}
+#
+# While shelp runs, a dim `shelp: thinking…` (plain under NO_COLOR) stands
+# where the line was: `bind -x` clears the line, prompt included, before
+# running this and leaves the cursor at the start of that row, and
+# readline redraws the prompt and line there afterwards -- so the status is
+# erased (`\r\e[K`) before returning, on every path. Ctrl-C needs a trap
+# for that: without one bash abandons this function and the line, leaving
+# the status on screen. With it shelp still gets the SIGINT (and stops),
+# the status is erased, and the typed line comes back, as in zsh and fish.
+# (The raw-line path below needs none of this: it runs shelp as a command,
+# after readline is done, with stderr on the terminal, so shelp's own
+# spinner shows and clears itself.)
 shelp-widget() {
   [ -n "$READLINE_LINE" ] || return
-  local cmd
-  cmd=$(SHELP_SHELL=bash command shelp suggest -- "$READLINE_LINE" 2>/dev/null) || return
-  [ -n "$cmd" ] && READLINE_LINE=$cmd && READLINE_POINT=${#cmd}
+  local cmd rc=0 shown= saved_int
+  if [ -t 2 ] && [ "${TERM-}" != dumb ]; then
+    if [ -n "${NO_COLOR-}" ]; then
+      printf 'shelp: thinking…' >&2
+    else
+      printf '\e[2;90mshelp: thinking…\e[0m' >&2
+    fi
+    shown=1
+  fi
+  saved_int=$(trap -p INT)
+  trap : INT
+  cmd=$(SHELP_SHELL=bash command shelp suggest -- "$READLINE_LINE" 2>/dev/null) || rc=$?
+  if [ -n "$saved_int" ]; then eval "$saved_int"; else trap - INT; fi
+  [ -n "$shown" ] && printf '\r\e[K' >&2
+  [ "$rc" -eq 0 ] && [ -n "$cmd" ] || return 0
+  READLINE_LINE=$cmd
+  READLINE_POINT=${#cmd}
 }
 
 # `bind` warns ("line editing not enabled") and is a no-op in a
