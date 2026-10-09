@@ -132,7 +132,7 @@ func Setup(ctx context.Context, opts SetupOptions) (SetupResult, error) {
 		return res, nil
 	}
 
-	if reason := managedElsewhere(ctx, rc); reason != "" {
+	if reason := ManagedElsewhere(ctx, rc); reason != "" {
 		res.Action = "manual"
 		res.Message = fmt.Sprintf("%s is %s -- add this line yourself:\n  %s", rc, reason, line)
 		return res, nil
@@ -221,10 +221,10 @@ func findBlock(content string) (blockRange, bool) {
 	return blockRange{start: si, end: end}, true
 }
 
-// managedElsewhere reports why rc should not be edited directly -- a
+// ManagedElsewhere reports why rc should not be edited directly -- a
 // symlink (stow/yadm-style dotfiles), or a chezmoi source (skipped
 // entirely when chezmoi isn't on PATH) -- or "" when it's fine to edit.
-func managedElsewhere(ctx context.Context, rc string) string {
+func ManagedElsewhere(ctx context.Context, rc string) string {
 	if fi, err := os.Lstat(rc); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		target, _ := os.Readlink(rc)
 		if target != "" {
@@ -287,4 +287,23 @@ func hookActive(shell string) bool {
 		}
 	}
 	return false
+}
+
+// HookInstalled reports whether shelp's hook is already set up for shell
+// ("" detects from $SHELL): loaded in this shell (SHELP_HOOKS), or a
+// `shelp init` line in its rc file. rc is that file's path.
+func HookInstalled(shell string) (installed bool, rc string, err error) {
+	shell, err = DetectShell(shell)
+	if err != nil {
+		return false, "", err
+	}
+	rc, err = RCFile(shell)
+	if err != nil {
+		return false, "", err
+	}
+	if hookActive(shell) {
+		return true, rc, nil
+	}
+	data, _ := os.ReadFile(rc)
+	return strings.Contains(string(data), "shelp init"), rc, nil
 }

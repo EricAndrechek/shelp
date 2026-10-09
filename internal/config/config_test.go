@@ -42,3 +42,35 @@ func TestLoadDefaultReadsExplicitPath(t *testing.T) {
 		t.Errorf("Providers = %v, want [fm]", c.Providers)
 	}
 }
+
+func TestSetProviders(t *testing.T) {
+	ids := []string{"fm", "claude:haiku"}
+	want := `providers = ["fm", "claude:haiku"]`
+	for name, c := range map[string]struct{ in, out string }{
+		"empty":    {"", want + "\n"},
+		"no-nl":    {"template = \"v4\"", "template = \"v4\"\n" + want + "\n"},
+		"replace":  {"# hi\nproviders = [\"a\"] # old\ntemplate = \"v4\"\n", "# hi\n" + want + "\ntemplate = \"v4\"\n"},
+		"multi":    {"providers = [\n  \"a\", # x ]\n  \"b\",\n]\ncooldown = \"1m\"\n[s]\nname = \"x\"\n", want + "\ncooldown = \"1m\"\n[s]\nname = \"x\"\n"},
+		"insert":   {"template = \"v4\"\n\n# the shortcut\n[shortcuts]\nname = \"x\"\n", "template = \"v4\"\n\n" + want + "\n\n# the shortcut\n[shortcuts]\nname = \"x\"\n"},
+		"in-table": {"[shell]\nproviders = [\"x\"]\n", want + "\n\n[shell]\nproviders = [\"x\"]\n"},
+		"multictx": {"context = [\n  \"os\",\n]\n[a]\n", "context = [\n  \"os\",\n]\n" + want + "\n\n[a]\n"},
+	} {
+		if got := SetProviders(c.in, ids); got != c.out {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, c.out)
+		}
+		if _, err := Parse(SetProviders(c.in, ids)); err != nil {
+			t.Errorf("%s: result does not parse: %v", name, err)
+		}
+	}
+}
+
+func TestSaveProvidersCreates(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a", "b", "config.toml")
+	if err := SaveProviders(p, []string{"fm"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil || len(c.Providers) != 1 || c.Providers[0] != "fm" {
+		t.Fatalf("got %+v, %v", c, err)
+	}
+}
