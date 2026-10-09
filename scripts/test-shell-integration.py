@@ -323,11 +323,12 @@ STUB_SOURCE = textwrap.dedent(
     SHELP_STUB_MARKER=<path> is created after the sleep (so a killed stub
     never creates it); SHELP_STUB_FAIL makes it fail.
 
-    While a suggest sleeps with stderr on a terminal it draws real
-    shelp's own thinking spinner there (internal/style/spinner.go): after
-    120ms, cursor hidden, CR + `<frame> thinking…` + EL every 80ms, then
-    CR + EL and the cursor shown again -- on Ctrl-C too, as real shelp
-    stops it when its context is cancelled."""
+    While it sleeps with stderr on a terminal it draws real shelp's own
+    thinking spinner there (internal/style/spinner.go): after 120ms,
+    cursor hidden, CR + `<frame> thinking…` + EL every 80ms, then CR + EL
+    and the cursor shown again. Ctrl-C (SIGINT) stops it the same way and
+    then, like real shelp when its context is cancelled, exits 130 and
+    prints nothing."""
     import os, shlex, sys, time
 
     def spin(seconds):
@@ -361,6 +362,11 @@ STUB_SOURCE = textwrap.dedent(
     if not args or args[0] not in ("suggest", "explain"):
         delegate()
 
+    # Real shelp catches SIGINT (signal.NotifyContext), which also undoes an
+    # inherited SIG_IGN -- zsh's background job starts with one.
+    import signal
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+
     mode = args[0]
     rest = args[1:]
     raw = None
@@ -381,14 +387,12 @@ STUB_SOURCE = textwrap.dedent(
     sleep_s = os.environ.get("SHELP_STUB_SLEEP")
     if sleep_s:
         try:
-            if mode == "suggest" and sys.stderr.isatty():
+            if sys.stderr.isatty():
                 spin(float(sleep_s))
             else:
                 time.sleep(float(sleep_s))
         except KeyboardInterrupt:
-            # as real shelp does when Ctrl-C cancels its context
-            sys.stderr.write("shelp: context canceled\\n")
-            sys.exit(1)
+            sys.exit(130)
 
     marker = os.environ.get("SHELP_STUB_MARKER")
     if marker:
@@ -936,6 +940,9 @@ def zsh_anim_checks(s, results, label, scratch):
                   not os.path.exists(marker), marker)
     results.check(f"{label}: Ctrl-C did not execute the suggestion",
                   suggest_cmd("what's my ip") not in strip_ansi(after_enter), after_enter[-300:])
+    # shelp exits 130 and prints nothing; the helper's own 130 shows no zle -M
+    results.check(f"{label}: Ctrl-C shows no message",
+                  re.search(r"shelp: (?!thinking)", strip_ansi(after_enter)) is None, after_enter[-300:])
     s.send("\x15")
     s.read_available(0.3)
     run("unset NO_COLOR COLORTERM SHELP_STUB_SLEEP SHELP_STUB_PIDFILE SHELP_STUB_MARKER")
@@ -1381,6 +1388,20 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         rows = s.screen()
         ok = rows is None or (no_status(rows, 0) and s.cursor_visible())
         results.check("bash: Ctrl-C leaves no status behind", ok, view(rows))
+        # shelp exits 130 on Ctrl-C and prints nothing; bash reports the 130
+        if rows is None:
+            quiet = "shelp:" not in strip_ansi(s.buf)
+        else:
+            r = max((i for i, row in enumerate(rows) if row.startswith("TESTPROMPT$ shelp suggest --")),
+                    default=0)
+            quiet = not any(row.startswith("shelp:") for row in rows[r:])
+        s.buf = ""
+        s.send("echo rc=$?\r")
+        s.expect(r"rc=\d+\r?\n", timeout=4)
+        rc130 = "rc=130" in [l.strip("\r") for l in strip_ansi(s.buf).split("\n")]
+        results.check("bash: Ctrl-C is silent, exit status 130", quiet and rc130,
+                      f"quiet={quiet} {view(rows)} buf={s.buf[-200:]!r}")
+        s.read_available(0.3)
         s.send("unset SHELP_STUB_SLEEP\r")
         s.read_available(0.5)
     finally:
@@ -1670,11 +1691,12 @@ def run_fish(tmpdir, results, host):
         rows = s.screen()
         typed = "TESTPROMPT% shelp what's my ip"
         if rows is None:
-            ok = "\r\x1b[K" in s.buf.split("shelp: thinking…")[-1] and "context canceled" not in s.buf
+            ok = ("\r\x1b[K" in s.buf.split("shelp: thinking…")[-1]
+                  and re.search(r"shelp: (?!thinking)", strip_ansi(s.buf)) is None)
         else:
             y, x = s.cursor()
             ok = (rows[y] == typed and x == len(typed) and no_status(rows, 0)
-                  and not any("context canceled" in r for r in rows))
+                  and not any(r.startswith("shelp:") for r in rows[y:]))
         results.check("fish: Ctrl-C clears the status, line back in place, no error", ok, view(rows))
         s.send(" please")
         s.read_available(0.4)
