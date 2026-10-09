@@ -463,3 +463,7 @@ through documented flags:
   noticeably slower than the other backends: about 1-2s per call even
   hardened down to a plain completion (it's a full coding agent starting
   up in headless mode, not a lightweight API request).
+
+## License
+
+MIT, see [LICENSE](LICENSE).

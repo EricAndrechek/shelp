@@ -536,6 +536,16 @@ chain line.
   bench/README.md).
 - `make vet test build`. Keep `shelp` startup < 10ms: no work in init()
   beyond registration.
+- `make ci` is exactly what CI runs (vet, `go test -race`, build,
+  `test-shell`); `.github/workflows/ci.yml` only installs prerequisites
+  (fish, uv) and calls it, plus `make vet test build` on Linux. Tests that
+  need a real Mac (`shortcuts sign`, the real `shortcuts` CLI) skip
+  themselves when `CI` is set; tests needing a tool (zsh, plutil) skip when
+  it is absent. Never put test logic in the YAML.
+- Release checklist: `make sign-shortcut` if the generator changed or the
+  embedded copy is within ~60 days of expiry; `make ci`; tag; bump
+  `Formula/shelp.rb`'s tag; `git -C "$(brew --repository
+  ericandrechek/shelp)" pull && brew upgrade ericandrechek/shelp/shelp`.
 - Commits: one change per commit; this repo has no remote.
 
 ## Benchmarking etiquette (learned the hard way, 2026-09-30)
