@@ -390,19 +390,29 @@ func TestLegacyShortcutsNotes(t *testing.T) {
 	t.Cleanup(func() { shortcutsListCmd = origList })
 	list := "shelp\nshelp · Apple Intelligence Pro\nshelp · Apple Intelligence Pro 1"
 	shortcutsListCmd = func(ctx context.Context) (string, error) { return list, nil }
+	var probed []string
 	installFakeActionCount(t, func(ctx context.Context, name string) (int, error) {
-		t.Errorf("the notes asked %q its action count; they only list names", name)
+		probed = append(probed, name)
 		return 0, nil
 	})
+	installFakeMarkerVersion(t, func(ctx context.Context, name string) (int, error) {
+		return ShortcutFormatVersion, nil
+	})
 	notes := legacyShortcutsNotes(context.Background(), &config.Config{})
-	if len(notes) != 1 || !strings.Contains(notes[0], `"shelp · Apple Intelligence Pro", "shelp · Apple Intelligence Pro 1"`) {
+	want := fmt.Sprintf(`Apple Shortcut "shelp": format v%d (current)`, ShortcutFormatVersion)
+	if len(notes) != 2 || notes[0] != want || !strings.Contains(notes[1], `"shelp · Apple Intelligence Pro", "shelp · Apple Intelligence Pro 1"`) {
 		t.Errorf("notes = %q", notes)
+	}
+	for _, p := range probed {
+		if p != "shelp" {
+			t.Errorf("the notes probed %q; legacy shortcuts are only ever listed by name", p)
+		}
 	}
 
 	resetShortcutsCache(t)
-	list = "shelp\nAsk AI"
+	list = "Ask AI"
 	if notes := legacyShortcutsNotes(context.Background(), &config.Config{}); notes != nil {
-		t.Errorf("notes without legacy shortcuts = %q, want none", notes)
+		t.Errorf("notes with no shelp shortcuts = %q, want none", notes)
 	}
 }
 

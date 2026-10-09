@@ -580,11 +580,26 @@ func legacyShortcutsNotes(ctx context.Context, cfg *config.Config) []string {
 		return nil
 	}
 	name := resolveShortcutName(cfg)
-	legacy := legacyShortcuts(set, name)
-	if len(legacy) == 0 {
-		return nil
+	var notes []string
+	// Which shortcut serves the shortcuts:* rows, and its format -- the
+	// same version check Detect already made (cachedShortcutVersion runs
+	// it once per process), so this costs no extra shortcut run.
+	if set[name] {
+		switch v, err := cachedShortcutVersion(ctx, name); {
+		case err != nil:
+			notes = append(notes, fmt.Sprintf("Apple Shortcut %q: couldn't read its format version", name))
+		case v < ShortcutFormatVersion:
+			notes = append(notes, fmt.Sprintf("Apple Shortcut %q: format v%d, current is v%d -- run `shelp setup shortcuts`", name, v, ShortcutFormatVersion))
+		case v > ShortcutFormatVersion:
+			notes = append(notes, fmt.Sprintf("Apple Shortcut %q: format v%d, newer than this shelp (v%d)", name, v, ShortcutFormatVersion))
+		default:
+			notes = append(notes, fmt.Sprintf("Apple Shortcut %q: format v%d (current)", name, v))
+		}
 	}
-	return []string{fmt.Sprintf("old shelp shortcuts, no longer used (shelp now uses one, %q): %s -- delete them in the Shortcuts app", name, quoteAll(legacy))}
+	if legacy := legacyShortcuts(set, name); len(legacy) > 0 {
+		notes = append(notes, fmt.Sprintf("old shelp shortcuts, no longer used (shelp now uses one, %q): %s -- delete them in the Shortcuts app", name, quoteAll(legacy)))
+	}
+	return notes
 }
 
 // --- Setup step ---------------------------------------------------------
