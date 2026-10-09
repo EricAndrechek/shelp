@@ -68,13 +68,28 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, style.For(os.Stderr).Err("shelp:"), err)
-		var ue usageError
-		if errors.As(err, &ue) {
-			os.Exit(2)
+		code, show := exitCode(ctx, err)
+		if show {
+			fmt.Fprintln(os.Stderr, style.For(os.Stderr).Err("shelp:"), err)
 		}
-		os.Exit(1)
+		os.Exit(code)
 	}
+}
+
+// exitCode decides how a failed run ends. Ctrl-C cancels ctx, and whatever
+// error the provider then returns ("could not reach ...: interrupt signal
+// received") is just the interruption echoed back, so an interrupted run
+// exits 130 (128 + SIGINT, as shells report it) without a message -- the
+// shell integrations show nothing for it either. A usage error exits 2.
+func exitCode(ctx context.Context, err error) (code int, show bool) {
+	if ctx.Err() != nil {
+		return 130, false
+	}
+	var ue usageError
+	if errors.As(err, &ue) {
+		return 2, true
+	}
+	return 1, true
 }
 
 type usageError struct{ error }
