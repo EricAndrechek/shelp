@@ -707,8 +707,9 @@ func TestRunShortcutsSetupInstallsMissing(t *testing.T) {
 	if len(lib.opened) != 1 || filepath.Base(lib.opened[0]) != "shelp.shortcut" {
 		t.Fatalf("opened %q, want one shelp.shortcut", lib.opened)
 	}
-	if !strings.Contains(stdout, `"Add Shortcut"`) || !strings.Contains(stdout, `"shelp" installed (v`+strconv.Itoa(ShortcutFormatVersion)+`)`) || !strings.Contains(stdout, "serves shortcuts:apple,") {
-		t.Errorf("stdout:\n%s", stdout)
+	want := "Signing \"shelp\" with Apple (switched off in tests)…\nOpening Shortcuts -- click \"Add Shortcut\" to install \"shelp\".\n✓ Installed \"shelp\" (v" + strconv.Itoa(ShortcutFormatVersion) + ").\n"
+	if stdout != want {
+		t.Errorf("stdout:\n%s\nwant:\n%s", stdout, want)
 	}
 	if stderr != "" {
 		t.Errorf("stderr:\n%s", stderr)
@@ -721,7 +722,7 @@ func TestRunShortcutsSetupInstallsMissing(t *testing.T) {
 func TestRunShortcutsSetupSkipsCurrent(t *testing.T) {
 	lib := scriptLibrary(t, shortcutState{names: []string{"shelp"}, versions: map[string]int{"shelp": ShortcutFormatVersion}})
 	stdout, _ := runSetup(t, "")
-	if len(lib.opened) != 0 || !strings.Contains(stdout, "up to date") {
+	if want := "✓ \"shelp\" is up to date (v" + strconv.Itoa(ShortcutFormatVersion) + ").\n"; len(lib.opened) != 0 || stdout != want {
 		t.Errorf("opened %q; stdout:\n%s", lib.opened, stdout)
 	}
 }
@@ -729,7 +730,7 @@ func TestRunShortcutsSetupSkipsCurrent(t *testing.T) {
 func TestRunShortcutsSetupHonorsConfiguredName(t *testing.T) {
 	lib := scriptLibrary(t, shortcutState{names: []string{"shelp", "My shelp"}, versions: map[string]int{"My shelp": ShortcutFormatVersion}})
 	stdout, _ := runSetup(t, "[shortcuts]\nname = \"My shelp\"\n")
-	if len(lib.opened) != 0 || !strings.Contains(stdout, `"My shelp" already up to date`) {
+	if len(lib.opened) != 0 || !strings.Contains(stdout, `"My shelp" is up to date`) {
 		t.Errorf("opened %q; stdout:\n%s", lib.opened, stdout)
 	}
 	if got := lib.probedNames(); !slices.Equal(got, []string{"My shelp"}) {
@@ -755,10 +756,13 @@ func TestRunShortcutsSetupUpdateDeletesFirst(t *testing.T) {
 	if at := lib.states[lib.openedAt[0]]; slices.Contains(at.names, "shelp") {
 		t.Errorf("opened the new file while the old shortcut was still listed (state %d)", lib.openedAt[0])
 	}
-	for _, want := range []string{"outdated (v4, current v" + strconv.Itoa(ShortcutFormatVersion) + ")", "right-click \"shelp\" › Delete", "waiting for \"shelp\" to be deleted", `"shelp" installed (v` + strconv.Itoa(ShortcutFormatVersion) + `)`} {
-		if !strings.Contains(stdout, want) {
-			t.Errorf("stdout missing %q:\n%s", want, stdout)
-		}
+	v := strconv.Itoa(ShortcutFormatVersion)
+	wantOut := "Signing \"shelp\" with Apple (switched off in tests)…\n\"shelp\" is v4; this shelp uses v" + v + ". Shortcuts can't update a shortcut in place, so:\n" +
+		"  1. In Shortcuts, right-click \"shelp\" › Delete.\n" +
+		"  2. Click \"Add Shortcut\" when shelp opens the new one.\n" +
+		"✓ Updated \"shelp\" to v" + v + ".\n"
+	if stdout != wantOut {
+		t.Errorf("stdout:\n%s\nwant:\n%s", stdout, wantOut)
 	}
 	if strings.Contains(stdout, "Replace") || stderr != "" {
 		t.Errorf("a delete-first update shouldn't mention Replace or warn:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
@@ -780,7 +784,7 @@ func TestRunShortcutsSetupUpdateTimesOutWithoutDeletion(t *testing.T) {
 	if len(lib.opened) != 0 {
 		t.Errorf("opened %q although the old shortcut was never deleted", lib.opened)
 	}
-	if !strings.Contains(stderr, "timed out waiting for \"shelp\" to be deleted") {
+	if !strings.Contains(stderr, `Gave up waiting after`) {
 		t.Errorf("stderr:\n%s", stderr)
 	}
 }
@@ -788,7 +792,7 @@ func TestRunShortcutsSetupUpdateTimesOutWithoutDeletion(t *testing.T) {
 func TestRunShortcutsSetupLeavesUnreadableAlone(t *testing.T) {
 	lib := scriptLibrary(t, shortcutState{names: []string{"shelp"}}) // marker fails
 	stdout, _ := runSetup(t, "")
-	if len(lib.opened) != 0 || !strings.Contains(stdout, "leaving it alone") {
+	if len(lib.opened) != 0 || !strings.Contains(stdout, `Couldn't read "shelp"'s version`) || !strings.Contains(stdout, "leaving it alone.") {
 		t.Errorf("opened %q; stdout:\n%s", lib.opened, stdout)
 	}
 	if n := len(lib.probes); n != 1 {
@@ -813,10 +817,10 @@ func TestRunShortcutsSetupListsLegacyWithoutRunningThem(t *testing.T) {
 		versions: map[string]int{"shelp": ShortcutFormatVersion, legacy[0]: 4, legacy[1]: 5, legacy[2]: 4},
 	})
 	stdout, _ := runSetup(t, "")
-	if !strings.Contains(stdout, quoteAll(legacy)) || !strings.Contains(stdout, "right-click › Delete") {
+	if !strings.Contains(stdout, "Old shelp shortcuts you can delete in Shortcuts: "+quoteAll(legacy)+".") {
 		t.Errorf("stdout should list %q for deletion:\n%s", legacy, stdout)
 	}
-	if !strings.Contains(stdout, `"shelp 2" look(s) like a copy`) {
+	if !strings.Contains(stdout, `"shelp 2" looks like a copy`) {
 		t.Errorf("stdout should point out the old copy:\n%s", stdout)
 	}
 	if got := lib.probedNames(); !slices.Equal(got, []string{"shelp"}) {
@@ -853,7 +857,7 @@ func TestRunShortcutsSetupMissingCLI(t *testing.T) {
 	if err := runShortcutsSetup(context.Background(), &config.Config{}, &stdout, &stderr); err != nil {
 		t.Fatalf("runShortcutsSetup: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "not found") {
+	if !strings.Contains(stdout.String(), "wasn't found") {
 		t.Errorf("stdout = %q, want a not-found message", stdout.String())
 	}
 }
@@ -873,12 +877,12 @@ func TestWaitForNewShortcutDuplicatesThenReplace(t *testing.T) {
 		shortcutState{names: []string{"shelp"}, versions: map[string]int{"shelp": 5}}, // copy deleted
 	)
 	var out strings.Builder
-	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true}, &out, style.Plain())
+	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true}, &out, style.Plain(), "Waiting…")
 	if err != nil || !res.installed {
 		t.Fatalf("got %+v, %v; want installed\n%s", res, err, out.String())
 	}
 	got := out.String()
-	for msg, want := range map[string]int{`asks "Replace" or "Keep Both"`: 1, "also kept a copy, \"shelp 1\"": 1} {
+	for msg, want := range map[string]int{`"Replace" or "Keep Both"`: 1, `kept the old one as "shelp 1"`: 1} {
 		if n := strings.Count(got, msg); n != want {
 			t.Errorf("%q printed %d times, want %d:\n%s", msg, n, want, got)
 		}
@@ -904,12 +908,12 @@ func TestWaitForNewShortcutKeepBoth(t *testing.T) {
 		shortcutState{names: []string{"shelp"}, versions: map[string]int{"shelp": 5}},     // renamed the copy
 	)
 	var out strings.Builder
-	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true}, &out, style.Plain())
+	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true}, &out, style.Plain(), "Waiting…")
 	if err != nil || !res.installed {
 		t.Fatalf("got %+v, %v; want installed\n%s", res, err, out.String())
 	}
 	got := out.String()
-	if n := strings.Count(got, `that was "Keep Both"`); n != 1 {
+	if n := strings.Count(got, `That added the new one as "shelp 1"`); n != 1 {
 		t.Errorf("Keep Both message printed %d times, want 1:\n%s", n, got)
 	}
 	for _, want := range []string{`delete the old "shelp"`, `rename "shelp 1" to "shelp"`} {
@@ -928,14 +932,14 @@ func TestWaitForNewShortcutKeepBoth(t *testing.T) {
 func TestWaitForNewShortcutNeverRunsOlderCopies(t *testing.T) {
 	lib := scriptLibrary(t, shortcutState{names: []string{"shelp", "shelp 1"}, versions: map[string]int{"shelp": 4}}) // dialog never answered
 	var out strings.Builder
-	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true, "shelp 1": true}, &out, style.Plain())
+	res, err := waitForNewShortcut(context.Background(), "shelp", 5, map[string]bool{"shelp": true, "shelp 1": true}, &out, style.Plain(), "Waiting…")
 	if err != nil || res.installed || res.unreadable != nil {
 		t.Fatalf("got %+v, %v; want a timeout", res, err)
 	}
 	if slices.Contains(lib.probedNames(), "shelp 1") {
 		t.Fatal("ran the marker on a copy that predates this update")
 	}
-	if strings.Contains(out.String(), "Keep Both\", so") || strings.Contains(out.String(), "kept a copy") {
+	if strings.Contains(out.String(), "That added") || strings.Contains(out.String(), "kept the old") {
 		t.Errorf("an older copy was taken for this update's:\n%s", out.String())
 	}
 }
@@ -946,10 +950,9 @@ func TestWaitForShortcutGone(t *testing.T) {
 		shortcutState{names: []string{"shelp 1", "shelp"}},
 		shortcutState{names: []string{"shelp 1"}},
 	)
-	var out strings.Builder
-	gone, err := waitForShortcutGone(context.Background(), "shelp", &out)
-	if err != nil || !gone || out.String() != ".." {
-		t.Errorf("got %v, %v, progress %q; want gone after two dots", gone, err, out.String())
+	gone, err := waitForShortcutGone(context.Background(), "shelp")
+	if err != nil || !gone {
+		t.Errorf("got %v, %v; want gone", gone, err)
 	}
 }
 

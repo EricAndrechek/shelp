@@ -178,7 +178,7 @@ func (p *shortcutsProvider) Description() string {
 }
 
 // Label is the short display name: the model, plus " + web search" for the
-// web variants, 
+// web variants,
 func (p *shortcutsProvider) Label() string {
 	l := p.variant.model
 	if p.variant.web {
@@ -620,9 +620,9 @@ var (
 const maxMarkerErrors = 3
 
 // waitForShortcutGone polls `shortcuts list` -- running nothing -- until
-// no shortcut is named name, printing one "." to progress per attempt, up
-// to shortcutsPollTimeout. It checks immediately before ever sleeping.
-func waitForShortcutGone(ctx context.Context, name string, progress io.Writer) (bool, error) {
+// no shortcut is named name, up to shortcutsPollTimeout. It checks
+// immediately before ever sleeping; the caller shows the progress spinner.
+func waitForShortcutGone(ctx context.Context, name string) (bool, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
 	for {
 		raw, err := shortcutsListCmd(ctx)
@@ -635,7 +635,6 @@ func waitForShortcutGone(ctx context.Context, name string, progress io.Writer) (
 		if !time.Now().Before(deadline) {
 			return false, nil
 		}
-		fmt.Fprint(progress, ".")
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
@@ -703,24 +702,20 @@ type waitResult struct {
 // most maxMarkerErrors failed runs each, so an older leftover -- perhaps a
 // broken v2 that would fail and post a notification -- is never run. Each
 // new instruction restarts the shortcutsPollTimeout clock, since the user
-// has something new to do. out gets one "." per poll after the caller's
-// "waiting..." line, which this function ends. A zero waitResult is a
-// timeout.
-func waitForNewShortcut(ctx context.Context, name string, wantVersion int, before map[string]bool, out io.Writer, pal style.Palette) (waitResult, error) {
+// has something new to do. While it waits, out shows a spinner (terminal
+// only) saying waitText, paused around each instruction it prints. A zero
+// waitResult is a timeout.
+func waitForNewShortcut(ctx context.Context, name string, wantVersion int, before map[string]bool, out io.Writer, pal style.Palette, waitText string) (waitResult, error) {
 	deadline := time.Now().Add(shortcutsPollTimeout)
-	midLine := true
-	say := func(msg string) {
-		if midLine {
-			fmt.Fprintln(out)
-		}
+	spin := style.StartSpinner(out, waitText)
+	say := func(msg, next string) {
+		spin.Stop()
 		fmt.Fprintln(out, pal.Warn(msg))
-		midLine = false
 		deadline = time.Now().Add(shortcutsPollTimeout)
+		spin = style.StartSpinner(out, next)
 	}
 	finish := func(r waitResult) (waitResult, error) {
-		if midLine {
-			fmt.Fprintln(out)
-		}
+		spin.Stop()
 		return r, nil
 	}
 	failures := map[string]int{}
@@ -752,7 +747,7 @@ func waitForNewShortcut(ctx context.Context, name string, wantVersion int, befor
 			case count > 1:
 				if !toldDup {
 					toldDup = true
-					say(fmt.Sprintf("two shortcuts are named %q while Shortcuts asks \"Replace\" or \"Keep Both\"; either works, and shelp will say what's left to tidy up.", name))
+					say(`Shortcuts is asking "Replace" or "Keep Both"; either works.`, waitText)
 				}
 			default:
 				current := false
@@ -769,7 +764,7 @@ func waitForNewShortcut(ctx context.Context, name string, wantVersion int, befor
 				case current:
 					if q := quoteAll(fresh); q != toldCopies {
 						toldCopies = q
-						say(fmt.Sprintf("updated -- but Shortcuts also kept a copy, %s: delete it in the Shortcuts app (shelp can't delete shortcuts). Waiting for that; Ctrl-C is fine too, the update itself is done.", q))
+						say(fmt.Sprintf("Shortcuts kept the old one as %s -- delete it. (The update itself is done; Ctrl-C is fine.)", q), "Waiting for you to delete "+q+"…")
 					}
 				default:
 					for _, c := range fresh {
@@ -778,7 +773,7 @@ func waitForNewShortcut(ctx context.Context, name string, wantVersion int, befor
 						}
 						if v, ok := probe(c); ok && v >= wantVersion {
 							keptBoth = c
-							say(fmt.Sprintf("that was \"Keep Both\", so the update is %q: in the Shortcuts app, delete the old %q, then rename %q to %q. Waiting for that...", c, name, c, name))
+							say(fmt.Sprintf("That added the new one as %q -- delete the old %q, then rename %q to %q.", c, name, c, name), "Waiting for you to tidy up…")
 							break
 						}
 					}
@@ -788,8 +783,6 @@ func waitForNewShortcut(ctx context.Context, name string, wantVersion int, befor
 		if !time.Now().Before(deadline) {
 			return finish(waitResult{})
 		}
-		fmt.Fprint(out, ".")
-		midLine = true
 		select {
 		case <-ctx.Done():
 			finish(waitResult{})
@@ -799,32 +792,52 @@ func waitForNewShortcut(ctx context.Context, name string, wantVersion int, befor
 	}
 }
 
+// gaveUp is the stderr line for a wait that ran out of time.
+func gaveUp() string {
+	d := shortcutsPollTimeout
+	t := d.String()
+	if d >= time.Minute && d%time.Minute == 0 {
+		t = fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	return fmt.Sprintf("Gave up waiting after %s. Run \"shelp setup shortcuts\" again when you're ready.", t)
+}
+
 // addShortcut opens the generated file at path (Shortcuts shows "Add
-// Shortcut") and waits for the user to add it. It reports whether the
-// shortcut ended up installed and current.
-func addShortcut(ctx context.Context, name, path string, stdout, stderr io.Writer) (bool, error) {
+// Shortcut") and waits for the user to add it. update is true after the
+// old shortcut was deleted (the caller already said to click "Add
+// Shortcut"). It reports whether the shortcut ended up installed and
+// current.
+func addShortcut(ctx context.Context, name, path string, update bool, stdout, stderr io.Writer) (bool, error) {
 	out, errp := style.For(stdout), style.For(stderr)
 	before := map[string]bool{}
 	if raw, err := shortcutsListCmd(ctx); err == nil {
 		before = parseShortcutsList(raw)
 	}
-	fmt.Fprintf(stdout, "shortcuts: opening Shortcuts -- click %s to install %q\n", out.Bold("\"Add Shortcut\""), name)
+	waitText := "Waiting for you to add it…"
+	if update {
+		waitText = "Waiting for you to add the new one…"
+	} else {
+		fmt.Fprintf(stdout, "Opening Shortcuts -- click %s to install %q.\n", out.Bold("\"Add Shortcut\""), name)
+	}
 	if err := openCmd(ctx, path); err != nil {
 		return false, fmt.Errorf("open: %w", err)
 	}
-	fmt.Fprintf(stdout, "shortcuts: waiting for you to add it (up to %s) ", shortcutsPollTimeout)
-	res, err := waitForNewShortcut(ctx, name, ShortcutFormatVersion, before, stdout, out)
+	res, err := waitForNewShortcut(ctx, name, ShortcutFormatVersion, before, stdout, out, waitText)
 	if err != nil {
 		return false, err
 	}
 	switch {
 	case res.installed:
-		fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %q installed (v%d)", name, ShortcutFormatVersion)))
+		if update {
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("✓ Updated %q to v%d.", name, ShortcutFormatVersion)))
+		} else {
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("✓ Installed %q (v%d).", name, ShortcutFormatVersion)))
+		}
 		return true, nil
 	case res.unreadable != nil:
-		fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: %q was added, but it didn't answer its version check (%v), so shelp stopped asking (each failed run posts a notification). Delete it in the Shortcuts app and run `shelp setup shortcuts` again.", name, res.unreadable)))
+		fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("Added %q, but it didn't answer its version check (%v), so shelp stopped asking (each failed run posts a notification). Delete it in Shortcuts and run \"shelp setup shortcuts\" again.", name, res.unreadable)))
 	default:
-		fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: timed out waiting for %q; run `shelp setup shortcuts` again once it's added", name)))
+		fmt.Fprintln(stderr, errp.Warn(gaveUp()))
 	}
 	return false, nil
 }
@@ -853,11 +866,11 @@ func addShortcut(ctx context.Context, name, path string, stdout, stderr io.Write
 // "<name> N" copies an earlier update left, so the user can delete them.
 func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr io.Writer) error {
 	if runtime.GOOS != "darwin" {
-		fmt.Fprintln(stdout, "shortcuts: darwin only, nothing to do here")
+		fmt.Fprintln(stdout, "Shortcuts setup only works on macOS.")
 		return nil
 	}
 	if _, ok := LookPath("shortcuts"); !ok {
-		fmt.Fprintln(stdout, "shortcuts: `shortcuts` CLI not found (needs macOS 12+), nothing to do here")
+		fmt.Fprintln(stdout, "The `shortcuts` command wasn't found (it needs macOS 12 or later).")
 		return nil
 	}
 
@@ -877,17 +890,21 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	// Listed by name only, never run: an old one may be a broken format
 	// that fails (and posts a notification) on every run.
 	if legacy := legacyShortcuts(installed, name); len(legacy) > 0 {
-		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: older shelps made one shortcut per model; this one uses a single shortcut, %q, for every shortcuts:* provider. No longer used, so delete them in the Shortcuts app (right-click › Delete): %s", name, quoteAll(legacy))))
+		fmt.Fprintln(stdout, out.Warn("Old shelp shortcuts you can delete in Shortcuts: "+quoteAll(legacy)+"."))
 	}
 	if copies := conflictCopies(installed, name); len(copies) > 0 {
-		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %s look(s) like a copy left by an earlier update; delete it in the Shortcuts app if you don't use it", quoteAll(copies))))
+		what := "looks like a copy"
+		if len(copies) > 1 {
+			what = "look like copies"
+		}
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("%s %s left by an earlier update; delete in Shortcuts if you don't use it.", quoteAll(copies), what)))
 	}
 
 	signingNotice := func(why string) {
-		fmt.Fprintf(stdout, "shortcuts: %s, so signing one with Apple (a round trip to Apple's server)...\n", why)
+		fmt.Fprintf(stdout, "Signing %q with Apple (%s)…\n", name, why)
 	}
 	signNotice = func(attempt, total int, reason string) {
-		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: signing attempt %d of %d failed (%s); retrying...", attempt, total, reason)))
+		fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("Signing attempt %d of %d failed (%s); retrying…", attempt, total, reason)))
 	}
 	defer func() { signNotice = nil }()
 
@@ -897,15 +914,13 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 	}
 	defer os.RemoveAll(tmpDir)
 
-	current := false
 	switch {
 	case !installed[name]:
-		fmt.Fprintf(stdout, "shortcuts: preparing %q...\n", name)
 		path, err := prepareShortcut(ctx, tmpDir, name, signingNotice)
 		if err != nil {
 			return fmt.Errorf("generate: %w", err)
 		}
-		if current, err = addShortcut(ctx, name, path, stdout, stderr); err != nil {
+		if _, err = addShortcut(ctx, name, path, false, stdout, stderr); err != nil {
 			return err
 		}
 	default:
@@ -915,44 +930,35 @@ func runShortcutsSetup(ctx context.Context, cfg *config.Config, stdout, stderr i
 		have, verr := installedShortcutVersion(ctx, name)
 		switch {
 		case verr != nil:
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q installed, couldn't check its version (%v); leaving it alone -- if it's a broken shelp shortcut, delete it in Shortcuts and run `shelp setup shortcuts` again", name, verr)))
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("Couldn't read %q's version (%v); leaving it alone. If it's broken, delete it in Shortcuts and run \"shelp setup shortcuts\" again.", name, verr)))
 		case have == ShortcutFormatVersion:
-			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("shortcuts: %q already up to date (v%d), skipping", name, ShortcutFormatVersion)))
-			current = true
+			fmt.Fprintln(stdout, out.OK(fmt.Sprintf("✓ %q is up to date (v%d).", name, ShortcutFormatVersion)))
 		case have > ShortcutFormatVersion:
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is v%d, newer than this shelp (v%d); leaving it alone", name, have, ShortcutFormatVersion)))
-			current = true
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("%q is v%d, newer than this shelp (v%d); leaving it alone.", name, have, ShortcutFormatVersion)))
 		default:
-			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("shortcuts: %q is outdated (v%d, current v%d); preparing the new one...", name, have, ShortcutFormatVersion)))
 			// Generate (and sign) before asking for the deletion: a signing
 			// failure must not cost the user their working shortcut.
 			path, err := prepareShortcut(ctx, tmpDir, name, signingNotice)
 			if err != nil {
 				return fmt.Errorf("generate: %w", err)
 			}
-			fmt.Fprintf(stdout, "shortcuts: Shortcuts can't update a shortcut in place, so delete the old one first: in the Shortcuts app, right-click %q › %s. shelp then opens the new one for you to add.\n", name, out.Bold("Delete"))
-			fmt.Fprintf(stdout, "shortcuts: waiting for %q to be deleted (up to %s) ", name, shortcutsPollTimeout)
-			gone, err := waitForShortcutGone(ctx, name, stdout)
-			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, out.Warn(fmt.Sprintf("%q is v%d; this shelp uses v%d. Shortcuts can't update a shortcut in place, so:", name, have, ShortcutFormatVersion)))
+			fmt.Fprintf(stdout, "  1. In Shortcuts, right-click %q › %s.\n", name, out.Bold("Delete"))
+			fmt.Fprintf(stdout, "  2. Click %s when shelp opens the new one.\n", out.Bold("\"Add Shortcut\""))
+			spin := style.StartSpinner(stdout, fmt.Sprintf("Waiting for you to delete %q…", name))
+			gone, err := waitForShortcutGone(ctx, name)
+			spin.Stop()
 			if err != nil {
 				return err
 			}
 			if !gone {
-				fmt.Fprintln(stderr, errp.Warn(fmt.Sprintf("shortcuts: timed out waiting for %q to be deleted; nothing changed -- run `shelp setup shortcuts` again when you're ready", name)))
+				fmt.Fprintln(stderr, errp.Warn(gaveUp()))
 				break
 			}
-			if current, err = addShortcut(ctx, name, path, stdout, stderr); err != nil {
+			if _, err = addShortcut(ctx, name, path, true, stdout, stderr); err != nil {
 				return err
 			}
 		}
-	}
-
-	if current {
-		ids := make([]string, len(shortcutVariants))
-		for i, v := range shortcutVariants {
-			ids[i] = v.id
-		}
-		fmt.Fprintf(stdout, "shortcuts: %q serves %s; the chatgpt ones also need %s\n", name, strings.Join(ids, ", "), chatGPTExtension)
 	}
 	return nil
 }

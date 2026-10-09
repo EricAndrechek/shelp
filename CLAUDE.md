@@ -253,7 +253,7 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   hold <data>; the tool converts to XML). Signed copies import under
   whatever file name setup gives them, so `[shortcuts] name` still works.
   Verified live 2026-10-09: setup opened the embedded copy with no
-  signing, Add, `installed (v6)`.
+  signing, Add, `✓ Installed "shelp" (v6).`
 - `shortcuts sign` is a round trip to Apple's server and fails now and
   then (HTTP 500s; once a 20s stall reported as "The file doesn't exist."
   with the input file present, after a ~20s stall -- a good attempt
@@ -357,6 +357,10 @@ each family decodes its own table via `cfg.Section(name, &v)` (see
   outdated (`outdated shortcut (format vN, current vM)`) and unknown are
   unavailable with Fix "run `shelp setup shortcuts`". The version check
   runs once per process for all six providers (`cachedShortcutVersion`).
+- **Setup wording**: short plain sentences, no `shortcuts:` prefix and no
+  dot trails; waits show a `style.StartSpinner` line (terminal only).
+  `shelp providers` folds `-web` twins with the same status into one `add -web
+  for web search` line (`webTwins`; `--all` shows them).
 - **Update flow** (`shelp setup shortcuts`, `runShortcutsSetup`): the one
   shortcut is *missing* (generate, sign, open, user clicks "Add
   Shortcut", `waitForNewShortcut`), *outdated* (DELETE FIRST: generate
