@@ -648,6 +648,105 @@ def zsh_env(stub_dir, real_bin, home, cwd):
     }
 
 
+# --------------------------------------------------------------------
+# Tab completion (zsh, bash; fish asks `complete -C`)
+# --------------------------------------------------------------------
+
+COMP_CONFIG = """\
+providers = ["fm"]
+
+[[openai.endpoint]]
+name = "zzhost"
+base_url = "http://127.0.0.1:9/v1"
+api_key_env = "ZZ_NO_SUCH_KEY"
+models = ["alpha-1", "beta-2"]
+"""
+
+
+def write_comp_config(d):
+    """A config whose provider IDs are deterministic (zzhost:alpha-1,
+    zzhost:beta-2, besides the built-ins); returns its path."""
+    path = os.path.join(d, "comp-config.toml")
+    with open(path, "w") as f:
+        f.write(COMP_CONFIG)
+    return path
+
+
+def cursor_line(s):
+    """The terminal row the cursor is on (the prompt and what is typed),
+    right-stripped; None without pyte."""
+    rows = s.screen()
+    return None if rows is None else rows[s.cursor()[0]]
+
+
+def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_cmd):
+    """Type partial lines, press Tab, and check the line the shell ends up
+    with. A file named bigfile.txt is in cwd: a task must never complete
+    as a filename."""
+    open(os.path.join(cwd, "bigfile.txt"), "w").close()
+    s.send(export_cmd % config_path + "\r")
+    s.expect(prompt_re, timeout=6)
+    s.read_available(0.4)
+    cases = [
+        ("shelp prov", "shelp providers", "subcommand"),
+        ("shelp --prov", "shelp --provider", "top-level flag"),
+        ("shelp -p zzhost:al", "shelp -p zzhost:alpha-1", "provider id (colon)"),
+        ("shelp -p fm,zzhost:be", "shelp -p fm,zzhost:beta-2", "comma list, last element"),
+        ("shelp explain --shell z", "shelp explain --shell zsh", "--shell value"),
+        ("shelp init fi", "shelp init fish", "init shell"),
+        ("shelp setup shor", "shelp setup shortcuts", "setup target"),
+        ("shelp help conf", "shelp help config", "help topic"),
+        ("shelp providers --res", "shelp providers --reset-cooldowns", "providers flag"),
+        ("shelp completion ba", "shelp completion bash", "completion shell"),
+    ]
+    # the first Tab loads the completion machinery: warm it up, generously
+    s.send("shelp vers\t")
+    s.read_available(3.0)
+    s.send("\x15")
+    s.read_available(0.5)
+    for typed, want, name in cases:
+        s.send("\x15")
+        s.read_available(0.2)
+        s.send(typed + "\t")
+        s.read_available(1.0)
+        line = cursor_line(s)
+        if line is None:  # no pyte: fall back to the bytes drawn
+            ok, got = want.split(" ")[-1][len(typed.split(" ")[-1]):] in strip_ansi(s.buf), "(no pyte)"
+        else:
+            ok, got = line.rstrip().endswith(want), line
+            if not ok:
+                got = [r for r in s.screen() if r][-6:]
+        results.check(f"{label}: Tab completes {name}", ok, repr(got))
+    # a task: nothing completes, least of all a filename
+    s.send("\x15")
+    s.read_available(0.2)
+    s.send("shelp find big\t")
+    s.read_available(1.0)
+    line = cursor_line(s)
+    results.check(f"{label}: Tab in a task does not complete filenames",
+                  line is None or line.rstrip().endswith("shelp find big"), repr(line))
+    s.send("\x15")
+    s.read_available(0.2)
+    # ambiguous: both candidates are listed
+    s.buf = ""
+    s.send("shelp setup \t")
+    s.read_available(0.8)
+    for _ in range(2):  # readline: first rings after the common prefix, then lists
+        s.send("\t")
+        s.read_available(0.8)
+    out = strip_ansi(s.buf)
+    results.check(f"{label}: Tab lists setup targets", "shortcuts" in out and "shell" in out, repr(out[-200:]))
+    s.send("\x15")
+    s.read_available(0.2)
+    # completion must not get in the way of raw line mode / Enter
+    s.buf = ""
+    s.send("shelp completion zs\t\r")
+    ok = s.expect(r"compdef _shelp shelp", timeout=8)
+    results.check(f"{label}: completed line then Enter runs it", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.expect(prompt_re, timeout=8)
+    s.read_available(0.3)
+
+
 def zsh_suggest_roundtrip(s, raw):
     expected_line = suggest_cmd(raw)
     s.buf = ""
@@ -1031,6 +1130,34 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, zsh_bin, with_plugins=None):
         s.close()
 
 
+def run_zsh_completion(tmpdir, results, real_bin, stub_dir, zsh_bin, order):
+    """order: "before" (compinit runs before the hook loads, as with
+    oh-my-zsh) or "after" (the hook loads first; registration waits for a
+    compdef). Both end with shelp registered and completing."""
+    label = f"zsh-compinit-{order}"
+    cwd = os.path.join(tmpdir, "cwd-" + label)
+    os.makedirs(cwd, exist_ok=True)
+    root = tmpdir + "-" + label
+    ci = "autoload -Uz compinit; compinit -u -d %s/.zcompdump" % root
+    home = zsh_home(root, plugin_lines=ci if order == "before" else "",
+                    after_lines=ci if order == "after" else "")
+    env = zsh_env(stub_dir, real_bin, home, cwd)
+    s = Session([zsh_bin, "-i"], env, cwd=cwd, ctty=True)
+    try:
+        if not results.check(f"{label}: prompt ready", s.expect(r"TESTPROMPT% ", timeout=15), s.buf[-300:]):
+            return
+        s.read_available(0.5)
+        s.buf = ""
+        s.send("print -r -- \">>${_comps[shelp]}<<\"\r")
+        ok = s.expect(r">>_shelp<<", timeout=5)
+        results.check(f"{label}: shelp registered with compdef", ok, s.buf[-200:])
+        s.expect(r"TESTPROMPT% \r?$", timeout=5)
+        tab_complete_checks(s, results, label, cwd, write_comp_config(home),
+                            r"TESTPROMPT% \r?$", "export SHELP_CONFIG=%s")
+    finally:
+        s.close()
+
+
 def run_zsh_plugins_after(tmpdir, results, real_bin, stub_dir, zsh_bin, after_lines):
     """Plugins sourced AFTER `shelp init` (run_zsh's with_plugins sources
     them before it)."""
@@ -1330,6 +1457,9 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         for name, raw in raw_cases(cwd):
             ok, detail = bash_suggest_roundtrip(s, raw)
             results.check(f"bash: raw suggest -- {name}", ok, detail)
+
+        tab_complete_checks(s, results, "bash", cwd, write_comp_config(home),
+                            r"TESTPROMPT\$ \r?$", "export SHELP_CONFIG=%s")
 
         # explain
         s.buf = ""
@@ -1656,6 +1786,47 @@ def fish_explain_interrupt_check(s, results, label, top):
     s.read_available(0.5)
 
 
+def fish_completion_checks(s, results, home, shell_home):
+    """`complete -C 'line'` prints what Tab would offer. shell_home is
+    home as the shell sees it."""
+    write_comp_config(home)
+    open(os.path.join(home, "bigfile.txt"), "w").close()
+    s.send("set -x SHELP_CONFIG %s/comp-config.toml\r" % shell_home)
+    s.expect(r"TESTPROMPT% \r?$", timeout=6)
+    s.read_available(0.3)
+    cases = [
+        ("shelp prov", r"[\r\n]providers\b", "subcommand"),
+        ("shelp --prov", r"[\r\n]--provider\b", "top-level flag"),
+        ("shelp -p zzhost:al", r"[\r\n]zzhost:alpha-1[\r\n]", "provider id (colon)"),
+        ("shelp -p fm,zzhost:be", r"[\r\n]fm,zzhost:beta-2[\r\n]", "comma list, last element"),
+        ("shelp explain --shell z", r"[\r\n]zsh[\r\n]", "--shell value"),
+        ("shelp init fi", r"[\r\n]fish[\r\n]", "init shell"),
+        ("shelp setup shor", r"[\r\n]shortcuts[\r\n]", "setup target"),
+        ("shelp help conf", r"[\r\n]config[\r\n]", "help topic"),
+        ("shelp providers --res", r"[\r\n]--reset-cooldowns[\r\n]", "providers flag"),
+        ("shelp completion ba", r"[\r\n]bash[\r\n]", "completion shell"),
+    ]
+    for line, rx, name in cases:
+        s.buf = ""
+        s.send("complete -C '%s'\r" % line)
+        ok = s.expect(rx, timeout=6)
+        s.expect(r"TESTPROMPT% \r?$", timeout=4)
+        results.check(f"fish: Tab completes {name}", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.buf = ""
+    s.send("complete -C 'shelp find big'; echo done-$status\r")
+    s.expect(r"done-\d", timeout=6)
+    out = strip_ansi(s.buf)
+    results.check("fish: Tab in a task does not complete filenames",
+                  "bigfile" not in out.split("find big'")[-1], repr(out[-200:]))
+    # a real Tab, then Enter: completion must not break raw line mode
+    s.expect(r"TESTPROMPT% \r?$", timeout=4)
+    s.buf = ""
+    s.send("shelp completion fi\t\r")
+    ok = s.expect(r"complete -c shelp -f", timeout=8)
+    results.check("fish: completed line then Enter runs it", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.expect(r"TESTPROMPT% \r?$", timeout=6)
+
+
 def run_fish(tmpdir, results, host):
     ok, detail = host.prepare()
     if not results.check("fish: fish available", ok, detail):
@@ -1689,6 +1860,7 @@ def run_fish(tmpdir, results, host):
         explain_screen_check(s, results, "fish", start, ["TESTPROMPT%"])
         fish_failure_check(s, results, "fish", [])
         fish_explain_interrupt_check(s, results, "fish", [])
+        fish_completion_checks(s, results, home, "/root" if host.mode == "docker" else home)
 
         # the same under a two-line prompt (fish redraws it with
         # `commandline -f repaint` after the output)
@@ -1814,6 +1986,8 @@ def main():
             results.check("zsh: zsh found", False, "no zsh on PATH")
         else:
             run_zsh(tmproot, results, real_bin, stub_dir, zsh_bin)
+            for order in ("before", "after"):
+                run_zsh_completion(tmproot, results, real_bin, stub_dir, zsh_bin, order)
             # Homebrew's zsh-autosuggestions / zsh-syntax-highlighting, if
             # installed: prove shelp-accept-line coexists with a wrapped
             # accept-line. Not Debian/Ubuntu's: their zsh-syntax-highlighting
