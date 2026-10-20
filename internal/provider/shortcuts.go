@@ -546,6 +546,16 @@ type shortcutVersionProbe struct {
 	err  error
 }
 
+// ResetDetectCache forgets what Detect cached for this process (the
+// `shortcuts list` result and each shortcut's version), so a probe after
+// `shelp setup shortcuts` ran in the same process sees the new shortcut.
+func ResetDetectCache() {
+	c := &shortcutsCache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listDone, c.list, c.listErr, c.versions = false, nil, nil, nil
+}
+
 // installedShortcuts returns the set of installed shortcut names, cached
 // for the life of the process (see shortcutsCache).
 func installedShortcuts(ctx context.Context) (map[string]bool, error) {
