@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ericandrechek/shelp/internal/config"
@@ -399,7 +400,7 @@ func (p *openaiProvider) Generate(ctx context.Context, req Request) (string, err
 		maxTokens = 512 // explain: room for a couple of sentences
 	}
 
-	payload, err := json.Marshal(chatRequest{
+	cr := chatRequest{
 		Model: model,
 		Messages: []chatMsg{
 			{Role: "system", Content: req.System},
@@ -408,38 +409,69 @@ func (p *openaiProvider) Generate(ctx context.Context, req Request) (string, err
 		Temperature: p.temperature,
 		MaxTokens:   maxTokens,
 		Stream:      req.OnChunk != nil,
-	})
-	if err != nil {
-		return "", fmt.Errorf("%s: encode request: %w", p.id, err)
+	}
+	if cr.Stream {
+		if _, no := noStreamOptions.Load(p.baseURL); !no {
+			cr.StreamOptions = &streamOptions{IncludeUsage: true}
+		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, joinURL(p.baseURL, "/chat/completions"), bytes.NewReader(payload))
+	resp, err := p.post(ctx, client, key, cr)
 	if err != nil {
-		return "", fmt.Errorf("%s: build request: %w", p.id, err)
+		return "", err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+key)
-	}
+	defer func() { resp.Body.Close() }()
 
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return "", unavailableFromRequestError(p.id, p.baseURL, err)
+	if resp.StatusCode == http.StatusBadRequest && cr.StreamOptions != nil {
+		// Some servers reject stream_options: retry once without it and
+		// remember that for this base URL.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if strings.Contains(string(body), "stream_options") {
+			noStreamOptions.Store(p.baseURL, true)
+			cr.StreamOptions = nil
+			resp, err = p.post(ctx, client, key, cr)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+		}
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", mapHTTPError(p.id, model, resp)
 	}
 
 	if req.OnChunk != nil {
-		text, err := readStream(resp.Body, req.OnChunk)
+		text, err := readStream(resp.Body, req.OnChunk, req.ReportUsage)
 		if err != nil {
 			return text, fmt.Errorf("%s: %w", p.id, err)
 		}
 		return text, nil
 	}
-	return readNonStream(resp.Body, p.id)
+	return readNonStream(resp.Body, p.id, req.ReportUsage)
+}
+
+// post sends one chat completion request; the caller closes the body.
+func (p *openaiProvider) post(ctx context.Context, client *http.Client, key string, cr chatRequest) (*http.Response, error) {
+	payload, err := json.Marshal(cr)
+	if err != nil {
+		return nil, fmt.Errorf("%s: encode request: %w", p.id, err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, joinURL(p.baseURL, "/chat/completions"), bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("%s: build request: %w", p.id, err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, unavailableFromRequestError(p.id, p.baseURL, err)
+	}
+	return resp, nil
 }
 
 func describeLocalError(baseURL string, err error) string {
@@ -530,7 +562,30 @@ type chatRequest struct {
 	Temperature float64   `json:"temperature"`
 	MaxTokens   int       `json:"max_tokens"`
 	Stream      bool      `json:"stream"`
+	// StreamOptions asks a streaming server for a final usage chunk. Some
+	// OpenAI-compatible servers reject it; see noStreamOptions.
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 }
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
+
+func (u *chatUsage) usage() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	return Usage{Input: u.PromptTokens, Output: u.CompletionTokens}
+}
+
+// noStreamOptions remembers (per base URL, for this process) servers that
+// answered 400 to "stream_options", so later requests leave it out.
+var noStreamOptions sync.Map
 
 type chatMsg struct {
 	Role    string `json:"role"`
@@ -545,6 +600,7 @@ type chatResponse struct {
 			// decoded here: we only ever return Content.
 		} `json:"message"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage"`
 }
 
 type streamChunk struct {
@@ -554,9 +610,10 @@ type streamChunk struct {
 			// reasoning_content intentionally omitted; see chatResponse.
 		} `json:"delta"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage"`
 }
 
-func readNonStream(body io.Reader, id string) (string, error) {
+func readNonStream(body io.Reader, id string, report func(Usage)) (string, error) {
 	var cr chatResponse
 	if err := json.NewDecoder(body).Decode(&cr); err != nil {
 		return "", fmt.Errorf("%s: decode response: %w", id, err)
@@ -564,10 +621,13 @@ func readNonStream(body io.Reader, id string) (string, error) {
 	if len(cr.Choices) == 0 {
 		return "", Unavailable(id, "empty response (no choices)")
 	}
+	if report != nil {
+		report(cr.Usage.usage())
+	}
 	return stripThink(cr.Choices[0].Message.Content), nil
 }
 
-func readStream(body io.Reader, onChunk func(string)) (string, error) {
+func readStream(body io.Reader, onChunk func(string), report func(Usage)) (string, error) {
 	var full strings.Builder
 	filter := newThinkFilter(func(s string) {
 		if s == "" {
@@ -594,6 +654,9 @@ func readStream(body io.Reader, onChunk func(string)) (string, error) {
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // ignore malformed SSE data lines
+		}
+		if chunk.Usage != nil && report != nil {
+			report(chunk.Usage.usage())
 		}
 		for _, c := range chunk.Choices {
 			if c.Delta.Content != "" {

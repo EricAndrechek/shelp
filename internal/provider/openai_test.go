@@ -687,3 +687,99 @@ func TestDetectShortReasonAndFix(t *testing.T) {
 		t.Errorf("local Detect() = %+v", st)
 	}
 }
+
+// --- usage ---------------------------------------------------------------
+
+func TestGenerate_NonStreamingUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ls"}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}`)
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:m", kind: API, baseURL: srv.URL, model: "m", label: "unit"}
+	res, err := Call(context.Background(), p, testReq(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Usage == nil || *res.Usage != (Usage{Input: 12, Output: 3}) {
+		t.Fatalf("usage = %+v", res.Usage)
+	}
+}
+
+func TestGenerate_NoUsageIsNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ls"}}]}`)
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:m", kind: API, baseURL: srv.URL, model: "m", label: "unit"}
+	res, err := Call(context.Background(), p, testReq(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Usage != nil {
+		t.Fatalf("usage = %+v, want nil", res.Usage)
+	}
+}
+
+func TestGenerate_StreamingUsageFromFinalChunk(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ls\"}}]}\n\n"+
+			"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:m", kind: API, baseURL: srv.URL, model: "m", label: "unit"}
+	res, err := Call(context.Background(), p, testReq(t, func(string) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"stream_options":{"include_usage":true}`) {
+		t.Fatalf("request lacks stream_options: %s", body)
+	}
+	if res.Text != "ls" || res.Usage == nil || *res.Usage != (Usage{Input: 20, Output: 5}) {
+		t.Fatalf("res = %+v usage=%+v", res, res.Usage)
+	}
+}
+
+func TestGenerate_StreamOptionsRejectedRetriesOnce(t *testing.T) {
+	var calls, withOpts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), "stream_options") {
+			withOpts++
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"unknown field stream_options"}}`)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ls\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:m", kind: API, baseURL: srv.URL, model: "m", label: "unit"}
+	for i := 0; i < 2; i++ {
+		res, err := Call(context.Background(), p, testReq(t, func(string) {}))
+		if err != nil || res.Text != "ls" || res.Usage != nil {
+			t.Fatalf("call %d: res=%+v err=%v", i, res, err)
+		}
+	}
+	// First call: rejected then retried (2 requests); second: remembered (1).
+	if calls != 3 || withOpts != 1 {
+		t.Fatalf("calls=%d withOpts=%d, want 3 and 1", calls, withOpts)
+	}
+}
+
+func TestGenerate_Other400NotRetried(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"bad model"}}`)
+	}))
+	defer srv.Close()
+	p := &openaiProvider{id: "unit:m", kind: API, baseURL: srv.URL, model: "m", label: "unit"}
+	_, err := Call(context.Background(), p, testReq(t, func(string) {}))
+	if err == nil || !strings.Contains(err.Error(), "400") || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}

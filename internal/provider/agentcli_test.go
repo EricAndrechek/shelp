@@ -653,3 +653,13 @@ func TestClaudeArgs_ExplainIsPlainText(t *testing.T) {
 		t.Fatal("explain must not use --json-schema")
 	}
 }
+
+func TestClaudeUsage(t *testing.T) {
+	env := CmdResult{Stdout: `{"type":"result","is_error":false,"structured_output":{"command":"ls"},"usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":5,"output_tokens":7}}`}
+	if got := claudeUsage(env); got != (Usage{Input: 115, Output: 7}) {
+		t.Fatalf("usage = %+v", got)
+	}
+	if got := claudeUsage(CmdResult{Stdout: "plain text explanation"}); got != (Usage{}) {
+		t.Fatalf("plain text usage = %+v", got)
+	}
+}

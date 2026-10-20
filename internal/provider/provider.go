@@ -41,6 +41,27 @@ type Request struct {
 	// OnChunk, if non-nil, receives output as it streams. Providers that
 	// cannot stream never call it; Call then reports FirstChunk == Latency.
 	OnChunk func(string)
+	// OnUsage, if non-nil, receives the token counts a backend reports.
+	// Providers call it (via ReportUsage) at most once, only when the
+	// backend told them; Call fills it in and surfaces it as Result.Usage.
+	OnUsage func(Usage)
+}
+
+// Usage is the token count a backend reported for one call.
+type Usage struct {
+	Input  int `json:"input"`
+	Output int `json:"output"`
+}
+
+// Total is Input + Output.
+func (u Usage) Total() int { return u.Input + u.Output }
+
+// ReportUsage hands u to the caller when the request asked for it and u
+// is non-zero.
+func (r Request) ReportUsage(u Usage) {
+	if r.OnUsage != nil && (u.Input != 0 || u.Output != 0) {
+		r.OnUsage(u)
+	}
 }
 
 // Kind groups providers for display and default ordering.
@@ -264,6 +285,9 @@ type Result struct {
 	ProviderID string
 	Latency    time.Duration // Generate wall time
 	FirstChunk time.Duration // time to first streamed chunk (== Latency if not streamed)
+	// Usage is the backend-reported token count; nil when it reports none
+	// (fm and shortcuts:* never do).
+	Usage *Usage
 }
 
 // Call runs one provider and times it.
@@ -281,12 +305,14 @@ func Call(ctx context.Context, p Provider, req Request) (Result, error) {
 			inner(s)
 		}
 	}
+	var usage *Usage
+	req.OnUsage = func(u Usage) { usage = &u }
 	text, err := p.Generate(ctx, req)
 	lat := time.Since(start)
 	if first == 0 {
 		first = lat
 	}
-	return Result{Text: text, ProviderID: p.ID(), Latency: lat, FirstChunk: first}, err
+	return Result{Text: text, ProviderID: p.ID(), Latency: lat, FirstChunk: first, Usage: usage}, err
 }
 
 // Chain tries each provider ID in order and returns the first success. A

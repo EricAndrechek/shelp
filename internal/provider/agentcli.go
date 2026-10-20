@@ -109,6 +109,10 @@ type cliSpec struct {
 	// parse extracts the reply from a finished call, or maps failure to an
 	// *UnavailableError via Unavailable(id, ...).
 	parse func(id string, res CmdResult) (string, error)
+	// usage, optional, reads the token counts out of a finished call. Only
+	// suggest mode's JSON envelope carries them (explain's plain-text
+	// stream does not), so it returns zero for anything else.
+	usage func(res CmdResult) Usage
 }
 
 // resolveModels turns a config override (raw model-flag strings from
@@ -333,7 +337,11 @@ func (p *agentcliProvider) Generate(ctx context.Context, req Request) (string, e
 		}
 		return "", Unavailable(p.id, "%s: %v", p.spec.name, err)
 	}
-	return p.spec.parse(p.id, res)
+	text, err := p.spec.parse(p.id, res)
+	if err == nil && p.spec.usage != nil {
+		req.ReportUsage(p.spec.usage(res))
+	}
+	return text, err
 }
 
 // unavailableMsg picks the short reason to report: the last line starting
@@ -397,6 +405,26 @@ var claudeSpec = cliSpec{
 	// documented exception.
 	extraEnv: []string{"MAX_THINKING_TOKENS=0"},
 	parse:    claudeParse,
+	usage:    claudeUsage,
+}
+
+// claudeUsage reads `usage` from the result envelope of suggest mode
+// (--output-format json). Cache reads/writes count as input.
+func claudeUsage(res CmdResult) Usage {
+	var env struct {
+		Type  string `json:"type"`
+		Usage struct {
+			Input         int `json:"input_tokens"`
+			CacheCreation int `json:"cache_creation_input_tokens"`
+			CacheRead     int `json:"cache_read_input_tokens"`
+			Output        int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal([]byte(res.Stdout), &env) != nil || env.Type != "result" {
+		return Usage{}
+	}
+	u := env.Usage
+	return Usage{Input: u.Input + u.CacheCreation + u.CacheRead, Output: u.Output}
 }
 
 func claudeIdentify(ctx context.Context) Status {
