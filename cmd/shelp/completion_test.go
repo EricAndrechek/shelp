@@ -120,14 +120,7 @@ func TestCompletionScripts(t *testing.T) {
 				t.Errorf("%s: script lacks command %s", sh, c.Name)
 			}
 		}
-		for _, key := range []string{"", "suggest", "explain", "providers", "init", "setup shell"} {
-			for _, f := range shellinit.CompletionFlags(key) {
-				if !strings.Contains(script, f) {
-					t.Errorf("%s: script lacks flag %s (%q)", sh, f, key)
-				}
-			}
-		}
-		for _, v := range []string{"__complete providers", "__complete templates", "os shell cwd tools"} {
+		for _, v := range []string{"__complete providers", "__complete templates", "__complete commands", "__complete flags", "__complete subcommands", "os shell cwd tools"} {
 			if !strings.Contains(script, v) {
 				t.Errorf("%s: script lacks %q", sh, v)
 			}
@@ -213,6 +206,66 @@ models = ["alpha-1", "beta-2"]
 		if err := run(context.Background(), args, &out, &errb); err != nil || out.Len() != 0 || errb.Len() != 0 {
 			t.Errorf("%v: err=%v out=%q err=%q", args, err, out.String(), errb.String())
 		}
+	}
+}
+
+func completeLines(t *testing.T, args ...string) []string {
+	t.Helper()
+	var out, errb bytes.Buffer
+	if err := run(context.Background(), append([]string{"__complete"}, args...), &out, &errb); err != nil {
+		t.Fatalf("__complete %v: %v", args, err)
+	}
+	if errb.Len() != 0 {
+		t.Errorf("__complete %v wrote to stderr: %q", args, errb.String())
+	}
+	if out.Len() == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+}
+
+// The command-level data completion offers comes from the binary at Tab
+// time, so it must be reachable through `__complete`.
+func TestCompleteCommandsFlagsSubcommands(t *testing.T) {
+	var want []string
+	for _, c := range shellinit.CompletionCommands {
+		want = append(want, c.Name+"\t"+c.Desc)
+	}
+	if got := completeLines(t, "commands"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("commands = %q, want %q", got, want)
+	}
+	for _, c := range shellinit.CompletionCommands {
+		if len(completeLines(t, "flags", c.Name)) == 0 {
+			t.Errorf("flags %s: nothing; a command with no flags entry would not complete -h", c.Name)
+		}
+	}
+	for args, key := range map[string]string{"": "", "explain": "explain", "setup shell": "setup shell", "setup": "setup"} {
+		got := completeLines(t, append([]string{"flags"}, strings.Fields(args)...)...)
+		if strings.Join(got, " ") != strings.Join(shellinit.CompletionFlags(key), " ") {
+			t.Errorf("flags %q = %v, want %v", args, got, shellinit.CompletionFlags(key))
+		}
+	}
+	// a positional argument falls back to its command; a task has no flags
+	if got := completeLines(t, "flags", "help", "config"); strings.Join(got, " ") != strings.Join(shellinit.CompletionFlags("help"), " ") {
+		t.Errorf("flags help config = %v", got)
+	}
+	if got := completeLines(t, "flags", "setup", "shortcuts"); strings.Join(got, " ") != strings.Join(shellinit.CompletionFlags("setup"), " ") {
+		t.Errorf("flags setup shortcuts = %v", got)
+	}
+	if got := completeLines(t, "flags", "find"); got != nil {
+		t.Errorf("flags find (a task) = %v, want none", got)
+	}
+	if got := completeLines(t, "subcommands", "setup"); strings.Join(got, " ") != "shell shortcuts" {
+		t.Errorf("subcommands setup = %v", got)
+	}
+	if got := completeLines(t, "subcommands", "config"); strings.Join(got, " ") != "chain edit" {
+		t.Errorf("subcommands config = %v", got)
+	}
+	if got := completeLines(t, "subcommands", "providers"); got != nil {
+		t.Errorf("subcommands providers = %v, want none", got)
+	}
+	if got := completeLines(t, "subcommands"); got != nil {
+		t.Errorf("subcommands with no command = %v", got)
 	}
 }
 

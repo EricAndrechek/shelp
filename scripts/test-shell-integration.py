@@ -337,7 +337,9 @@ STUB_SOURCE = textwrap.dedent(
 
     SHELP_STUB_COMMANDS="zzcmd ...": commands only this binary has, as if
     added by an upgrade after the hook was loaded: `__kind zzcmd ...`
-    answers "command" and `zzcmd ARGS` prints `STUB-CMD:zzcmd ARGS`.
+    answers "command" and `zzcmd ARGS` prints `STUB-CMD:zzcmd ARGS`;
+    `__complete commands` lists them too and `__complete flags zzcmd`
+    answers --zz-flag, for the Tab checks.
     SHELP_STUB_NO_KIND: `__kind` acts like a shelp from before it existed,
     which takes `__kind ...` for a task: with SHELP_PROVIDER set (the
     hook's guard) it fails at once, "unknown provider"; without, it "asks
@@ -391,6 +393,18 @@ STUB_SOURCE = textwrap.dedent(
             with open(log, "a") as f:
                 f.write(" ".join(args) + "\\n")
         print("printf '%s\\\\n' " + shlex.quote(" ".join(args)))
+        sys.exit(0)
+    if args[:2] == ["__complete", "commands"] and added:
+        # the real command list plus the added ones, as a newer binary
+        # would print them
+        env = dict(os.environ, PATH="/nonexistent-shelp-test-path", SHELP_PROVIDER="nosuch:model")
+        import subprocess
+        out = subprocess.run([real] + args, capture_output=True, text=True, env=env).stdout
+        sys.stdout.write(out + "".join(a + "\\tcommand only the binary knows\\n" for a in added))
+        sys.exit(0)
+    if args[:2] == ["__complete", "flags"] and args[2:3] and args[2] in added:
+        print("--zz-flag")
+        print("-h")
         sys.exit(0)
     if args[:1] == ["__kind"] and args[1:2] and args[1] in added:
         print("command")
@@ -922,7 +936,14 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
         ("shelp completion ba", "shelp completion bash", "completion shell"),
         ("shelp config ch", "shelp config chain", "config subcommand"),
         ("shelp config chain zzhost:al", "shelp config chain zzhost:alpha-1", "config chain provider id"),
+        # a command only the binary knows (what an upgrade after this
+        # shell loaded its completion does): offered, and its flags too
+        ("shelp zzc", "shelp zzcmd", "a command only the binary knows"),
+        ("shelp zzcmd --zz", "shelp zzcmd --zz-flag", "a flag of a command the script never heard of"),
     ]
+    s.send("export SHELP_STUB_COMMANDS=zzcmd\r")
+    s.expect(prompt_re, timeout=6)
+    s.read_available(0.3)
     # the first Tab loads the completion machinery: warm it up, generously
     s.send("shelp vers\t")
     s.read_available(3.0)
@@ -933,6 +954,13 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
         s.read_available(0.2)
         s.send(typed + "\t")
         s.read_available(1.0)
+        # the stub is a Python script and every Tab asks it (`__complete`):
+        # give a slow start a few more tries before judging
+        for _ in range(10):
+            line = cursor_line(s)
+            if line is None or line.rstrip().endswith(want):
+                break
+            s.read_available(0.4)
         line = cursor_line(s)
         if line is None:  # no pyte: fall back to the bytes drawn
             ok, got = want.split(" ")[-1][len(typed.split(" ")[-1]):] in strip_ansi(s.buf), "(no pyte)"
@@ -941,6 +969,11 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
             if not ok:
                 got = [r for r in s.screen() if r][-6:]
         results.check(f"{label}: Tab completes {name}", ok, repr(got))
+    s.send("\x15")
+    s.read_available(0.2)
+    s.send("unset SHELP_STUB_COMMANDS\r")
+    s.expect(prompt_re, timeout=6)
+    s.read_available(0.3)
     # a task: nothing completes, least of all a filename
     s.send("\x15")
     s.read_available(0.2)
@@ -2069,13 +2102,20 @@ def fish_completion_checks(s, results, home, shell_home):
         ("shelp completion ba", r"[\r\n]bash[\r\n]", "completion shell"),
         ("shelp config ch", r"[\r\n]chain[\r\n]", "config subcommand"),
         ("shelp config chain zzhost:al", r"[\r\n]zzhost:alpha-1[\r\n]", "config chain provider id"),
+        ("shelp zzc", r"[\r\n]zzcmd\tcommand only the binary knows", "a command only the binary knows"),
+        ("shelp zzcmd --zz", r"[\r\n]--zz-flag[\r\n]", "a flag of a command the script never heard of"),
     ]
+    s.send("set -x SHELP_STUB_COMMANDS zzcmd\r")
+    s.expect(r"TESTPROMPT% \r?$", timeout=6)
+    s.read_available(0.3)
     for line, rx, name in cases:
         s.buf = ""
         s.send("complete -C '%s'\r" % line)
         ok = s.expect(rx, timeout=6)
         s.expect(r"TESTPROMPT% \r?$", timeout=4)
         results.check(f"fish: Tab completes {name}", ok, repr(strip_ansi(s.buf)[-300:]))
+    s.send("set -e SHELP_STUB_COMMANDS\r")
+    s.expect(r"TESTPROMPT% \r?$", timeout=6)
     s.buf = ""
     s.send("complete -C 'shelp find big'; echo done-$status\r")
     s.expect(r"done-\d", timeout=6)

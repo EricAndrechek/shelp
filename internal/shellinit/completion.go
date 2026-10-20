@@ -54,25 +54,52 @@ var completionFlags = map[string][]string{
 	"version":     {"-h", "--help"},
 }
 
+// completionSubcommands are the positional subcommands of a command, which
+// complete at its first argument. Value-typed arguments (the shells of
+// init and completion, provider IDs, templates) are not here: the scripts
+// know those by kind. To give a new command subcommands, add it here; the
+// scripts ask the binary (`shelp __complete subcommands CMD`) at Tab time.
+var completionSubcommands = map[string][]string{
+	"setup":  {"shell", "shortcuts"},
+	"config": {"chain", "edit"},
+}
+
+// CompletionSubcommands returns the subcommands completion offers for a
+// command.
+func CompletionSubcommands(cmd string) []string { return completionSubcommands[cmd] }
+
+// CompletionFlagsFor resolves a command path as `shelp __complete flags`
+// receives it ("", "explain", "setup shell", "help config"): the flags of
+// the longest prefix of words that has an entry, so a positional argument
+// (`help config`) falls back to its command. nil when even the first word
+// is no command: a task completes nothing.
+func CompletionFlagsFor(words []string) []string {
+	if len(words) == 0 {
+		return completionFlags[""]
+	}
+	for n := len(words); n >= 1; n-- {
+		if f, ok := completionFlags[strings.Join(words[:n], " ")]; ok {
+			return f
+		}
+	}
+	return nil
+}
+
 // CompletionFlags returns the flags completion offers for a command ("" is
 // the top level, "setup shell" the setup shell flags).
 func CompletionFlags(cmd string) []string { return completionFlags[cmd] }
 
 type completionView struct {
-	Commands   []CompletionCommand
-	Top, Gen   string
-	Providers  string
-	SetupShell string
-	Init       string
-	Help       string
-	Topics     string // names `shelp help` takes
+	// Commands is the fallback command list, used only when the binary
+	// does not answer `__complete commands` (a shelp from before it did).
+	Commands []CompletionCommand
 	// ValueFlags is the shell `case` pattern of every value-taking flag
 	// ("-p|--provider|..."); ValueFlagWords the same space-separated.
 	ValueFlags     string
 	ValueFlagWords string
 	Shells         string
 	Context        string
-	Names          string // command names, space-separated
+	Names          string // fallback command names, space-separated
 }
 
 func join(s []string) string { return strings.Join(s, " ") }
@@ -87,12 +114,6 @@ func Completion(shell string) (string, error) {
 	}
 	v := completionView{
 		Commands:       CompletionCommands,
-		Top:            join(completionFlags[""]),
-		Gen:            join(completionFlags["explain"]),
-		Providers:      join(completionFlags["providers"]),
-		SetupShell:     join(completionFlags["setup shell"]),
-		Init:           join(completionFlags["init"]),
-		Help:           join(completionFlags["help"]),
 		ValueFlags:     strings.Join(valueFlagOrder, "|"),
 		ValueFlagWords: join(valueFlagOrder),
 		Shells:         join(Shells()),
@@ -103,8 +124,7 @@ func Completion(shell string) (string, error) {
 		names = append(names, c.Name)
 	}
 	v.Names = join(names)
-	v.Topics = join(append([]string{"suggest"}, names...))
-	t, err := template.New(shell).Delims("⟦", "⟧").Parse(string(data))
+	t, err := template.New(shell).Delims("⟦", "⟧").Funcs(template.FuncMap{"sq": shellQuote, "fq": fishQuote}).Parse(string(data))
 	if err != nil {
 		return "", fmt.Errorf("shellinit: parse %s completion: %w", shell, err)
 	}
@@ -113,4 +133,9 @@ func Completion(shell string) (string, error) {
 		return "", fmt.Errorf("shellinit: render %s completion: %w", shell, err)
 	}
 	return b.String(), nil
+}
+
+// fishQuote single-quotes s for fish, where only \' and \\ are escapes.
+func fishQuote(s string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s) + "'"
 }
