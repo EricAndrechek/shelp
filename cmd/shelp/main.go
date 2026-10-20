@@ -320,6 +320,9 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		return nil
 	}
 	fmt.Fprintln(stdout, text)
+	if mode == provider.Suggest && oneLine(text) == oneLine(input) {
+		fmt.Fprintln(stderr, errPal.Dim("shelp: that's already a command; to explain it: shelp explain "+shellQuote(input)))
+	}
 	return nil
 }
 
@@ -365,6 +368,9 @@ func unquoteWord(s string) string {
 	}
 	return out
 }
+
+// shellQuote single-quotes s for pasting into a shell.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // footerText is the dim line under an explanation: who answered, how
 // long it took, and tokens when the backend said.
