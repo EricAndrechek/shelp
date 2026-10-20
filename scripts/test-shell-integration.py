@@ -331,6 +331,9 @@ STUB_SOURCE = textwrap.dedent(
     SHELP_STUB_PIDFILE=<path> gets this process's pid at start;
     SHELP_STUB_MARKER=<path> is created after the sleep (so a killed stub
     never creates it); SHELP_STUB_FAIL makes it fail.
+    SHELP_STUB_STDERR="text" writes text to stderr (backslash-n is a
+    newline) before a successful suggest's answer, as shelp's one-time
+    hints do.
 
     SHELP_STUB_COMMANDS="zzcmd ...": commands only this binary has, as if
     added by an upgrade after the hook was loaded: `__kind zzcmd ...`
@@ -438,6 +441,11 @@ STUB_SOURCE = textwrap.dedent(
     if os.environ.get("SHELP_STUB_FAIL"):
         sys.stderr.write("shelp: stub forced failure\\n")
         sys.exit(1)
+
+    note = os.environ.get("SHELP_STUB_STDERR")
+    if note and mode == "suggest":
+        sys.stderr.write(note.replace("\\\\n", "\\n") + "\\n")
+        sys.stderr.flush()
 
     if mode == "suggest":
         # printf, not echo: zsh's (and some bash builds') `echo` interprets
@@ -745,6 +753,82 @@ def kind_checks(s, results, label, shell, prompt_re, model_log, model_log_shell=
     asked = open(model_log).read() if os.path.exists(model_log) else ""
     results.check(f"{label}: a shelp without __kind is never asked to suggest for `__kind ...`",
                   asked == "", repr(asked))
+
+
+HINT_ROWS = ["shelp: stub hint one", "second hint line"]
+
+
+def stderr_success_checks(s, results, label, shell, prompt, prompt_re, top):
+    """What shelp prints on stderr next to a GOOD answer (its one-time
+    hints, e.g. "your Apple Shortcut is from an older shelp") must reach
+    the user, after the line has been replaced: through raw line mode and
+    through shelp-widget (^X^G), two lines of it, so a multi-line message
+    shows as two rows. It is not doubled (`shelp: ` once). prompt is the
+    last prompt row's text, top the rows above it with a two-line prompt.
+    Where the answer shows: zsh keeps the line above the message (`zle
+    -M` draws below it); bash (run> prompt, or the widget's redrawn line)
+    and fish (the prompt is drawn again) put it below."""
+    k = KIND_SHELL[shell]
+    task = "hint probe"
+    want = suggest_cmd(task)
+    below = shell != "zsh"
+
+    def do(line, wait=0.4):
+        s.buf = ""
+        s.send(line + "\r")
+        s.expect(prompt_re, timeout=6)
+        s.read_available(wait)
+
+    do(k["setenv"].format("SHELP_STUB_STDERR", "'" + HINT_ROWS[0] + "\\n" + HINT_ROWS[1] + "'"))
+    for how in ("raw line", "widget"):
+        s.buf = ""
+        if how == "raw line":
+            s.send("shelp " + task + "\r")
+        else:
+            s.send(task)
+            s.read_available(0.3)
+            s.buf = ""
+            s.send("\x18\x07")
+        # bash's raw line mode prints the note under the rewritten line and
+        # then the run> prompt, whatever the prompt above is
+        line_row = ("run> " if shell == "bash" and how == "raw line" else prompt) + want
+        # bash's widget (bind -x) clears only the last prompt row, so the
+        # rows above it stay above the note, which stands where that row was
+        above = shell == "bash" and how == "widget"
+        tops = [] if shell == "bash" else top
+        got = s.expect(re.escape(HINT_ROWS[1]), timeout=8) and s.expect(re.escape(want), timeout=8)
+        s.read_available(0.6)
+        rows = s.screen()
+        if rows is None:
+            out = strip_ansi(s.buf)
+            ok = got and all(r in out for r in HINT_ROWS) and want in out and "shelp: shelp:" not in out
+        else:
+            at = last_row(rows, HINT_ROWS[0])
+            ok = got and at is not None and rows[at + 1] == HINT_ROWS[1]
+            if ok and above:
+                ok = rows[at - len(top):at] == top
+            if ok and below:
+                n = at + 2 + len(tops)
+                ok = (rows[at + 2:n] == tops and n < len(rows) and rows[n].startswith(line_row))
+            elif ok:
+                lr = last_row(rows, prompt + want)
+                ok = lr is not None and lr < at
+        results.check(f"{label}: {how}: stderr of a good answer shows, after the line is replaced",
+                      ok, view(rows))
+        if shell == "bash" and how == "raw line":
+            s.buf = ""
+            s.send("\x15\r")  # empty answer: nothing runs
+            s.expect(prompt_re, timeout=8)
+        else:
+            if shell != "bash":
+                s.buf = ""
+                s.send("\x14")
+                ok = s.expect(r"BUF=<[^>\r\n]*>", timeout=4) and f"BUF=<{want}>" in strip_ansi(s.buf)
+                results.check(f"{label}: {how}: the line holds the suggestion", ok, strip_ansi(s.buf)[-200:])
+                s.read_available(0.3)
+            s.send("\x15")
+        s.read_available(0.4)
+    do(k["unset"].format("SHELP_STUB_STDERR"))
 
 
 # --------------------------------------------------------------------
@@ -1131,7 +1215,7 @@ def zsh_anim_checks(s, results, label, scratch):
     fresh_pidfile()
     s.buf = ""
     s.send("shelp fail probe\r")
-    got = s.expect(re.escape("shelp: shelp: stub forced failure"), timeout=8)
+    got = s.expect(re.escape("shelp: stub forced failure"), timeout=8)
     seen += s.buf
     note_pid()
     s.read_available(0.3)
@@ -1279,6 +1363,15 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, zsh_bin, with_plugins=None):
         results.check(f"{label}: plain `echo hi` still runs", ok, s.buf[-300:])
 
         kind_checks(s, results, label, "zsh", r"TESTPROMPT% \r?$", os.path.join(home, "model.log"))
+
+        zsh_prompt_re = r"TESTPROMPT% \r?$"
+        stderr_success_checks(s, results, label, "zsh", "TESTPROMPT% ", zsh_prompt_re, [])
+        s.send("PS1=$'TESTTOP\\nTESTPROMPT%% '\r")
+        s.read_available(0.5)
+        stderr_success_checks(s, results, f"{label} two-line prompt", "zsh", "TESTPROMPT% ",
+                              zsh_prompt_re, ["TESTTOP"])
+        s.send("PS1='TESTPROMPT%% '\r")
+        s.read_available(0.5)
 
         # the animated status, Ctrl-C, NO_COLOR, job-control silence
         zsh_anim_checks(s, results, label, os.path.join(home, "anim"))
@@ -1654,6 +1747,15 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
 
         kind_checks(s, results, "bash", "bash", r"TESTPROMPT\$ \r?$", os.path.join(home, "model.log"))
 
+        bash_prompt_re = r"TESTPROMPT\$ \r?$"
+        stderr_success_checks(s, results, "bash", "bash", "TESTPROMPT$ ", bash_prompt_re, [])
+        s.send("PS1=$'TESTTOP\\nTESTPROMPT$ '\r")
+        s.read_available(0.5)
+        stderr_success_checks(s, results, "bash two-line prompt", "bash", "TESTPROMPT$ ",
+                              bash_prompt_re, ["TESTTOP"])
+        s.send("PS1='TESTPROMPT$ '\r")
+        s.read_available(0.5)
+
         # the in-progress status, raw line mode and shelp-widget
         bash_raw_status_checks(s, results)
         bash_widget_checks(s, results, os.path.join(home, "widget"))
@@ -1843,6 +1945,8 @@ def fish_home(tmpdir):
         # test-only: ^T prints the command line (fish_failure_check)
         f.write("function _t_buf; printf '\\nBUF=<%s>\\n' (commandline); commandline -f repaint; end\n")
         f.write("bind \\ct _t_buf; bind -M insert \\ct _t_buf\n")
+        # what `shelp init fish --bind '^X^G'` adds
+        f.write("bind \\cx\\cg shelp-widget; bind -M insert \\cx\\cg shelp-widget\n")
     return d
 
 
@@ -2026,6 +2130,7 @@ def run_fish(tmpdir, results, host):
         fish_failure_check(s, results, "fish", [])
         fish_explain_interrupt_check(s, results, "fish", [])
         fish_completion_checks(s, results, home, "/root" if host.mode == "docker" else home)
+        stderr_success_checks(s, results, "fish", "fish", "TESTPROMPT% ", r"TESTPROMPT% \r?$", [])
 
         # the same under a two-line prompt (fish redraws it with
         # `commandline -f repaint` after the output)
@@ -2039,6 +2144,8 @@ def run_fish(tmpdir, results, host):
         s.read_available(0.3)
         explain_screen_check(s, results, "fish two-line prompt", start, ["TESTTOP", "TESTPROMPT%"])
         fish_failure_check(s, results, "fish two-line prompt", ["TESTTOP"])
+        stderr_success_checks(s, results, "fish two-line prompt", "fish", "TESTPROMPT% ",
+                              r"TESTPROMPT% \r?$", ["TESTTOP"])
         fish_explain_interrupt_check(s, results, "fish two-line prompt", ["TESTTOP"])
         s.send("function fish_prompt; printf 'TESTPROMPT%% '; end\r")
         s.read_available(0.8)

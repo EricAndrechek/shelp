@@ -79,7 +79,8 @@ _shelp_is_task() {
 # spinner shows and clears itself.)
 shelp-widget() {
   [ -n "$READLINE_LINE" ] || return
-  local cmd rc=0 shown= saved_int
+  local cmd rc=0 shown= saved_int errf err=
+  errf=$(mktemp 2>/dev/null) || errf=/dev/null
   if [ -t 2 ] && [ "${TERM-}" != dumb ]; then
     if [ -n "${NO_COLOR-}" ]; then
       printf 'shelp: thinking…' >&2
@@ -90,12 +91,17 @@ shelp-widget() {
   fi
   saved_int=$(trap -p INT)
   trap : INT
-  cmd=$(SHELP_SHELL=bash command shelp suggest -- "$READLINE_LINE" 2>/dev/null) || rc=$?
+  cmd=$(SHELP_SHELL=bash command shelp suggest -- "$READLINE_LINE" 2>"$errf") || rc=$?
   if [ -n "$saved_int" ]; then eval "$saved_int"; else trap - INT; fi
   [ -n "$shown" ] && printf '\r\e[K' >&2
+  [ "$errf" != /dev/null ] && { err=$(<"$errf"); command rm -f "$errf"; }
   [ "$rc" -eq 0 ] && [ -n "$cmd" ] || return 0
   READLINE_LINE=$cmd
   READLINE_POINT=${#cmd}
+  # What shelp printed alongside a good answer (a hint) goes where the
+  # status stood, with a newline after it: readline then redraws the prompt
+  # and the new line on the row below it. Failures stay silent here.
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
 }
 
 # `bind` warns ("line editing not enabled") and is a no-op in a

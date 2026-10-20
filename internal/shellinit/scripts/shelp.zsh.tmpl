@@ -136,14 +136,33 @@ _shelp_run_animated() {
   return $rc
 }
 
+# _shelp_show_err TEXT: show what shelp printed on stderr under the line
+# (`zle -M`: it stays until the next key and survives the redraw). Shelp's
+# own messages already start with `shelp: `, so only a message that does
+# not gets the prefix. TEXT has no trailing newline ($(...) and
+# _shelp_run_animated strip it); several lines display as several lines.
+_shelp_show_err() {
+  local msg=$1
+  [[ -n $msg ]] || return 0
+  [[ $msg == shelp:* ]] || msg="shelp: $msg"
+  zle -M "$msg"
+}
+
 # Widget: turn the text on the command line into a command in place.
 {{if .Bind}}# Bound to '{{.Bind}}' below.{{else}}# Bind it yourself, e.g.:  bindkey '^G' shelp-widget{{end}}
 shelp-widget() {
   [[ -z $BUFFER ]] && return
   local _shelp_out _shelp_err
   SHELP_SHELL=zsh _shelp_run_animated suggest -- "$BUFFER"
-  [[ -n $_shelp_out ]] && BUFFER=$_shelp_out && CURSOR=${#BUFFER}
+  if [[ -n $_shelp_out ]]; then
+    BUFFER=$_shelp_out
+    CURSOR=${#BUFFER}
+  fi
   zle reset-prompt
+  # A hint printed alongside a good answer (an outdated Shortcut, "already
+  # a command"); failures stay silent here, as before. After the
+  # reset-prompt: it redraws the line and wipes a message shown before it.
+  [[ -n $_shelp_out ]] && _shelp_show_err "$_shelp_err"
 }
 zle -N shelp-widget
 {{if .Bind}}
@@ -185,7 +204,7 @@ _shelp_raw_dispatch() {
   # $1: mode (suggest|explain); $2: original typed line (for history);
   # $3: raw payload, byte-for-byte.
   emulate -L zsh
-  local kind=$1 orig=$2 body=$3 cmd rc _shelp_out _shelp_err
+  local kind=$1 orig=$2 body=$3 cmd rc shown _shelp_out _shelp_err
   if [[ $kind == explain ]]; then
     # `zle -I` moves below the typed line so the explanation prints like a
     # command's output; then one blank line. No `zle reset-prompt`
@@ -215,13 +234,18 @@ _shelp_raw_dispatch() {
     print -s -- "$orig"
     BUFFER=$cmd
     CURSOR=${#BUFFER}
+    shown=$_shelp_err
   else
     BUFFER=$orig
     CURSOR=${#BUFFER}
     # 130: Ctrl-C cancelled it -- just hand the line back, no message
-    (( rc != 130 )) && [[ -n $_shelp_err ]] && zle -M "shelp: $_shelp_err"
+    (( rc != 130 )) && shown=$_shelp_err
   fi
   zle reset-prompt
+  # stderr: shelp's error after a failure, a hint (stderr alongside a good
+  # answer) after a success. After the reset-prompt, which redraws the line
+  # and wipes a message shown before it.
+  _shelp_show_err "$shown"
 }
 
 shelp-accept-line() {

@@ -49,8 +49,20 @@ end
 function shelp-widget
     set -l line (commandline)
     test -n "$line"; or return
-    set -l cmd (SHELP_SHELL=fish command shelp suggest -- "$line" 2>/dev/null | string collect)
-    test -n "$cmd"; and commandline -r -- $cmd
+    set -l errfile (mktemp 2>/dev/null; or echo /dev/null)
+    set -l cmd (SHELP_SHELL=fish command shelp suggest -- "$line" 2>$errfile | string collect)
+    if test -n "$cmd"
+        commandline -r -- $cmd
+        # What shelp printed alongside a good answer (a hint) goes below the
+        # line, then room for the prompt, as in raw line mode: the repaint
+        # below does not know about the output.
+        if test -s $errfile
+            echo
+            printf '%s\n' (string collect <$errfile) >&2
+            _shelp_prompt_room
+        end
+    end
+    test $errfile != /dev/null; and command rm -f $errfile
     commandline -f repaint
 end
 {{if .Bind}}
@@ -142,11 +154,12 @@ function _shelp_raw_dispatch
         commandline -r -- $cmd
     else
         commandline -r -- $orig
-        if test $intr -eq 0 -a -s $errfile
-            # exactly one trailing newline, then room for the prompt
-            printf '%s\n' (string collect <$errfile) >&2
-            _shelp_prompt_room
-        end
+    end
+    # shelp's stderr, after a failure and after a good answer alike (a
+    # hint): exactly one trailing newline, then room for the prompt
+    if test $intr -eq 0 -a -s $errfile
+        printf '%s\n' (string collect <$errfile) >&2
+        _shelp_prompt_room
     end
     command rm -f $errfile
     commandline -f repaint
