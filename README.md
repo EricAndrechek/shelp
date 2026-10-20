@@ -98,7 +98,13 @@ executed — press Enter again to run it) and the line you actually typed
 is added to history; explaining streams the answer below the prompt and
 returns you to an empty line. In zsh a spinner (`⠋ shelp: thinking…`)
 runs after the line while shelp works, and Ctrl-C cancels the call and
-leaves the line you typed in place to edit. Everything else — `shelp providers`, `shelp
+leaves the line you typed in place to edit. Anything shelp prints on stderr
+next to a good answer (a one-time hint such as "your Apple Shortcut is from
+an older shelp", or "that's already a command; to explain it: shelp explain
+...") is shown after the line is replaced, in raw line mode and from the
+widget alike. The `shelp` function itself (`shelp <task>` run from a script
+or after `&&`) calls no other function of the hook, so it still works in an
+environment that keeps only some of a shell's functions. Everything else — `shelp providers`, `shelp
 -p fm task`, and running `shelp task` from a script or `zsh -c` — behaves
 exactly as before.
 
@@ -156,7 +162,10 @@ your dotfiles yourself and exits cleanly.
 
 Subcommands, flags, provider IDs (`-p`), template names and the other
 flag values complete with Tab in zsh, bash and fish. A task is free text,
-so nothing completes after its first word. It is on automatically with the
+so nothing completes after its first word. The commands, their flags and
+subcommands are asked of the binary at Tab time (`shelp __complete`), so a
+shell that loaded its completion before a `brew upgrade` still offers the
+new commands. It is on automatically with the
 shell hook (`shelp init`, `shelp setup shell`) and with the Homebrew
 formula. Otherwise generate the script yourself:
 
@@ -266,9 +275,9 @@ change in the source file and run `chezmoi apply` for you.
 # Apple's cloud model, at the cost of your Claude plan's usage.
 providers = ["shortcuts:apple-pro", "claude:sonnet", "fm"]
 
-# Prompt template: "v4" (default: v2, with Markdown explanations), "v2"
-# (rules), "v1" (minimal), "v3" (v2 + few-shot). See internal/prompt/templates.go; the Benchmark section below
-# has the comparison.
+# Prompt template: "v4" (the default: v2's rules for suggest, short Markdown
+# for explain), "v2" (rules), "v1" (minimal), "v3" (v2 + few-shot). See
+# internal/prompt/templates.go; the Benchmark section below has the comparison.
 template = "v4"
 
 # What to tell the model about your environment. cwd/tools are opt-in --
@@ -410,13 +419,12 @@ the full report across every run, including dropped backends.
 - **Apple's on-device model (`fm`) is fast and private but weak:** 31-36%,
   ~0.35s warm. It invents flags and tools (`battctl`, `jpegmini`, `ip` on
   macOS) and falls for most BSD/GNU traps. Keep it as the offline fallback.
-- **Prompt template v2 is the default** because it matched or beat v1
-  everywhere: Apple Intelligence Pro 94% -> 98%, Claude Sonnet's
-  format-clean rate 91% -> 100%, fm 31% -> 36%. v3 (v2 plus worked
-  examples) added nothing over v2 for any model, and small models copy the
-  examples' shape. The default template is now v4, which is v2 for suggest
-  and only changes explain's format (short Markdown that shelp renders on a
-  terminal), so these suggest numbers still apply.
+- **The default template is v4**, which is v2 for suggest and only changes
+  explain's format (short Markdown that shelp renders on a terminal), so
+  the suggest numbers here are v2's. v2 beat v1 everywhere: Apple
+  Intelligence Pro 94% -> 98%, Claude Sonnet's format-clean rate
+  91% -> 100%, fm 31% -> 36%. v3 (v2 plus worked examples) added nothing
+  over v2 for any model, and small models copy the examples' shape.
 - **Telling the model which tools are installed (`--context ...,tools`)
   made fm worse** (36% -> 32%): it reached for the listed tools where they
   didn't fit. It stays opt-in.
