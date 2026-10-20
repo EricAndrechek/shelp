@@ -13,12 +13,12 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
 
 ## Layout
 
-- `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers, config,
+- `cmd/shelp/` — the CLI. Subcommands: suggest (default), explain, providers, history, config,
   setup, init, completion, version; hidden `__complete` and `__kind`. Suggest
   prints ONLY the command on stdout. `kind.go`: `commandFor(args)`, the one
   decision of which argument shapes a command claims (help, version and
-  config only some: `help me find files`, `version of node`, `config of
-  nginx` are tasks), the `commands` handler table `run` dispatches through,
+  config and history only some: `help me find files`, `version of node`,
+  `config of nginx`, `history of git commits` are tasks), the `commands` handler table `run` dispatches through,
   and `__kind`, which prints that decision ("command"/"task") for the
   shell hooks; `kind_test.go` checks run and `__kind` agree.
 - `internal/provider/` — `Provider` interface, family registry, fallback
@@ -60,8 +60,9 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `config.go`'s `[shell]` table) and `shelp setup shell`'s rc-file
   installer (`setup.go`: idempotent marked block, chezmoi/symlink
   detection, the macOS `~/.bash_profile` note). **The hooks keep no list
-  of commands**: the `shelp` wrapper and raw-line Enter ask the binary,
-  `_shelp_is_task` -> `SHELP_PROVIDER=__kind command shelp __kind ARGS`
+  of commands**: the `shelp` wrapper (self-contained, inlined check) and
+  raw-line Enter (`_shelp_is_task`, raw-line-only) ask the binary,
+  `SHELP_PROVIDER=__kind command shelp __kind ARGS`
   (2026-10-09: a shell still running an older hook sent `shelp config` to
   the model as the task "config" after `brew upgrade`, and the per-shell
   lists had already drifted once). A shell keeps the hook it loaded until
@@ -133,8 +134,8 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `completions/<shell>.tmpl` (delimiters `⟦ ⟧`, since bash uses `<<<`);
   `shelp completion <shell>` prints that text and `Render` embeds the same
   text in `shelp init`, so there is one source. Dynamic values come from the
-  hidden `shelp __complete providers|templates` (config + LookPath, no
-  Detect). zsh defines `_shelp` and registers with `compdef` at once, or,
+  hidden `shelp __complete KIND` (config + LookPath, no Detect; kinds
+  under "Shell integration updates"). zsh defines `_shelp` and registers with `compdef` at once, or,
   when `compdef` does not exist yet (init ran before compinit), from a
   one-shot precmd hook; it never calls compinit, and as a `#compdef` file
   on fpath (Homebrew) it runs itself. bash's reply drops the part of a
@@ -143,25 +144,6 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   `complete -c shelp -f -a '(__shelp_complete)'` (`complete -e` first, so
   loading twice is harmless). The pty suite's Tab checks use a config with
   deterministic `zzhost:*` IDs; bash needs a third Tab to list.
-- `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
-  own `[table]` via `cfg.Section(name, &v)`.
-  `edit.go`: `SetProviders` (comment-preserving replace/insert of the
-  top-level `providers` assignment, multi-line arrays included),
-  `SaveProviders`/`WriteAtomic` (temp + rename), `Starter`.
-- `cmd/shelp/config.go` — `shelp config` (show: path/status + effective
-  settings and their source), `config chain [IDS]` (validate against
-  `provider.All`, warn on unavailable, interactive numbered picker on a
-  terminal, `$SHELP_PROVIDER` override warning), `config edit`, and the
-  guided `shelp setup` (no target, terminal only: shell hook, Apple
-  Shortcut, chain). A config file that is chezmoi-managed or a symlink is
-  never written (`shellinit.ManagedElsewhere`): the exact change is printed.
-  Prompts are line-based on one shared `bufio.Reader` (`prompter`); the
-  seams at the top (`stdin`, `isInteractive`, `listProviders`,
-  `probeProviders`, `runEditor`, the guided-setup `*Fn` vars) let tests run
-  everything without a terminal, backend, rc file or Shortcut.
-- `internal/cooldown/` — the rate-limit cooldown store
-  (`$XDG_CACHE_HOME/shelp/cooldown.json`) `provider.Chain` and `shelp
-  providers` read/write; see "Rate limits and cooldowns" below.
 - `internal/bench/` — benchmark harness core: `case.go` (`Case`,
   `LoadCases`), `select.go` (`--cases`/`--templates` selection), `context.go`
   (synthetic os/shell `Context`, never the runner's real host),
@@ -180,6 +162,154 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
   of 2026-09-30: suggest + explain, see `bench/README.md`); `bench/grades.jsonl`
   — graded answers (tracked); `bench/runs/` — raw runs (gitignored).
   `bench/README.md` — the harness's own docs (commands, schemas, checks).
+
+## Config editing, the provider manager, history (tui-config and history branches)
+
+### Config files and writers
+
+- `internal/config/` — `~/.config/shelp/config.toml`; each family decodes its
+  own `[table]` via `cfg.Section(name, &v)`.
+  `edit.go`: `SetProviders` (comment-preserving replace/insert of the
+  top-level `providers` assignment, multi-line arrays included),
+  `SaveProviders`/`WriteAtomic` (temp + rename), `Starter`.
+  `tables.go`: `ArrayTableBlocks`/`RemoveBlock`/`AppendBlock` for
+  `[[openai.endpoint]]`/`[[openai.local]]` blocks. `config.Quote` exists
+  because Go `%q` can emit `\x` escapes TOML forbids.
+- `cmd/shelp/config.go` — `shelp config` (show: path/status + effective
+  settings and their source, including a `history` row), `config chain
+  [IDS]` (validate against `provider.All`, warn on unavailable,
+  `$SHELP_PROVIDER` override warning; on a terminal it opens the manager
+  below instead of the old numbered picker), `config edit`, `config add
+  endpoint|local`, `config remove NAME`, and the guided `shelp setup` (no
+  target, terminal only: shell hook, Apple Shortcut, chain). The seams at
+  the top (`stdin`, `isInteractive`, `listProviders`, `probeProviders`,
+  `runEditor`, the guided-setup `*Fn` vars) let tests run everything
+  without a terminal, backend, rc file or Shortcut. Prompts (`prompter`,
+  one shared `bufio.Reader`) take Ctrl-C and Esc: Esc answers no even when
+  the default is yes.
+- `cmd/shelp/configedit.go` — `configOps`/`saveOps`: **the ONLY writer for
+  chain/add/remove/manager.** It verifies the result decodes to exactly what
+  was asked, or writes nothing.
+- A config file that is chezmoi-managed or a symlink is never written
+  (`shellinit.ManagedElsewhere`): the exact change is printed. On a tty with
+  a plain chezmoi source (not `.tmpl`, not encrypted, not `modify_`/
+  `create_`), shelp offers (default No) to edit the source and run `chezmoi
+  apply`.
+- `commandFor` (kind.go): `config add` claims only bare `add`, `add -h`, and
+  `add endpoint|local ...`; `config remove` claims at most one more word
+  (`config add a cron job` and `config remove old kernels` are tasks).
+
+### Route labels (`openai_route.go`)
+
+- Endpoint `label` is used as-is for a one-model endpoint and
+  `"<label> · <model>"` for several; `labels = {model = "..."}` wins.
+  `[[openai.local]] label` labels a local server.
+- Helpers: `RouteOf`, `CustomRoute`, `ConfiguredRoutes`, `PresetNames`,
+  `PresetDefaults`, `IsBuiltinLocal`. `ValidateKeyEnv` refuses a
+  key-looking value for `api_key_env` and never echoes it.
+- `shelp config add endpoint|local` flags: `--preset --base-url --key-env
+  --model --label`.
+
+### `internal/term` and the provider manager
+
+- `internal/term`: raw mode via syscall ioctls (TIOCGETA/TIOCSETA on
+  darwin/BSD, TCGETS/TCSETS on linux; elsewhere `Supported=false`).
+  VMIN=0/VTIME=1 gives a 100ms read timeout, so a lone Esc is told from a
+  sequence and a key reader stops without stealing the next prompt's input.
+  The `Decoder` is pure. Shift/option-arrows (`;2`/`;3`/`;4`, `\e\e[A`, rxvt
+  `\e[a`) all count as Shift.
+- `cmd/shelp/manager.go` is the pure model (`Update`/`View` emitting
+  probe/fix/save effects); `manager_form.go` the add form; `manager_run.go`
+  the loop (restores the terminal on return, panic, SIGTERM and SIGHUP);
+  `manager_tty.go` the alt screen (use `\r\n`: output processing is off in
+  raw mode). `interrupt.go`: `exitStatus`/`errInterrupted`.
+- Entered by `shelp providers -i|--interactive` and `shelp config chain` on
+  a tty.
+- Traps:
+  - In raw mode Ctrl-C is byte 0x03, not SIGINT: return `errInterrupted` so
+    the exit status is 130.
+  - Read the `probeProviders` seam BEFORE spawning probe goroutines: they
+    outlive the loop (race detector).
+  - Detect results are memoized (shortcuts per process, claude per
+    instance): a re-check needs `provider.ResetDetectCache()` and fresh
+    instances.
+  - macOS revokes a pty when its session leader exits, so a pty test that
+    reads termios afterwards must not give the child a controlling tty.
+
+### Request history (`internal/history`, `cmd/shelp/history.go`)
+
+- JSONL at `$XDG_STATE_HOME/shelp/history.jsonl` (`~/.local/state/shelp/`),
+  files 0600, directory 0700, one O_APPEND write per entry, errors
+  swallowed. Retention rewrite once the file passes 1.5x `[history]
+  max_entries` (default 1000). `[history] enabled`; `SHELP_HISTORY=0|off|
+  false|no` turns it off. Cancelled calls are not recorded; failures are,
+  with `error`. `key` = first 16 bytes (hex) of sha256(mode, template,
+  system, prompt), stored for a future answer cache.
+- `shelp history [show|clear|path]` flags `-n --all -s/--search --provider
+  --json`. `recordHistory` and the `historyPath` seam live in
+  `cmd/shelp/history.go`. `isHistoryArgs`: `history` is a command only with
+  no args, all-flag args, or `show|clear|path` first, so `history of ...`
+  stays a task.
+- **Every test package that reaches `runGenerate` needs a `TestMain`
+  redirecting `XDG_STATE_HOME`** (cmd/shelp has one; see also the
+  `SHELP_TEST_NO_BACKENDS` guard in CLAUDE.md).
+
+### Token usage, explain footer, small output rules
+
+- Providers call `req.ReportUsage(Usage)` (Generate's signature is
+  unchanged); `provider.Call` turns it into `Result.Usage`. openai streams
+  send `stream_options.include_usage`; a 400 naming `stream_options`
+  retries once without it, remembered per base URL (`noStreamOptions`).
+  claude reports usage in suggest only (the JSON envelope), not in streaming
+  explain; `fm` and `shortcuts` never report.
+- Explain's terminal footer (provider · time · tokens) is
+  `explainHighlighter.SetFooter`, printed after the man line; non-terminal
+  output stays raw model text.
+- `unquoteWord` (explain only) strips exactly one fully quoted word (raw
+  line mode passes `shelp explain '...'` with its quotes).
+- Suggest's same-as-input hint goes to stderr only and is skipped with
+  `--json`.
+
+## Shell integration updates (polish branch)
+
+- **The three `shelp` wrappers call no other hook function.** A shell
+  snapshot (Claude Code's) dropped `_`-prefixed functions, leaving the
+  wrapper calling nothing. Each wrapper inlines its `__kind` check;
+  `TestRender_WrapperSelfContained` enforces it. `_shelp_is_task` is
+  raw-line-only. `TestRender_NoCommandLists` expects two guarded `__kind`
+  calls (one in zsh without line mode).
+- **stderr next to a good answer is shown.** After a successful raw-line
+  suggest/widget, all three shells show the model call's stderr (hints,
+  the same-as-input note): zsh via `_shelp_show_err`; bash raw line needs
+  nothing (shelp runs as a command after readline is done); the bash
+  widget prints before readline's redraw; fish uses `_shelp_prompt_room`.
+  **`zle -M` must come AFTER `zle reset-prompt`** or the message is
+  wiped; byte-stream checks cannot see this, read the pyte screen. The
+  old failure message doubled `shelp: ` and was never visible.
+- **Dynamic completion.** `__complete` kinds: `providers`, `templates`,
+  `commands`, `flags [CMD [SUB]]`, `subcommands CMD [SUB]` (a two-word key
+  such as `config add`), `presets` (`provider.PresetNames()`, for
+  `--preset`), `routes` (configured route names, for `config remove`).
+  Commands, flags and subcommands come from the binary at Tab time (a shell
+  keeps the script it loaded across an upgrade), via
+  `completionSubcommands` in `internal/shellinit/completion.go`. An empty
+  `commands` answer means an older binary: the script falls back to the
+  list rendered into it. There is no static fallback for flags or
+  subcommands. A command with flags needs a `completionFlags` entry (a
+  missing entry makes `__complete flags X` treat X as a task); value-taking
+  flags go in `valueFlagOrder` so the scripts skip their values when
+  counting positionals. Each Tab costs one `__complete` exec.
+  `TestCompletionFlagsCoverHelp`/`TestCompletionCommandsCoverHelp` tie the
+  tables to help.go.
+- **Pty suite** (`scripts/test-shell-integration.py`): `SHELP_STUB_STDERR`
+  makes the stub print stderr; `SHELP_STUB_COMMANDS` also feeds
+  `__complete`. Sessions get `XDG_STATE_HOME`, `XDG_CACHE_HOME`,
+  `SHELP_HISTORY=0`, and SIGINT reset to the default in the child (a suite
+  run as an `&` background job inherited an ignored SIGINT and bash's
+  Ctrl-C checks failed). Importing the script as a module re-execs under
+  `uv run` when pyte is missing. Tab checks poll (~5s) because the stub is
+  a slow Python script.
+
 
 ## Provider contract (read before adding one)
 
@@ -639,6 +769,29 @@ chain line.
   need a real Mac (`shortcuts sign`, the real `shortcuts` CLI) skip
   themselves when `CI` is set; tests needing a tool (zsh, plutil) skip when
   it is absent. Never put test logic in the YAML.
+- **Tests never reach a real backend: `SHELP_TEST_NO_BACKENDS`**
+  (`provider.NoBackendsEnv`, `internal/provider/execx.go`). Set, `LookPath`
+  and `RunCmd*` refuse `fm`, `shortcuts`, `claude`, `osascript` and `open`
+  (an `Unavailable` error / not found, no process started) unless the
+  resolved path is inside `os.TempDir()` or a `testdata` directory, so
+  fakes (`testdata/agentcli/claude`, temp-dir scripts) still work. Cost: a
+  `Getenv` per call, nothing in `init()`. Every test package that can
+  reach a provider sets it in `TestMain` (`internal/provider`,
+  `internal/bench`, `cmd/shelp`; `cmd/shelp` also defaults
+  `SHELP_PROVIDER=nosuch:model`). Why: a test helper cleared
+  `SHELP_PROVIDER` and ran the installed Apple Shortcut, a real Apple
+  Intelligence Pro request. `internal/provider`'s `TestMain` puts a
+  harmless fake `shortcuts` first on PATH so the setup/listing tests still
+  run (the real one is invisible there; `cmd/shelp`'s `providers` list has
+  no `fm` for the same reason). Tests that need the real CLI
+  (`TestGenerateShortcutPlutilRoundTrip`,
+  `TestShortcutsProviderGenerateNotInstalled`, `TestLiveShortcut`) call
+  `useRealBackends(t)`: they skip unless `SHELP_TEST_REAL_BACKENDS=1` (or
+  `SHELP_LIVE_SHORTCUTS=1`), then clear the gate and restore PATH for that
+  test only. `/usr/bin/log` and `plutil` are not gated. A new test package
+  that reaches providers needs its own `TestMain` line.
+- `make ci` on 2026-10-20 (after merging tui-config, history, polish): pty
+  suite 379/379 (zsh 214, bash 82, fish 83), `go test -race` green.
 - Release checklist: `make sign-shortcut` if the generator changed or the
   embedded copy is within ~60 days of expiry; `make ci`; tag; bump
   `Formula/shelp.rb`'s tag; `git -C "$(brew --repository
