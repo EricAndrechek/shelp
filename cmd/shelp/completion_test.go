@@ -181,8 +181,9 @@ models = ["alpha-1", "beta-2"]
 	if err := run(context.Background(), []string{"__complete", "providers"}, &out, &errb); err != nil {
 		t.Fatal(err)
 	}
+	// no "fm" here: the test gate hides the real /usr/bin/fm from LookPath
 	ids := strings.Split(strings.TrimSpace(out.String()), "\n")
-	for _, want := range []string{"fm", "zzhost:alpha-1", "zzhost:beta-2"} {
+	for _, want := range []string{"zzhost:alpha-1", "zzhost:beta-2"} {
 		found := false
 		for _, id := range ids {
 			found = found || id == want

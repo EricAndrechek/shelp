@@ -21,12 +21,47 @@ import (
 // package test run, so tests never read or write the real
 // ~/.cache/shelp/local-models.json, and fakes the shortcut version probe. Individual tests that want an empty,
 // per-test cache still call setCacheHome.
+// origPath is PATH before TestMain put the fake shortcuts first.
+var origPath string
+
+// useRealBackends is how a test that needs the real shortcuts CLI (the sign
+// round trip, the not-installed run, the live check) opts out of the
+// SHELP_TEST_NO_BACKENDS gate and the fake shortcuts: it skips unless the
+// developer sets SHELP_TEST_REAL_BACKENDS=1 (or SHELP_LIVE_SHORTCUTS=1), then
+// clears the gate and restores PATH for that test only.
+func useRealBackends(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SHELP_TEST_REAL_BACKENDS") != "1" && os.Getenv("SHELP_LIVE_SHORTCUTS") != "1" {
+		t.Skip("needs the real tool: set SHELP_TEST_REAL_BACKENDS=1 to run")
+	}
+	t.Setenv(NoBackendsEnv, "")
+	t.Setenv("PATH", origPath)
+}
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "shelp-openai-test-cache")
 	if err != nil {
 		panic(err)
 	}
 	os.Setenv("XDG_CACHE_HOME", dir)
+	// The structural guard (execx.go): LookPath/RunCmd refuse the real fm,
+	// shortcuts, claude, osascript and open outside a temp dir or testdata.
+	// Tests that need the real tool opt out locally with t.Setenv.
+	os.Setenv(NoBackendsEnv, "1")
+	// With the real shortcuts hidden by the gate, many tests (setup, the
+	// provider listing) would skip; a harmless fake in the temp dir keeps
+	// LookPath("shortcuts") true and fails any call that slips past a test's
+	// own fakes. Tests that need the real CLI (the sign round trip, the live
+	// check) set PATH/the gate themselves or skip.
+	fakeBin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "shortcuts"), []byte("#!/bin/sh\necho 'shelp test fake: no shortcuts here' >&2\nexit 1\n"), 0o755); err != nil {
+		panic(err)
+	}
+	origPath = os.Getenv("PATH")
+	os.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	// Never run a real installed shortcut from a unit test: the version
 	// probe defaults to "current format". Tests that need another answer
 	// replace it themselves.

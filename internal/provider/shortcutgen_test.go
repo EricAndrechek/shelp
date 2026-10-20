@@ -524,6 +524,7 @@ func TestGenerateShortcutPlutilRoundTrip(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("darwin only")
 	}
+	useRealBackends(t)
 	if _, ok := LookPath("plutil"); !ok {
 		t.Skip("plutil not on PATH")
 	}

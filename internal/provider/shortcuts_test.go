@@ -564,6 +564,7 @@ func TestShortcutsProviderGenerateNotRateLimitedForLegitimateAnswer(t *testing.T
 // --- Provider.Generate error paths (real `shortcuts` calls, no PCC/network) ---
 
 func TestShortcutsProviderGenerateNotInstalled(t *testing.T) {
+	useRealBackends(t)
 	if _, ok := LookPath("shortcuts"); !ok {
 		t.Skip("shortcuts CLI not on PATH")
 	}
@@ -968,6 +969,7 @@ func TestLiveShortcut(t *testing.T) {
 	if os.Getenv("SHELP_LIVE_SHORTCUTS") != "1" {
 		t.Skip("set SHELP_LIVE_SHORTCUTS=1 to run (makes real Apple PCC calls against a daily quota)")
 	}
+	useRealBackends(t)
 	cfg, err := config.LoadDefault()
 	if err != nil {
 		t.Fatal(err)

@@ -6,9 +6,54 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// NoBackendsEnv, when set (to anything non-empty), makes LookPath and RunCmd*
+// refuse the real system backends in realBackends unless the resolved path
+// is inside os.TempDir() or a testdata directory (fakes keep working). Every
+// test binary that can reach a provider sets it in TestMain, so a test can
+// never run the user's installed Apple Shortcut or model CLI by accident (a
+// helper once cleared SHELP_PROVIDER and ran a real Apple Intelligence Pro
+// request). Cost outside tests: one Getenv per call, nothing in init().
+const NoBackendsEnv = "SHELP_TEST_NO_BACKENDS"
+
+// realBackends are the executables the gate guards: the model backends and
+// what drives them (osascript for Shortcuts Events, open for importing a
+// .shortcut).
+var realBackends = map[string]bool{"fm": true, "shortcuts": true, "claude": true, "osascript": true, "open": true}
+
+// backendRefused reports whether the gate is on and name resolves to a real
+// backend outside the allowed fake locations.
+func backendRefused(name string) bool {
+	if os.Getenv(NoBackendsEnv) == "" || !realBackends[filepath.Base(name)] {
+		return false
+	}
+	p := name
+	if !strings.ContainsRune(name, filepath.Separator) {
+		var err error
+		if p, err = exec.LookPath(name); err != nil {
+			return false // not found anyway
+		}
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		p = r
+	}
+	tmp := os.TempDir()
+	if r, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = r
+	}
+	if strings.HasPrefix(p, filepath.Clean(tmp)+string(filepath.Separator)) {
+		return false
+	}
+	return !strings.Contains(p, string(filepath.Separator)+"testdata"+string(filepath.Separator))
+}
 
 // CmdResult is the outcome of running a subprocess.
 type CmdResult struct {
@@ -57,6 +102,9 @@ func RunCmd(ctx context.Context, stdin io.Reader, onChunk func(string), name str
 // running providers in parallel while writing relative bench/runs/...
 // paths itself).
 func RunCmdOpts(ctx context.Context, opts CmdOpts, name string, args ...string) (CmdResult, error) {
+	if backendRefused(name) {
+		return CmdResult{}, Unavailable(name, "%s refused: %s is set and it is not a test fake", name, NoBackendsEnv)
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = opts.Dir
 	cmd.Env = opts.Env
@@ -112,6 +160,9 @@ func finish(ctx context.Context, stdout, stderr string, err error) (CmdResult, e
 
 // LookPath reports whether name is on PATH, returning its path.
 func LookPath(name string) (string, bool) {
+	if backendRefused(name) {
+		return "", false
+	}
 	p, err := exec.LookPath(name)
 	return p, err == nil
 }

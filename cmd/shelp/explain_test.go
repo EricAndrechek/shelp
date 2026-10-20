@@ -314,6 +314,7 @@ func TestNonTerminalOutputIsRawModelText(t *testing.T) {
 	os.WriteFile(cfgPath, []byte(fmt.Sprintf("providers = [\"fake:m\"]\n[[openai.endpoint]]\nname = \"fake\"\nbase_url = %q\napi_key_env = \"SHELP_FAKE_KEY\"\nmodels = [\"m\"]\n", srv.URL)), 0o644)
 	t.Setenv("SHELP_CONFIG", cfgPath)
 	t.Setenv("SHELP_FAKE_KEY", "k")
+	t.Setenv("SHELP_PROVIDER", "") // the package default is nosuch:model; this test wants its config's chain
 	t.Setenv("XDG_CACHE_HOME", dir)
 	t.Setenv("CLICOLOR_FORCE", "")
 	var out, errb bytes.Buffer
