@@ -5,7 +5,43 @@ export SHELP_HOOKS="bash${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # `shelp <task>` shows an editable "run>" prompt prefilled with the
 # suggested command: Enter runs it, Ctrl-C abandons. It is also pushed to
 # history so up-arrow recalls it. Non-interactive: just prints the command.
-_shelp_suggest_flow() {
+# Commands (`shelp providers`, `shelp help config`, ...) pass straight
+# through.
+#
+# The wrapper calls no other function of this hook: some environments keep
+# only some functions (Claude Code's shell snapshot drops every one whose
+# name starts with `_`), so the command-or-task question is asked inline,
+# the way _shelp_is_task below asks it. The binary decides (`shelp
+# __kind`), not a list here: a shell keeps this hook until it restarts, so
+# a list would miss commands added by an upgrade since and send `shelp
+# <new command>` to the model. SHELP_PROVIDER names no provider so a shelp
+# too old to know __kind fails at once instead of asking a model about
+# "__kind ..."; any answer but "task" runs the arguments as typed.
+shelp() {
+  case "${1-}" in
+    '')
+      SHELP_SHELL=bash command shelp "$@"
+      return ;;
+    explain|-e)
+      # On a terminal, a blank line after the explanation so it doesn't
+      # run into the next prompt (as zsh and fish's raw line mode do).
+      # Piped or redirected output stays byte-for-byte.
+      local rc=0
+      SHELP_SHELL=bash command shelp "$@" || rc=$?
+      [ -t 1 ] && echo
+      return $rc ;;
+    suggest)
+      # Reached by raw line mode below, which rewrites the typed line to
+      # `shelp suggest -- <task>`: same editable "run>" flow as the
+      # classic `shelp <task>` (unquoted) path, just with "suggest"
+      # already consumed.
+      shift ;;
+    *)
+      if [ "$(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null)" != task ]; then
+        SHELP_SHELL=bash command shelp "$@"
+        return
+      fi ;;
+  esac
   local cmd
   cmd=$(SHELP_SHELL=bash command shelp suggest "$@") || return
   [ -n "$cmd" ] || return 1
@@ -20,46 +56,11 @@ _shelp_suggest_flow() {
   fi
 }
 
-# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
-# command for, false when the binary runs it as one of its commands. The
-# binary decides (`shelp __kind`, the decision it makes itself when it
-# runs ARGS), not a list here: a shell keeps this hook until it restarts,
-# so a list would miss commands added by an upgrade since and send
-# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
-# a shelp too old to know __kind fails at once instead of asking a model
-# about "__kind ..."; any answer but "task" runs ARGS as typed.
+# _shelp_is_task ARGS...: the same question, for raw line mode below: true
+# when `shelp ARGS` is a task to suggest a command for, false when the
+# binary runs it as one of its commands.
 _shelp_is_task() {
   [ "$(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null)" = task ]
-}
-
-shelp() {
-  case "${1-}" in
-    '')
-      SHELP_SHELL=bash command shelp "$@" ;;
-    explain|-e)
-      # On a terminal, a blank line after the explanation so it doesn't
-      # run into the next prompt (as zsh and fish's raw line mode do).
-      # Piped or redirected output stays byte-for-byte.
-      local rc=0
-      SHELP_SHELL=bash command shelp "$@" || rc=$?
-      [ -t 1 ] && echo
-      return $rc ;;
-    suggest)
-      # Reached by raw line mode below, which rewrites the typed line to
-      # `shelp suggest -- <task>`: same editable "run>" flow as the
-      # classic `shelp <task>` (unquoted) path, just with "suggest"
-      # already consumed.
-      shift
-      _shelp_suggest_flow "$@" ;;
-    *)
-      # Commands (`shelp providers`, `shelp help config`, ...) pass
-      # straight through; the binary says which.
-      if _shelp_is_task "$@"; then
-        _shelp_suggest_flow "$@"
-      else
-        SHELP_SHELL=bash command shelp "$@"
-      fi ;;
-  esac
 }
 
 # Widget: turn the text on the command line into a command in place.

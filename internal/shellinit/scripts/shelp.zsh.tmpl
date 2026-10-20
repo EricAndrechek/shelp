@@ -2,26 +2,25 @@
 # SHELP_HOOKS lists the shells whose integration is loaded, so
 # `shelp setup shell` can tell the hook is already active.
 typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
-# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
-# command for, false when the binary runs it as one of its commands. The
-# binary decides (`shelp __kind`, the decision it makes itself when it
-# runs ARGS), not a list here: a shell keeps this hook until it restarts,
-# so a list would miss commands added by an upgrade since and send
-# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
-# a shelp too old to know __kind fails at once instead of asking a model
-# about "__kind ..."; any answer but "task" runs ARGS as typed.
-_shelp_is_task() {
-  [[ $(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null) == task ]]
-}
-
 # `shelp <task>` puts the suggested command on your next prompt line
 # (print -rz: -r, or print would turn a `\n` in the command into a real
 # newline), ready to edit or run; so does `shelp suggest <task>`. Commands
 # (`shelp providers`, `shelp help config`, ...) pass straight through.
+#
+# The wrapper calls no other function of this hook: some environments keep
+# only some functions (Claude Code's shell snapshot drops every one whose
+# name starts with `_`, which made this fail with "command not found:
+# _shelp_is_task"), so the command-or-task question is asked inline, the
+# way _shelp_is_task below asks it. The binary decides (`shelp __kind`),
+# not a list here: a shell keeps this hook until it restarts, so a list
+# would miss commands added by an upgrade since and send `shelp <new
+# command>` to the model. SHELP_PROVIDER names no provider so a shelp too
+# old to know __kind fails at once instead of asking a model about
+# "__kind ..."; any answer but "task" runs the arguments as typed.
 shelp() {
   if [[ ${1-} == suggest ]]; then
     shift
-  elif [[ -z ${1-} ]] || ! _shelp_is_task "$@"; then
+  elif [[ -z ${1-} || $(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null) != task ]]; then
     SHELP_SHELL=zsh command shelp "$@"
     return
   fi
@@ -157,6 +156,13 @@ bindkey '{{.Bind}}' shelp-widget
 # typed. `shelp providers`, `shelp -p ... task`, and every other
 # subcommand/flag form still runs normally. Opt out with `shelp init zsh
 # --no-line-mode` or config `[shell] line_mode = false`.
+
+# _shelp_is_task ARGS...: the question the wrapper above asks inline, for
+# raw line mode: true when `shelp ARGS` is a task to suggest a command for,
+# false when the binary runs it as one of its commands.
+_shelp_is_task() {
+  [[ $(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null) == task ]]
+}
 
 # _shelp_line_is_task REST: _shelp_is_task on the words of REST, the line
 # after `shelp`, split on whitespace only (no quote removal, no expansion:

@@ -133,19 +133,27 @@ func TestRender_NoCommandLists(t *testing.T) {
 				}
 				code.WriteString(l + "\n")
 			}
-			// one call, in _shelp_is_task, guarded: SHELP_PROVIDER names no
-			// provider, so a shelp from before __kind (which would take
-			// `__kind ...` for a task) fails at once instead of asking a model
-			if n := strings.Count(code.String(), "command shelp __kind"); n != 1 {
-				t.Errorf("%s %+v: %d `command shelp __kind` calls, want 1 (in _shelp_is_task)", shell, o, n)
+			// every call is guarded: SHELP_PROVIDER names no provider, so a
+			// shelp from before __kind (which would take `__kind ...` for a
+			// task) fails at once instead of asking a model. There are two
+			// callers: the wrapper (inline, it may call no other function)
+			// and _shelp_is_task for raw line mode (zsh defines that one
+			// inside the line-mode block).
+			calls := strings.Count(code.String(), "command shelp __kind")
+			wantCalls := 2
+			if shell == "zsh" && !o.LineMode {
+				wantCalls = 1
 			}
-			if !strings.Contains(code.String(), "SHELP_PROVIDER=__kind command shelp __kind") {
-				t.Errorf("%s %+v: the __kind call is not guarded by SHELP_PROVIDER=__kind", shell, o)
+			if calls != wantCalls {
+				t.Errorf("%s %+v: %d `command shelp __kind` calls, want %d", shell, o, calls, wantCalls)
+			}
+			if n := strings.Count(code.String(), "SHELP_PROVIDER=__kind command shelp __kind"); n != calls {
+				t.Errorf("%s %+v: %d of %d __kind calls guarded by SHELP_PROVIDER=__kind", shell, o, n, calls)
 			}
 			uses := strings.Count(code.String(), "_shelp_is_task ")
-			want := 1 // the wrapper
+			want := 0
 			if o.LineMode {
-				want = 2 // and raw line mode, via _shelp_line_is_task
+				want = 1 // raw line mode, via _shelp_line_is_task
 			}
 			if uses != want {
 				t.Errorf("%s %+v: _shelp_is_task used %d times, want %d", shell, o, uses, want)
@@ -257,5 +265,55 @@ func syntaxCheck(t *testing.T, shell, script, flag string) {
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("%s %s: %v\n%s", shell, flag, err, out)
+	}
+}
+
+// The `shelp` wrapper must work when only some functions survive (Claude
+// Code's shell snapshot drops every function named with a leading `_`), so
+// its body may call no other function the hook defines.
+func TestRender_WrapperSelfContained(t *testing.T) {
+	starts := map[string]string{"zsh": "shelp() {", "bash": "shelp() {", "fish": "function shelp\n"}
+	for _, shell := range Shells() {
+		for _, o := range []Options{{}, {LineMode: true, Bind: "^G"}} {
+			got, err := Render(shell, o)
+			if err != nil {
+				t.Fatalf("Render(%s): %v", shell, err)
+			}
+			start := strings.Index(got, starts[shell])
+			if start < 0 {
+				t.Fatalf("%s: no shelp wrapper", shell)
+			}
+			rest := got[start:]
+			var end int
+			if shell == "fish" {
+				end = strings.Index(rest, "\nend\n")
+			} else {
+				end = strings.Index(rest, "\n}\n")
+			}
+			if end < 0 {
+				t.Fatalf("%s: wrapper has no end", shell)
+			}
+			var body []string
+			for _, l := range strings.Split(rest[:end], "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+					body = append(body, l)
+				}
+			}
+			text := strings.Join(body, "\n")
+			// functions the hook defines, other than the wrapper itself
+			def := regexp.MustCompile(`(?m)^\s*(?:function\s+)?([A-Za-z_][\w-]*)(?:\(\))?\s*(?:\{|$)`)
+			for _, m := range def.FindAllStringSubmatch(got, -1) {
+				name := m[1]
+				if name == "shelp" || !(strings.HasPrefix(name, "_shelp") || strings.HasPrefix(name, "shelp-") || strings.HasPrefix(name, "__shelp")) {
+					continue
+				}
+				if regexp.MustCompile(`(^|[^\w-])` + regexp.QuoteMeta(name) + `($|[^\w-])`).MatchString(text) {
+					t.Errorf("%s %+v: the shelp wrapper calls %s, which a trimmed shell snapshot may lack", shell, o, name)
+				}
+			}
+			if strings.Contains(text, "_shelp") {
+				t.Errorf("%s %+v: the shelp wrapper mentions a _shelp* name:\n%s", shell, o, text)
+			}
+		}
 	}
 }

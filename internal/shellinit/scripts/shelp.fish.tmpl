@@ -2,29 +2,46 @@
 # SHELP_HOOKS lists the shells whose integration is loaded, so
 # `shelp setup shell` can tell the hook is already active.
 set -gx SHELP_HOOKS fish $SHELP_HOOKS
-# _shelp_is_task ARGS...: true when `shelp ARGS` is a task to suggest a
-# command for, false when the binary runs it as one of its commands. The
-# binary decides (`shelp __kind`, the decision it makes itself when it
-# runs ARGS), not a list here: a shell keeps this hook until it restarts,
-# so a list would miss commands added by an upgrade since and send
-# `shelp <new command>` to the model. SHELP_PROVIDER names no provider so
-# a shelp too old to know __kind fails at once instead of asking a model
-# about "__kind ..."; any answer but "task" runs ARGS as typed.
+# fish cannot pre-fill the next prompt from a function, so `shelp <task>`
+# prints the command; the widget replaces the command line in place.
+# Commands (`shelp providers`, `shelp help config`, ...) pass straight
+# through.
+#
+# The wrapper calls no other function of this hook: some environments keep
+# only some functions (Claude Code's shell snapshot drops every one whose
+# name starts with `_`), so the command-or-task question is asked inline,
+# the way _shelp_is_task below asks it. The binary decides (`shelp
+# __kind`), not a list here: a shell keeps this hook until it restarts, so
+# a list would miss commands added by an upgrade since and send `shelp
+# <new command>` to the model. SHELP_PROVIDER names no provider so a shelp
+# too old to know __kind fails at once instead of asking a model about
+# "__kind ..."; any answer but "task" runs the arguments as typed.
+function shelp
+    set -l kind
+    test -n "$argv[1]"; and set kind (SHELP_PROVIDER=__kind command shelp __kind $argv 2>/dev/null)
+    if test "$kind" = task
+        SHELP_SHELL=fish command shelp suggest $argv
+    else
+        SHELP_SHELL=fish command shelp $argv
+    end
+end
+
+# _shelp_is_task ARGS...: the same question, for raw line mode below: true
+# when `shelp ARGS` is a task to suggest a command for, false when the
+# binary runs it as one of its commands.
 function _shelp_is_task
     set -l kind (SHELP_PROVIDER=__kind command shelp __kind $argv 2>/dev/null)
     test "$kind" = task
 end
 
-# fish cannot pre-fill the next prompt from a function, so `shelp <task>`
-# prints the command; the widget replaces the command line in place.
-# Commands (`shelp providers`, `shelp help config`, ...) pass straight
-# through.
-function shelp
-    if test -n "$argv[1]"; and _shelp_is_task $argv
-        SHELP_SHELL=fish command shelp suggest $argv
-    else
-        SHELP_SHELL=fish command shelp $argv
-    end
+# Call after printing below the prompt, before `commandline -f repaint`.
+# The repaint doesn't know about the output: it starts the prompt as many
+# lines above the cursor as the prompt has extra lines, so a multi-line
+# prompt would be drawn over the last of that output. Give it those lines
+# first, as fish's own __fish_list_current_token does.
+function _shelp_prompt_room
+    set -l extra (math (count (fish_prompt)) - 1)
+    test $extra -gt 0; and string repeat -N \n --count=$extra
 end
 
 # Widget: turn the text on the command line into a command in place.
@@ -74,16 +91,6 @@ function _shelp_history_add
     set -l esc (string replace -a '\\' '\\\\' -- $line)
     printf '%s\n' "- cmd: $esc" "  when: "(command date +%s) >>$dir/fish_history 2>/dev/null
     builtin history merge
-end
-
-# Call after printing below the prompt, before `commandline -f repaint`.
-# The repaint doesn't know about the output: it starts the prompt as many
-# lines above the cursor as the prompt has extra lines, so a multi-line
-# prompt would be drawn over the last of that output. Give it those lines
-# first, as fish's own __fish_list_current_token does.
-function _shelp_prompt_room
-    set -l extra (math (count (fish_prompt)) - 1)
-    test $extra -gt 0; and string repeat -N \n --count=$extra
 end
 
 function _shelp_raw_dispatch
