@@ -163,6 +163,9 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		return flagErr(err, helpName, stdout, stderr)
 	}
 	input := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if mode == provider.Explain {
+		input = unquoteWord(input)
+	}
 	if input == "" {
 		printHelp(stderr, helpName)
 		return usageError{fmt.Errorf("usage: shelp %s <%s>", mode, map[provider.Mode]string{provider.Suggest: "task", provider.Explain: "command"}[mode])}
@@ -318,6 +321,49 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	}
 	fmt.Fprintln(stdout, text)
 	return nil
+}
+
+// unquoteWord strips the quotes from an explain input that is exactly one
+// quoted word. Raw line mode in the shell hooks passes the text after
+// `shelp explain` byte for byte, so `shelp explain 'du -sh * | sort -h'`
+// arrives with its quotes. 'single quoted' has no escapes; "double
+// quoted" unescapes \" \\ \$ and \`. Anything else (several words, a
+// quote inside, text outside the quotes) is returned as it is.
+func unquoteWord(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != s[len(s)-1] {
+		return s
+	}
+	inner := s[1 : len(s)-1]
+	var out string
+	switch s[0] {
+	case '\'':
+		if strings.Contains(inner, "'") {
+			return s
+		}
+		out = inner
+	case '"':
+		var b strings.Builder
+		for i := 0; i < len(inner); i++ {
+			c := inner[i]
+			switch {
+			case c == '"', c == '\\' && i+1 == len(inner): // a quote inside; an escaped closing one
+				return s
+			case c == '\\' && i+1 < len(inner) && strings.IndexByte("\"\\$`", inner[i+1]) >= 0:
+				i++
+				b.WriteByte(inner[i])
+			default:
+				b.WriteByte(c)
+			}
+		}
+		out = b.String()
+	default:
+		return s
+	}
+	if strings.TrimSpace(out) == "" {
+		return s
+	}
+	return out
 }
 
 // footerText is the dim line under an explanation: who answered, how
