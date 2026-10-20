@@ -58,11 +58,19 @@ type endpointConfig struct {
 	APIKeyEnv   string   `toml:"api_key_env"`
 	Models      []string `toml:"models"`
 	Temperature float64  `toml:"temperature"` // optional, default 0
+	// Label is an optional human name for the route, shown instead of the
+	// model name: as is when the endpoint has one model, else as
+	// "<label> · <model>". Labels names single models and wins over Label.
+	Label  string            `toml:"label"`
+	Labels map[string]string `toml:"labels"`
 }
 
 type localConfig struct {
 	Name    string `toml:"name"`
 	BaseURL string `toml:"base_url"`
+	// Label is an optional human name for the server: the bare provider's
+	// label, and "<label> · <model>" for its cached models.
+	Label string `toml:"label"`
 }
 
 // presetInfo is what a preset fills in when the config leaves base_url or
@@ -83,13 +91,18 @@ var presets = map[string]presetInfo{
 }
 
 // localServerDef is one known or configured local OpenAI-compatible server.
-type localServerDef struct{ Name, BaseURL string }
+// Configured is set when a [[openai.local]] entry adds or overrides it;
+// Builtin when it is one of defaultLocalServers.
+type localServerDef struct {
+	Name, BaseURL, Label string
+	Configured, Builtin  bool
+}
 
 func defaultLocalServers() []localServerDef {
 	return []localServerDef{
-		{"lmstudio", "http://127.0.0.1:1234/v1"},
-		{"ollama", "http://127.0.0.1:11434/v1"},
-		{"llamacpp", "http://127.0.0.1:8080/v1"},
+		{Name: "lmstudio", BaseURL: "http://127.0.0.1:1234/v1", Builtin: true},
+		{Name: "ollama", BaseURL: "http://127.0.0.1:11434/v1", Builtin: true},
+		{Name: "llamacpp", BaseURL: "http://127.0.0.1:8080/v1", Builtin: true},
 	}
 }
 
@@ -109,10 +122,11 @@ func mergedLocalServers(cfgLocal []localConfig) []localServerDef {
 		if name == "" || base == "" {
 			continue
 		}
+		label := strings.TrimSpace(l.Label)
 		if i, ok := idx[name]; ok {
-			servers[i].BaseURL = base
+			servers[i].BaseURL, servers[i].Label, servers[i].Configured = base, label, true
 		} else {
-			servers = append(servers, localServerDef{Name: name, BaseURL: base})
+			servers = append(servers, localServerDef{Name: name, BaseURL: base, Label: label, Configured: true})
 			idx[name] = len(servers) - 1
 		}
 	}
@@ -163,12 +177,14 @@ func buildEndpointProviders(ep endpointConfig) []Provider {
 	if baseURL == "" {
 		return nil // nothing to call
 	}
-	var out []Provider
+	var models []string
 	for _, m := range ep.Models {
-		m = strings.TrimSpace(m)
-		if m == "" {
-			continue
+		if m = strings.TrimSpace(m); m != "" {
+			models = append(models, m)
 		}
+	}
+	var out []Provider
+	for _, m := range models {
 		out = append(out, &openaiProvider{
 			id:          strings.ToLower(name + ":" + m),
 			kind:        API,
@@ -177,17 +193,42 @@ func buildEndpointProviders(ep endpointConfig) []Provider {
 			model:       m,
 			label:       name,
 			temperature: ep.Temperature,
+			userLabel:   endpointLabel(ep, m, len(models)),
+			preset:      presetName,
+			configured:  true,
 		})
 	}
 	return out
 }
 
+// endpointLabel is the user's label for model m of ep: labels[m] (exact,
+// then case-insensitive), else the endpoint label -- as is for a
+// one-model endpoint, "<label> · <model>" otherwise -- else "".
+func endpointLabel(ep endpointConfig, m string, nModels int) string {
+	if l := strings.TrimSpace(ep.Labels[m]); l != "" {
+		return l
+	}
+	for k, v := range ep.Labels {
+		if strings.EqualFold(strings.TrimSpace(k), m) && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	l := strings.TrimSpace(ep.Label)
+	if l == "" || nModels == 1 {
+		return l
+	}
+	return l + " · " + m
+}
+
 func buildLocalProviders(s localServerDef, cache map[string]cacheEntry) []Provider {
 	out := []Provider{&openaiProvider{
-		id:      s.Name,
-		kind:    LocalServer,
-		baseURL: s.BaseURL,
-		label:   s.Name,
+		id:         s.Name,
+		kind:       LocalServer,
+		baseURL:    s.BaseURL,
+		label:      s.Name,
+		userLabel:  s.Label,
+		configured: s.Configured,
+		builtin:    s.Builtin,
 	}}
 	if e, ok := cache[s.Name]; ok {
 		for _, m := range e.Models {
@@ -195,12 +236,19 @@ func buildLocalProviders(s localServerDef, cache map[string]cacheEntry) []Provid
 			if m == "" {
 				continue
 			}
+			ul := ""
+			if s.Label != "" {
+				ul = s.Label + " · " + m
+			}
 			out = append(out, &openaiProvider{
-				id:      strings.ToLower(s.Name + ":" + m),
-				kind:    LocalServer,
-				baseURL: s.BaseURL,
-				model:   m,
-				label:   s.Name,
+				id:         strings.ToLower(s.Name + ":" + m),
+				kind:       LocalServer,
+				baseURL:    s.BaseURL,
+				model:      m,
+				label:      s.Name,
+				userLabel:  ul,
+				configured: s.Configured,
+				builtin:    s.Builtin,
 			})
 		}
 	}
@@ -218,6 +266,10 @@ type openaiProvider struct {
 	model       string // "" only for a local server's bare, auto-selecting candidate
 	label       string // endpoint name or local server name, for Description()
 	temperature float64
+	userLabel   string // the config's label for this route, "" if none
+	preset      string // the endpoint's preset, "" if none
+	configured  bool   // comes from (or is overridden by) a config entry
+	builtin     bool   // one of the built-in local servers
 }
 
 func (p *openaiProvider) ID() string { return p.id }
@@ -235,8 +287,12 @@ func (p *openaiProvider) Description() string {
 	}
 }
 
-// Label is the model name; a bare local server has none yet, so it says so.
+// Label is the user's label from the config when there is one, else the
+// model name; a bare local server has no model yet, so it says so.
 func (p *openaiProvider) Label() string {
+	if p.userLabel != "" {
+		return p.userLabel
+	}
 	if p.model == "" {
 		return "first loaded model"
 	}
