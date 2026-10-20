@@ -305,6 +305,7 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		if !streamed {
 			hl.Write(text + "\n")
 		}
+		hl.SetFooter(footerText(res))
 		// Flush ends the output with exactly one newline.
 		hl.Flush()
 		return nil
@@ -317,6 +318,16 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	}
 	fmt.Fprintln(stdout, text)
 	return nil
+}
+
+// footerText is the dim line under an explanation: who answered, how
+// long it took, and tokens when the backend said.
+func footerText(res provider.Result) string {
+	parts := []string{res.ProviderID, formatLatency(res.Latency)}
+	if res.Usage != nil {
+		parts = append(parts, fmt.Sprintf("%d tokens", res.Usage.Total()))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // formatLatency is "820ms" under a second, else "1.4s".

@@ -45,6 +45,9 @@ type explainHighlighter struct {
 	blank int // blank lines held back until more text follows
 	wrote bool
 	out   strings.Builder // scratch for one rendered line
+	// footer, set by SetFooter, is the dim "provider · 1.4s" line under
+	// the man-page links.
+	footer string
 }
 
 // explainMaxWidth caps the wrap column on a wide terminal: long lines are
@@ -121,29 +124,39 @@ func (h *explainHighlighter) finishLine() {
 	h.render(line)
 }
 
+// SetFooter sets the dim line Flush prints last (who answered, how fast).
+func (h *explainHighlighter) SetFooter(s string) { h.footer = s }
+
 // Flush renders the held-back partial line, ends the output with exactly
-// one newline, and prints the man-page footer.
+// one newline, and prints the footer: the man-page links, then the
+// SetFooter line, after one blank line.
 func (h *explainHighlighter) Flush() {
 	h.Header()
 	h.line.WriteString(h.tail)
 	h.tail = ""
 	h.finishLine()
-	words := commandWords(h.input)
-	if len(words) == 0 {
-		return
-	}
-	links := make([]string, len(words))
-	for i, w := range words {
-		links[i] = w
-		if h.p.On() {
-			links[i] = hyperlink(manURL(w), w)
+	var lines []string
+	if words := commandWords(h.input); len(words) > 0 {
+		links := make([]string, len(words))
+		for i, w := range words {
+			links[i] = w
+			if h.p.On() {
+				links[i] = hyperlink(manURL(w), w)
+			}
 		}
+		lines = append(lines, explainIndent+h.p.Dim("man: ")+h.dimJoin(links))
+	}
+	if h.footer != "" {
+		lines = append(lines, explainIndent+h.p.Dim(h.footer))
+	}
+	if len(lines) == 0 {
+		return
 	}
 	sep := "\n"
 	if !h.wrote {
 		sep = ""
 	}
-	io.WriteString(h.w, sep+explainIndent+h.p.Dim("man: ")+h.dimJoin(links)+"\n")
+	io.WriteString(h.w, sep+strings.Join(lines, "\n")+"\n")
 }
 
 func (h *explainHighlighter) dimJoin(links []string) string {
