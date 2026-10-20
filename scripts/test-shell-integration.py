@@ -49,6 +49,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -120,9 +121,11 @@ class Session:
         self._screen = self._stream = None
         self._fed = 0
         self._qpos = 0
-        preexec = None
-        if ctty:
-            def preexec():
+        def preexec():
+            # a suite started as a background job inherits an ignored SIGINT,
+            # which bash then cannot trap: give the shell the default
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            if ctty:
                 fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         self.proc = subprocess.Popen(
             argv, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
@@ -381,6 +384,7 @@ STUB_SOURCE = textwrap.dedent(
         env = dict(os.environ)
         env["PATH"] = "/nonexistent-shelp-test-path"
         env["SHELP_PROVIDER"] = "nosuch:model"
+        env["SHELP_HISTORY"] = "0"
         os.execve(real, [real] + args, env)
 
     added = os.environ.get("SHELP_STUB_COMMANDS", "").split()
@@ -881,6 +885,10 @@ def zsh_env(stub_dir, real_bin, home, cwd):
         "SHELP_REAL_BIN": real_bin,
         "TERM": "xterm-256color", "LANG": LANG,
         "PWD": cwd,
+        # never the user's real history or caches
+        "XDG_STATE_HOME": os.path.join(home, ".local", "state"),
+        "XDG_CACHE_HOME": os.path.join(home, ".cache"),
+        "SHELP_HISTORY": "0",
     }
 
 
@@ -1496,6 +1504,10 @@ def bash_env(stub_dir, real_bin, home, cwd):
         "SHELP_REAL_BIN": real_bin,
         "TERM": "xterm-256color", "LANG": LANG,
         "PWD": cwd,
+        # never the user's real history or caches
+        "XDG_STATE_HOME": os.path.join(home, ".local", "state"),
+        "XDG_CACHE_HOME": os.path.join(home, ".cache"),
+        "SHELP_HISTORY": "0",
     }
 
 
@@ -1945,6 +1957,8 @@ class FishHost:
             "XDG_CONFIG_HOME": os.path.join(home, ".config"),
             "XDG_DATA_HOME": os.path.join(home, ".local", "share"),
             "XDG_CACHE_HOME": os.path.join(home, ".cache"),
+            "XDG_STATE_HOME": os.path.join(home, ".local", "state"),
+            "SHELP_HISTORY": "0",
             "PATH": self.stub_dir + ":/usr/bin:/bin",
             "SHELP_REAL_BIN": self.real_bin,
             "TERM": "xterm", "LANG": LANG,
@@ -1959,6 +1973,8 @@ class FishHost:
                 "-v", f"{home}:/root", "-w", "/root",
                 "-e", "HOME=/root", "-e", "TERM=xterm", "-e", "LANG=C.UTF-8",
                 "-e", "SHELP_REAL_BIN=/usr/local/bin/shelp-real",
+                "-e", "XDG_STATE_HOME=/root/.local/state", "-e", "XDG_CACHE_HOME=/root/.cache",
+                "-e", "SHELP_HISTORY=0",
                 FISH_IMAGE, "fish", "-i",
             ]
             # no ctty needed: `docker run -t` gives fish a terminal of its
