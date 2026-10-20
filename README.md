@@ -75,6 +75,7 @@ $ shelp --template v2 -v print yesterday as YYYY-MM-DD  # -v: provider+latency o
 $ shelp providers                                       # what works on this machine
 $ shelp providers --json                                # same, machine-readable
 $ shelp providers --reset-cooldowns                     # clear recorded rate-limit cooldowns
+$ shelp providers -i                                    # manage the chain and your own routes
 $ shelp setup shortcuts                                 # install the Apple Shortcut this needs
 $ shelp help                                            # short overview (also -h, --help)
 $ shelp help providers                                  # one command's flags (also: shelp providers -h)
@@ -176,7 +177,8 @@ $ shelp completion fish > ~/.config/fish/completions/shelp.fish
 | `claude:haiku`, `claude:sonnet` | agent-cli | `claude` installed and logged in | `claude /login` |
 
 `shelp providers` probes every registered provider and prints which are
-`ok` vs `unavailable` (and why) on this machine right now.
+`ok` vs `unavailable` (and why) on this machine right now. `shelp providers
+-i` opens the same list as the provider manager (see "Configuration").
 
 Only `claude` is shipped among the AI-agent-CLI backends; gemini, codex,
 Antigravity, and Copilot CLI were all evaluated and dropped -- see
@@ -191,12 +193,71 @@ file is an error. Every key and table is optional; each provider family
 decodes only its own table, so unrelated tables are ignored.
 
 You don't have to edit it by hand: `shelp config` shows the file and your
-effective settings, `shelp config chain` picks the provider chain from a
-numbered list (or `shelp config chain fm,claude:haiku` sets it directly),
-and `shelp config edit` opens the file. Saving only touches the `providers`
-line; if the file is managed by chezmoi or is a symlink, shelp prints what
-to change instead of writing it. On a terminal, plain `shelp setup` walks
-through the shell hook, the Apple Shortcut and the chain.
+effective settings, `shelp config chain fm,claude:haiku` sets the provider
+chain, `shelp config add`/`remove` add and remove your own routes (below),
+and `shelp config edit` opens the file. Each edit changes only its own
+lines and leaves comments and everything else as they are. On a terminal,
+plain `shelp setup` walks through the shell hook, the Apple Shortcut and
+the chain.
+
+### The provider manager
+
+`shelp providers -i` (or `shelp config chain` with no IDs, on a terminal)
+is a full-screen list: your chain on top, numbered in the order shelp
+tries it, then every other provider -- available, then needing setup, then
+unavailable, what runs on this machine first. Each row says **local**
+(runs on this machine, works offline) or **cloud** (sends your request
+over the internet), and whether it works here; statuses fill in as the
+checks finish.
+
+| key | does |
+|---|---|
+| ↑/↓, `k`/`j` | move |
+| space | put the provider at the end of the chain, or take it out |
+| Shift+↑/↓, `K`/`J`, `+`/`-` | move a chain entry up or down |
+| Enter | on one that needs setup: how to fix it (and, for the Apple Shortcut, run its setup) |
+| `a` | add a route: a hosted OpenAI-compatible endpoint or a local server |
+| `x`, Delete | remove a route you added |
+| `s` | save |
+| `r` | check every provider again |
+| `?` | all keys |
+| `q`, Esc | quit (asks first when there are unsaved changes) |
+| Ctrl-C | quit at once, saving nothing |
+
+Nothing is written until `s`. Without a terminal, `shelp config chain`
+prints the chain, every provider ID with local/cloud, and the commands
+below instead.
+
+### Your own routes
+
+Any OpenAI-compatible endpoint can be added, with a label so it reads well
+in lists. shelp never asks for, takes, or stores an API key: a route names
+the environment variable that holds it, and shelp reads that when it runs.
+
+```console
+$ shelp config add endpoint openrouter --preset openrouter \
+    --model anthropic/claude-haiku-4.5 --label "Haiku via OpenRouter"
+$ shelp config add endpoint work --base-url https://llm.internal.example.com/v1 \
+    --key-env WORK_LLM_API_KEY --model gpt-4o-mini
+$ shelp config add local fm-serve --base-url http://127.0.0.1:11535/v1 --label "fm serve"
+$ shelp config remove work
+```
+
+`--key-env` defaults to the preset's variable (e.g. `OPENROUTER_API_KEY`),
+else `NAME_API_KEY`; `--key-env ""` sends no key. shelp says whether the
+variable is set in your shell (never its value) and, if not, to add
+`export OPENROUTER_API_KEY=…` to your shell rc or env file. `add` appends
+one `[[openai.endpoint]]`/`[[openai.local]]` entry at the end of the file;
+on a terminal it offers to put the new providers at the end of your chain,
+otherwise it prints the `shelp config chain ...` command that would.
+`remove` deletes the entry (and its providers from your chain).
+
+**chezmoi and symlinks.** If the config file is managed by chezmoi or is a
+symlink, shelp never writes it: it prints the exact change and the
+commands (`chezmoi edit ...`, then `chezmoi apply ...`). On a terminal,
+when the file is chezmoi's and its source is a plain file (not a `.tmpl`
+template, not encrypted), it also offers (default no) to make the same
+change in the source file and run `chezmoi apply` for you.
 
 ```toml
 # Fallback chain shelp tries in order; first success wins. Overridden by
@@ -228,6 +289,12 @@ name = "openrouter"
 preset = "openrouter"   # openai | openrouter | groq | gemini | anthropic |
                          # xai | mistral | deepseek | cerebras
 models = ["anthropic/claude-3.5-haiku", "meta-llama/llama-3.1-70b-instruct"]
+# Optional labels, shown in `shelp providers`, the manager and `shelp
+# config`. `label` names the endpoint: as is for a one-model endpoint,
+# "<label> · <model>" for each of several. `labels` names single models
+# and wins over `label`. Without either, a provider reads as its model.
+label = "OpenRouter"
+labels = { "anthropic/claude-3.5-haiku" = "Haiku via OpenRouter" }
 
 [[openai.endpoint]]
 name = "work-llm"
@@ -241,6 +308,7 @@ temperature = 0.2
 [[openai.local]]
 name = "fm-serve"
 base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
+label = "fm serve"                       # optional, as for an endpoint
 
 # The one Apple Shortcut every shortcuts:* provider runs (the request
 # names the model), and that `shelp setup shortcuts` installs.
