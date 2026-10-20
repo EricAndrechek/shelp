@@ -995,10 +995,10 @@ def tab_complete_checks(s, results, label, cwd, config_path, prompt_re, export_c
     # ambiguous: both candidates are listed
     s.buf = ""
     s.send("shelp setup \t")
-    s.read_available(0.8)
+    s.read_available(1.5)  # every Tab asks the Python stub for the subcommands
     for _ in range(2):  # readline: first rings after the common prefix, then lists
         s.send("\t")
-        s.read_available(0.8)
+        s.read_available(1.5)
     out = strip_ansi(s.buf)
     results.check(f"{label}: Tab lists setup targets", "shortcuts" in out and "shell" in out, repr(out[-200:]))
     s.send("\x15")
