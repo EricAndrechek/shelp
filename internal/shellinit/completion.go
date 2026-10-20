@@ -19,6 +19,7 @@ type CompletionCommand struct{ Name, Desc string }
 var CompletionCommands = []CompletionCommand{
 	{"explain", "explain a command"},
 	{"providers", "list model providers and whether they work"},
+	{"history", "show your recent requests, answers and models"},
 	{"setup", "set up the shell hook or the Apple Shortcut"},
 	{"init", "print the shell integration for your rc file"},
 	{"version", "print the version"},
@@ -42,6 +43,7 @@ var completionFlags = map[string][]string{
 	"suggest":     {"-p", "--provider", "--shell", "--template", "--context", "--json", "-v", "--verbose", "--force", "-h", "--help"},
 	"explain":     {"-p", "--provider", "--shell", "--template", "--context", "--json", "-v", "--verbose", "--force", "-h", "--help"},
 	"providers":   {"--all", "-v", "--verbose", "--json", "--reset-cooldowns", "-i", "--interactive", "-h", "--help"},
+	"history":     {"-n", "--all", "-s", "--search", "--provider", "--json", "-h", "--help"},
 	"setup":       {"-h", "--help"},
 	"setup shell": {"--shell", "--bind", "--dry-run", "-h", "--help"},
 	"init":        {"--bind", "--no-line-mode", "-h", "--help"},

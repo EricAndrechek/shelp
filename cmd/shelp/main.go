@@ -19,6 +19,7 @@ import (
 	"github.com/ericandrechek/shelp/internal/clean"
 	"github.com/ericandrechek/shelp/internal/config"
 	"github.com/ericandrechek/shelp/internal/cooldown"
+	"github.com/ericandrechek/shelp/internal/history"
 	"github.com/ericandrechek/shelp/internal/prompt"
 	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
@@ -185,7 +186,8 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	if ctxFields != "" {
 		fields = splitList(ctxFields)
 	}
-	req := prompt.Render(t, mode, input, prompt.Detect(fields, shell))
+	pctx := prompt.Detect(fields, shell)
+	req := prompt.Render(t, mode, input, pctx)
 
 	chain := chainFor(provFlag, cfg)
 	// Explain output streams straight to the terminal when possible.
@@ -223,7 +225,10 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		}
 	}
 	errPal := style.For(stderr)
+	var tried []string
+	started := time.Now()
 	res, err := provider.Chain(ctx, cfg, chain, req, force, func(id string, err error) {
+		tried = append(tried, id)
 		if !verbose {
 			return
 		}
@@ -248,7 +253,16 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 		fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %v; trying next provider", err)))
 	})
 	stopSpinner()
+	rec := history.Record{
+		Mode: string(mode), Input: input, Tried: tried, Template: t.Name, Shell: pctx.Shell,
+		Key: history.Key(string(mode), t.Name, req.System, req.Prompt),
+	}
 	if err != nil {
+		if ctx.Err() == nil { // a Ctrl-C is not a request worth keeping
+			rec.Error = err.Error()
+			rec.LatencyMS = time.Since(started).Milliseconds()
+			recordHistory(cfg, rec)
+		}
 		return err
 	}
 	// Best-effort, once-per-shelp-version hint that an installed Apple
@@ -261,14 +275,31 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	if mode == provider.Suggest {
 		text = clean.Command(res.Text)
 	}
+	rec.Output, rec.Provider = text, res.ProviderID
+	rec.LatencyMS = res.Latency.Milliseconds()
+	if streamed {
+		rec.FirstChunkMS = res.FirstChunk.Milliseconds()
+	}
+	if res.Usage != nil {
+		rec.Tokens = &history.Tokens{Input: res.Usage.Input, Output: res.Usage.Output}
+	}
+	recordHistory(cfg, rec)
 	if verbose {
-		fmt.Fprintln(stderr, errPal.Dim(fmt.Sprintf("shelp: %s in %s", res.ProviderID, res.Latency.Round(10*time.Millisecond))))
+		line := fmt.Sprintf("shelp: %s in %s", res.ProviderID, res.Latency.Round(10*time.Millisecond))
+		if res.Usage != nil {
+			line += fmt.Sprintf(" · %d tokens (%d in / %d out)", res.Usage.Total(), res.Usage.Input, res.Usage.Output)
+		}
+		fmt.Fprintln(stderr, errPal.Dim(line))
 	}
 	if asJSON {
-		return json.NewEncoder(stdout).Encode(map[string]any{
+		out := map[string]any{
 			"text": text, "provider": res.ProviderID, "latency_ms": res.Latency.Milliseconds(),
 			"first_chunk_ms": res.FirstChunk.Milliseconds(),
-		})
+		}
+		if res.Usage != nil {
+			out["tokens"] = res.Usage
+		}
+		return json.NewEncoder(stdout).Encode(out)
 	}
 	if hl != nil {
 		if !streamed {
@@ -286,6 +317,14 @@ func runGenerate(ctx context.Context, mode provider.Mode, args []string, stdout,
 	}
 	fmt.Fprintln(stdout, text)
 	return nil
+}
+
+// formatLatency is "820ms" under a second, else "1.4s".
+func formatLatency(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // chainFor resolves the provider chain: flag, then $SHELP_PROVIDER, then

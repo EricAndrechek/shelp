@@ -59,6 +59,11 @@ func commandFor(args []string) string {
 				return "config"
 			}
 		}
+	case "history":
+		// Only history's own shapes; "shelp history of git commits" is a task.
+		if isHistoryArgs(rest) {
+			return "history"
+		}
 	case "explain", "-e":
 		return "explain"
 	case "suggest", "init", "completion", "providers", "setup", "__complete", "__kind":
@@ -121,6 +126,9 @@ var commands = map[string]func(ctx context.Context, args []string, stdout, stder
 	},
 	"setup": func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runSetup(ctx, args[1:], stdout, stderr)
+	},
+	"history": func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+		return runHistory(ctx, args[1:], stdout, stderr)
 	},
 	"config": func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runConfig(ctx, args[1:], stdout, stderr)

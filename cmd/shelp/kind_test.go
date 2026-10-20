@@ -62,6 +62,21 @@ var kindCases = []struct {
 	{[]string{"config", "remove", "-h"}, "command"},
 	{[]string{"config", "remove", "old", "kernels"}, "task"},
 
+	{[]string{"history"}, "command"},
+	{[]string{"history", "-n", "5"}, "command"},
+	{[]string{"history", "--all"}, "command"},
+	{[]string{"history", "--json", "-s", "git"}, "command"},
+	{[]string{"history", "--search=git", "--provider", "fm"}, "command"},
+	{[]string{"history", "-s", "find big files"}, "command"}, // a value, not a task
+	{[]string{"history", "-h"}, "command"},
+	{[]string{"history", "show", "3"}, "command"},
+	{[]string{"history", "clear", "--yes"}, "command"},
+	{[]string{"history", "path"}, "command"},
+	{[]string{"history", "of", "git", "commits", "for", "main.go"}, "task"},
+	{[]string{"history", "-n", "5", "of", "git"}, "task"},
+	{[]string{"history", "git"}, "task"},
+	{[]string{"History"}, "task"},
+
 	{[]string{"setup"}, "command"},
 	{[]string{"setup", "shell"}, "command"},
 	{[]string{"setup", "shell", "--bind", "^G"}, "command"},

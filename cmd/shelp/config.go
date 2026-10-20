@@ -17,6 +17,7 @@ import (
 
 	"github.com/ericandrechek/shelp/internal/config"
 	"github.com/ericandrechek/shelp/internal/cooldown"
+	"github.com/ericandrechek/shelp/internal/history"
 	"github.com/ericandrechek/shelp/internal/prompt"
 	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
@@ -190,6 +191,12 @@ func showConfig(ctx context.Context, stdout io.Writer) error {
 	bind, src := pick(sh.Bind, "none")
 	row("bind", bind, src)
 	row("line mode", strconv.FormatBool(sh.LineModeEnabled(false)), map[bool]string{true: "config", false: "default"}[sh.LineMode != nil])
+	hs := history.Load(cfg)
+	hstate := "on"
+	if !hs.IsEnabled() {
+		hstate = "off"
+	}
+	row("history", tildePath(historyPath()), hstate+", keeps "+strconv.Itoa(hs.Max()))
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, p.Dim("manage providers, routes and the chain: shelp providers -i (or shelp config chain)   edit the file: shelp config edit   all settings: shelp help config"))
 	return nil

@@ -25,6 +25,7 @@ Usage
 Commands
   explain    explain a command (alias -e)
   providers  list model providers and whether they work (-i: manage them)
+  history    show your recent requests, answers and models
   setup      guided setup: shell hook, Apple Shortcut, provider chain
   config     show or change settings (the provider chain, routes, the file)
   init       print the shell integration for your rc file
@@ -104,6 +105,34 @@ How they differ (scores are from shelp's benchmark)
                 whatever model you run or pay for.
 `,
 
+	"history": `shelp history: show your recent requests, answers and models.
+
+Usage
+  shelp history [flags]    the last 20 entries, newest last
+  shelp history show N     one entry in full (N as numbered in the list)
+  shelp history clear      delete the history (asks first; --yes skips that)
+  shelp history path       print the history file's location
+
+Each suggest or explain call is appended to a local file: the time, the
+mode, the input, the answer, the provider that gave it, how long it took and
+(when the backend reports it) tokens. Nothing else is stored: no directory,
+no environment. The file is readable only by you.
+
+Flags
+  -n N               how many entries to list (default 20)
+  --all              list every entry
+  -s, --search TEXT  only entries whose input or answer contains TEXT
+                     (case-insensitive)
+  --provider ID      only entries answered by this provider
+  --json             print the raw records, one JSON object per line
+  -h, --help         show help
+
+Settings (config "[history]")
+  enabled = false    do not record anything
+  max_entries = 1000 keep this many entries (older ones are dropped)
+  SHELP_HISTORY=0 in the environment turns recording off for that command.
+`,
+
 	"setup": `shelp setup: set up the shell hook or the Apple Shortcut.
 
 Usage
@@ -165,7 +194,7 @@ Usage
   shelp <command> -h
 
 Commands
-  suggest, explain, providers, setup, config, init, completion, version, help
+  suggest, explain, providers, history, setup, config, init, completion, version, help
 `,
 
 	"config": `shelp config: show or change settings.
