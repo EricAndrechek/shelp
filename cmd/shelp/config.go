@@ -49,6 +49,8 @@ var (
 	runShellSetupFn  = runSetupShell
 	shortcutsNeedFn  = shortcutsNeedSetup
 	runShortcutsStep = runShortcutsSetupStep
+	// runManagerFn opens the interactive provider manager (manager_run.go).
+	runManagerFn = runManager
 )
 
 // realProbe Detects every provider concurrently with a 10s limit each. A
@@ -100,7 +102,7 @@ func fileState(ctx context.Context, path string) (state, managedBy string) {
 	return state, managedBy
 }
 
-// runConfig handles `shelp config [chain|edit]`.
+// runConfig handles `shelp config [chain|edit|add|remove]`.
 func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return showConfig(ctx, stdout)
@@ -113,6 +115,10 @@ func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return runConfigChain(ctx, args[1:], stdout, stderr)
 	case "edit":
 		return runConfigEdit(ctx, args[1:], stdout, stderr)
+	case "add":
+		return runConfigAdd(ctx, args[1:], stdout, stderr)
+	case "remove":
+		return runConfigRemove(ctx, args[1:], stdout, stderr)
 	}
 	printHelp(stderr, "config")
 	return usageError{fmt.Errorf("unknown config subcommand %q", args[0])}
@@ -143,7 +149,21 @@ func showConfig(ctx context.Context, stdout io.Writer) error {
 		row("", p.Dim("path from $SHELP_CONFIG"), "")
 	}
 	fmt.Fprintln(stdout)
-	row("chain", strings.Join(chainFor("", cfg), " → "), chainSource(cfg))
+	row("chain", chainWithLabels(p, cfg), chainSource(cfg))
+	if rs := provider.ConfiguredRoutes(cfg); len(rs) > 0 {
+		var names []string
+		for _, r := range rs {
+			n := r.Name
+			if r.Local {
+				n += " (local)"
+			}
+			if r.Label != "" {
+				n += " " + config.Quote(r.Label)
+			}
+			names = append(names, n)
+		}
+		row("routes", strings.Join(names, ", "), "config")
+	}
 	pick := func(v, def string) (string, string) {
 		if v != "" {
 			return v, "config"
@@ -171,8 +191,28 @@ func showConfig(ctx context.Context, stdout io.Writer) error {
 	row("bind", bind, src)
 	row("line mode", strconv.FormatBool(sh.LineModeEnabled(false)), map[bool]string{true: "config", false: "default"}[sh.LineMode != nil])
 	fmt.Fprintln(stdout)
-	fmt.Fprintln(stdout, p.Dim("change the chain: shelp config chain   edit the file: shelp config edit   all settings: shelp help config"))
+	fmt.Fprintln(stdout, p.Dim("manage providers, routes and the chain: shelp providers -i (or shelp config chain)   edit the file: shelp config edit   all settings: shelp help config"))
 	return nil
+}
+
+// chainWithLabels is the effective chain, each provider that has a label
+// from the config followed by it.
+func chainWithLabels(p style.Palette, cfg *config.Config) string {
+	labels := map[string]string{}
+	for _, pr := range listProviders(cfg) {
+		if r, ok := provider.RouteOf(pr); ok && r.Label != "" {
+			labels[pr.ID()] = r.Label
+		}
+	}
+	ids := chainFor("", cfg)
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id
+		if l := labels[id]; l != "" {
+			out[i] += " " + p.Dim("("+l+")")
+		}
+	}
+	return strings.Join(out, " → ")
 }
 
 // ---- prompts ----
@@ -331,12 +371,10 @@ func runConfigChain(ctx context.Context, args []string, stdout, stderr io.Writer
 		return setChain(ctx, cfg, ids, stdout, stderr)
 	}
 	if !isInteractive(stdout) {
-		p := style.For(stdout)
-		fmt.Fprintf(stdout, "chain  %s  %s\n", strings.Join(chainFor("", cfg), " → "), p.Dim("("+chainSource(cfg)+")"))
-		fmt.Fprintln(stdout, "set it with: shelp config chain fm,claude:haiku   (see `shelp providers` for IDs)")
+		printChainGuide(cfg, stdout)
 		return nil
 	}
-	return pickChain(ctx, cfg, newPrompter(ctx, stdin, stdout), stdout, stderr)
+	return runManagerFn(ctx, stdout, stderr)
 }
 
 // setChain validates ids against the known providers, warns about ones
@@ -368,7 +406,12 @@ func setChain(ctx context.Context, cfg *config.Config, ids []string, stdout, std
 		chosen[i] = byID[id]
 	}
 	warnUnavailable(ctx, chosen, stderr)
-	return saveChain(ctx, ids, stdout, stderr)
+	var pr *prompter
+	if isInteractive(stdout) {
+		pr = newPrompter(ctx, stdin, stdout)
+	}
+	_, err := saveOps(ctx, configOps{chain: ids}, pr, stdout, stderr)
+	return err
 }
 
 func warnUnavailable(ctx context.Context, chosen []provider.Provider, stderr io.Writer) {
@@ -388,171 +431,6 @@ func warnUnavailable(ctx context.Context, chosen []provider.Provider, stderr io.
 		}
 		fmt.Fprintln(stderr, pal.Warn(msg))
 	}
-}
-
-// saveChain writes providers = ids to the config file, or, when the file is
-// managed elsewhere, says exactly how to make the change by hand.
-func saveChain(ctx context.Context, ids []string, stdout, stderr io.Writer) error {
-	pal := style.For(stdout)
-	if v := os.Getenv("SHELP_PROVIDER"); v != "" {
-		fmt.Fprintln(stderr, style.For(stderr).Warn("warning: $SHELP_PROVIDER is set ("+v+") and overrides the config file; unset it for this chain to take effect"))
-	}
-	path := config.Path()
-	line := config.ProvidersLine(ids)
-	if _, managed := fileState(ctx, path); managed != "" {
-		edit := path
-		how := "chezmoi edit " + tildePath(path)
-		if strings.HasPrefix(managed, "a symlink") {
-			if t, err := filepath.EvalSymlinks(path); err == nil {
-				edit = t
-			}
-			how = "edit " + tildePath(edit)
-		}
-		fmt.Fprintf(stdout, "%s is %s, so shelp will not write it.\n", tildePath(path), managed)
-		fmt.Fprintf(stdout, "To set the chain, run:\n  %s\nand put this line above any [table] (replacing an existing providers line):\n  %s\n", how, line)
-		return nil
-	}
-	if err := config.SaveProviders(path, ids); err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "%s %s\n", pal.OK("saved"), strings.Join(ids, " → "))
-	fmt.Fprintln(stdout, pal.Dim("in "+tildePath(path)))
-	return nil
-}
-
-// pickChain is the interactive chain picker.
-func pickChain(ctx context.Context, cfg *config.Config, pr *prompter, stdout, stderr io.Writer) error {
-	pal := style.For(stdout)
-	ps := listProviders(cfg)
-	cds := cooldown.Load()
-	sts := probeProviders(ctx, ps, cds)
-	rows := buildProviderRows(ps, sts, cds)
-	current := cfg.Providers
-	if len(current) == 0 {
-		current = provider.DefaultChain
-	}
-	pos := map[string]int{}
-	for i, id := range current {
-		pos[id] = i + 1
-	}
-	idw := 0
-	for _, r := range rows {
-		if w := style.Width(r.ID); w > idw {
-			idw = w
-		}
-	}
-	width := style.TermWidth(stdout)
-	syms := make([]string, len(rows))
-	texts := make([]string, len(rows))
-	tw := 0
-	for i, r := range rows {
-		switch r.Status {
-		case statusOK:
-			syms[i], texts[i] = pal.OK("✓"), r.Label
-			if texts[i] == "" {
-				texts[i] = r.Description
-			}
-		case statusCooldown:
-			syms[i], texts[i] = pal.Warn("◷"), pal.Warn("cooldown "+r.Reason)
-		default:
-			reason := r.Reason
-			if reason == "" {
-				reason = "unavailable"
-			}
-			syms[i], texts[i] = pal.Dim("·"), pal.Dim(reason)
-		}
-		if w := style.Width(texts[i]); w > tw {
-			tw = w
-		}
-	}
-	for i, r := range rows {
-		l := fmt.Sprintf("%3d  %s %s  %s", i+1, syms[i], style.PadRight(r.ID, idw), texts[i])
-		if n, ok := pos[r.ID]; ok {
-			l = fmt.Sprintf("%3d  %s %s  %s   %s", i+1, syms[i], style.PadRight(r.ID, idw),
-				style.PadRight(texts[i], tw), pal.Dim(fmt.Sprintf("chain #%d", n)))
-		}
-		if width > 0 {
-			l = style.Truncate(l, width-1)
-		}
-		fmt.Fprintln(stdout, l)
-	}
-	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "%s  %s\n", pal.Dim("current"), strings.Join(current, " → "))
-
-	var ids []string
-	for {
-		s, ok := pr.line("New order (numbers, e.g. 3 1 5; Enter keeps the current one): ")
-		if err := pr.err(); err != nil {
-			return err
-		}
-		if !ok || s == "" {
-			fmt.Fprintln(stdout, pal.Dim("chain unchanged"))
-			return nil
-		}
-		var err error
-		if ids, err = resolvePicks(s, rows); err != nil {
-			fmt.Fprintln(stdout, pal.Err(err.Error()))
-			continue
-		}
-		break
-	}
-	fmt.Fprintf(stdout, "%s  %s\n", pal.Dim("new"), strings.Join(ids, " → "))
-	warnFromRows(ids, rows, stderr)
-	return saveChain(ctx, ids, stdout, stderr)
-}
-
-// warnFromRows warns about chosen providers the picker already saw as not
-// usable (no second probe).
-func warnFromRows(ids []string, rows []providerRow, stderr io.Writer) {
-	pal := style.For(stderr)
-	for _, id := range ids {
-		for _, r := range rows {
-			if r.ID != id || r.Status == statusOK {
-				continue
-			}
-			why := r.Reason
-			if why == "" {
-				why = "unavailable"
-			}
-			msg := fmt.Sprintf("warning: %s is not available right now (%s); saving it anyway", id, why)
-			if r.Fix != "" {
-				msg += "\n         " + r.Fix
-			}
-			fmt.Fprintln(stderr, pal.Warn(msg))
-		}
-	}
-}
-
-// resolvePicks turns "3 1 5" (numbers, or provider IDs, comma or space
-// separated) into provider IDs in that order, without repeats.
-func resolvePicks(s string, rows []providerRow) ([]string, error) {
-	var ids []string
-	seen := map[string]bool{}
-	for _, f := range parseIDs([]string{s}) {
-		id := f
-		if n, err := strconv.Atoi(f); err == nil {
-			if n < 1 || n > len(rows) {
-				return nil, fmt.Errorf("%d is not in the list (1-%d)", n, len(rows))
-			}
-			id = rows[n-1].ID
-		} else {
-			found := false
-			for _, r := range rows {
-				found = found || r.ID == f
-			}
-			if !found {
-				return nil, fmt.Errorf("%q is not a number or a provider ID", f)
-			}
-		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil, errors.New("pick at least one")
-	}
-	return ids, nil
 }
 
 // closeMatches suggests known IDs near id: same family or a substring
@@ -698,13 +576,8 @@ func runGuidedSetup(ctx context.Context, stdout, stderr io.Writer) error {
 	heading("Fallback chain")
 	cur := chainFor("", cfg)
 	fmt.Fprintf(stdout, "%s  %s\n", strings.Join(cur, " → "), pal.Dim("("+chainSource(cfg)+")"))
-	if pr.yesNo("Change it?", false) {
-		fmt.Fprintln(stdout)
-		cfg, err := loadConfigFile()
-		if err != nil {
-			return err
-		}
-		if err := pickChain(ctx, cfg, pr, stdout, stderr); err != nil {
+	if pr.yesNo("Change it (and add routes) in the provider manager?", false) {
+		if err := runManagerFn(ctx, stdout, stderr); err != nil {
 			return err
 		}
 	} else if err := pr.err(); err != nil {

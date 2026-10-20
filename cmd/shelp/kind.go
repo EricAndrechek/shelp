@@ -43,9 +43,21 @@ func commandFor(args []string) string {
 			return "version"
 		}
 	case "config":
-		// Likewise "shelp config of nginx" is a task.
+		// Likewise "shelp config of nginx" is a task, and so are "config add
+		// a cron job" and "config remove old kernels": add claims only
+		// `add endpoint|local ...`, remove only one NAME.
 		if len(rest) == 0 || rest[0] == "chain" || rest[0] == "edit" || isHelpFlag(rest[0]) {
 			return "config"
+		}
+		switch sub := rest[1:]; rest[0] {
+		case "add":
+			if len(sub) == 0 || isHelpFlag(sub[0]) || sub[0] == "endpoint" || sub[0] == "local" {
+				return "config"
+			}
+		case "remove":
+			if len(sub) <= 1 {
+				return "config"
+			}
 		}
 	case "explain", "-e":
 		return "explain"

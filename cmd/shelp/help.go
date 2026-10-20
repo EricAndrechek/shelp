@@ -24,9 +24,9 @@ Usage
 
 Commands
   explain    explain a command (alias -e)
-  providers  list model providers and whether they work
+  providers  list model providers and whether they work (-i: manage them)
   setup      guided setup: shell hook, Apple Shortcut, provider chain
-  config     show or change settings (the provider chain, the file)
+  config     show or change settings (the provider chain, routes, the file)
   init       print the shell integration for your rc file
   completion print the tab-completion script for a shell
   version    print the version (also --version)
@@ -82,6 +82,9 @@ Flags
   --all, -v, --verbose  include providers that are not set up
   --json                machine-readable output
   --reset-cooldowns     clear all recorded rate-limit cooldowns
+  -i, --interactive     open the provider manager: reorder the chain, set
+                        up providers, add your own routes (needs a terminal;
+                        see "shelp help config")
   -h, --help            show help
 
 How they differ (scores are from shelp's benchmark)
@@ -171,13 +174,43 @@ Usage
   shelp config                 the config file and the effective settings
   shelp config chain [IDS]     set the provider chain: IDS (comma or space
                                separated) saves it; with none, on a terminal,
-                               pick from a numbered list
+                               open the provider manager (below), and
+                               otherwise list every ID and these commands
+  shelp config add endpoint NAME (--preset P | --base-url URL) --model M
+                               add a hosted OpenAI-compatible endpoint
+  shelp config add local NAME --base-url URL
+                               add a local OpenAI-compatible server
+  shelp config remove NAME     remove an endpoint or local server you added
   shelp config edit            open the file in $VISUAL / $EDITOR / vi,
                                creating it with a commented starter
 
-chain edits only the "providers" line and leaves the rest of the file as it
-is. If the file is managed by chezmoi or is a symlink, shelp does not write
-it and prints what to change instead.
+Flags (config add)
+  --preset P       fills in the base URL and the key variable: openai,
+                   openrouter, groq, gemini, anthropic, xai, mistral,
+                   deepseek, cerebras
+  --base-url URL   the API's base URL (needed without a preset)
+  --key-env VAR    the NAME of the environment variable that holds the key
+                   (default: the preset's, else NAME_API_KEY; "" for none);
+                   shelp never takes or stores a key itself
+  --model M        a model ID as the API names it; repeat, or comma-separate
+  --label TEXT     how it reads in lists, e.g. "Haiku via OpenRouter"
+  -h, --help       show help
+
+Provider manager (shelp providers -i, or shelp config chain on a terminal)
+  Your chain on top, numbered in the order it is tried, then every other
+  provider: available, needing setup, unavailable. "local" runs on this
+  machine and works offline; "cloud" needs the internet. Keys: up/down or
+  k/j move; space puts a provider in the chain or takes it out; Shift+up/down,
+  K/J or +/- move a chain entry; enter shows how to set up a provider (and
+  runs the Apple Shortcut setup); a adds a route; x removes one you added;
+  s saves; ? lists the keys; q or Esc quits, asking first about unsaved
+  changes; Ctrl-C quits at once without saving.
+
+chain, add and remove change only their own lines and leave the rest of the
+file as it is. If the file is managed by chezmoi or is a symlink, shelp does
+not write it and prints the change instead; on a terminal, when chezmoi's
+source for it is a plain file, it offers to make the change there and run
+"chezmoi apply".
 
 File
   $SHELP_CONFIG                         if set, it must exist
@@ -223,12 +256,19 @@ Keys
       One provider ID per entry.
   temperature = 0.2
       Sampling temperature. Default 0.
+  label = "Haiku via OpenRouter"
+      How its providers read in lists: as is for a one-model endpoint,
+      "<label> · <model>" for each model of several.
+  labels = { "anthropic/claude-haiku-4.5" = "Haiku via OpenRouter" }
+      A label per model; it wins over label.
 
 [[openai.local]]   (repeatable; local OpenAI-compatible servers)
   name = "fm-serve"
   base_url = "http://127.0.0.1:11535/v1"
       Adds to or overrides the built-ins: lmstudio :1234, ollama :11434,
       llamacpp :8080.
+  label = "fm serve"
+      How the server reads in lists.
 
 [agentcli.claude]
   models = ["haiku", "opus"]

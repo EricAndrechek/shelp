@@ -34,17 +34,20 @@ var valueFlagOrder = []string{"-p", "--provider", "--shell", "--template", "--co
 
 // completionFlags is what each command's flags complete to. "" is the
 // top level (the suggest flags plus -e and --version); "setup shell" is
-// the flags of `shelp setup shell`. A test checks these against help.go.
+// the flags of `shelp setup shell`, "config add" of `shelp config add`
+// (whose subcommands are endpoint and local; config's own are chain,
+// edit, add and remove). A test checks these against help.go.
 var completionFlags = map[string][]string{
 	"":            {"-p", "--provider", "--shell", "--template", "--context", "--json", "-v", "--verbose", "--force", "-h", "--help", "-e", "--version"},
 	"suggest":     {"-p", "--provider", "--shell", "--template", "--context", "--json", "-v", "--verbose", "--force", "-h", "--help"},
 	"explain":     {"-p", "--provider", "--shell", "--template", "--context", "--json", "-v", "--verbose", "--force", "-h", "--help"},
-	"providers":   {"--all", "-v", "--verbose", "--json", "--reset-cooldowns", "-h", "--help"},
+	"providers":   {"--all", "-v", "--verbose", "--json", "--reset-cooldowns", "-i", "--interactive", "-h", "--help"},
 	"setup":       {"-h", "--help"},
 	"setup shell": {"--shell", "--bind", "--dry-run", "-h", "--help"},
 	"init":        {"--bind", "--no-line-mode", "-h", "--help"},
 	"completion":  {"-h", "--help"},
 	"config":      {"-h", "--help"},
+	"config add":  {"--preset", "--base-url", "--key-env", "--model", "--label", "-h", "--help"},
 	"help":        {"-h", "--help"},
 	"version":     {"-h", "--help"},
 }

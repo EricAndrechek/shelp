@@ -320,8 +320,13 @@ func runProviders(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	all := fs.Bool("all", false, "")
 	fs.BoolVar(all, "verbose", false, "")
 	fs.BoolVar(all, "v", false, "")
+	interactive := fs.Bool("i", false, "")
+	fs.BoolVar(interactive, "interactive", false, "")
 	if err := fs.Parse(args); err != nil {
 		return flagErr(err, "providers", stdout, stderr)
+	}
+	if *interactive {
+		return runProvidersInteractive(ctx, stdout, stderr)
 	}
 	if *resetCooldowns {
 		if err := cooldown.Reset(); err != nil {

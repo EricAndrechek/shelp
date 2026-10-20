@@ -48,6 +48,7 @@ func TestCompletionFlagsCoverHelp(t *testing.T) {
 		"init":        commandHelp["init"],
 		"setup shell": commandHelp["setup"],
 		"completion":  commandHelp["completion"],
+		"config add":  commandHelp["config"],
 	}
 	for key, text := range cases {
 		flags := helpFlags(text)
@@ -65,7 +66,7 @@ func TestCompletionFlagsCoverHelp(t *testing.T) {
 		}
 	}
 	// and nothing stale the other way, for commands whose help lists every flag
-	for _, key := range []string{"suggest", "explain", "providers", "init", "setup shell"} {
+	for _, key := range []string{"suggest", "explain", "providers", "init", "setup shell", "config add"} {
 		text := commandHelp[strings.Fields(key)[0]]
 		have := map[string]bool{}
 		for _, f := range helpFlags(text) {

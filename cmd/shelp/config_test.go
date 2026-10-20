@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/ericandrechek/shelp/internal/config"
 	"github.com/ericandrechek/shelp/internal/cooldown"
 	"github.com/ericandrechek/shelp/internal/provider"
+	"github.com/ericandrechek/shelp/internal/term"
 )
 
 type fakeProv struct {
@@ -64,7 +66,19 @@ func isolateCfg(t *testing.T, stdinText string, interactive bool) env {
 	}
 	stdin = strings.NewReader(stdinText)
 	isInteractive = func(io.Writer) bool { return interactive }
-	t.Cleanup(func() { listProviders, probeProviders, stdin, isInteractive = oldList, oldProbe, oldIn, oldInt })
+	// A task must never reach a real backend from these tests: only a chain
+	// of nosuch:model may get through.
+	realTask := runTask
+	runTask = func(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+		if os.Getenv("SHELP_PROVIDER") != "nosuch:model" {
+			t.Errorf("%q reached the task path without SHELP_PROVIDER=nosuch:model", args)
+			return errors.New("test guard: no model calls")
+		}
+		return realTask(ctx, args, stdout, stderr)
+	}
+	t.Cleanup(func() {
+		listProviders, probeProviders, stdin, isInteractive, runTask = oldList, oldProbe, oldIn, oldInt, realTask
+	})
 	return env{home: home, cfgPath: filepath.Join(home, ".config", "shelp", "config.toml")}
 }
 
@@ -265,39 +279,59 @@ func TestConfigChainNotTerminalPrintsCurrent(t *testing.T) {
 }
 
 func TestConfigChainInteractive(t *testing.T) {
-	e := isolateCfg(t, "9\nfoo\n3 1,2\n", true)
-	out, errOut, err := runOut(t, "config", "chain")
-	t.Logf("interactive picker:\n%s\n(stderr)\n%s", out, errOut)
+	e := isolateCfg(t, "", true)
+	// The cursor starts on #1 (shortcuts:apple-pro): J moves it down, j
+	// steps onto the first other provider (claude:haiku, needs setup),
+	// space adds it as #3 (the cursor follows), K moves it up, s saves.
+	scr := newFakeScreen(keys("J", "j", " ", "K", "s", "q")...)
+	withScreen(t, scr)
+	out, errOut, err := runWithTimeout(t, "config", "chain")
+	t.Logf("first settled frame:\n%s", scr.frames[1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Listed in provider order; the current chain (the default) is marked.
-	for _, w := range []string{"1  ✓ shortcuts:apple-pro", "chain #1", "2  ✓ fm", "chain #2", "3  · claude:haiku", "not installed", "New order (numbers, e.g. 3 1 5; Enter keeps the current one): ", "9 is not in the list (1-4)", `"foo" is not a number`, "new  claude:haiku → shortcuts:apple-pro → fm", "saved"} {
-		if !strings.Contains(out, w) {
-			t.Errorf("output lacks %q", w)
-		}
-	}
-	if !strings.Contains(errOut, "claude:haiku is not available") {
-		t.Errorf("stderr %q", errOut)
-	}
-	if got := read(t, e.cfgPath); got != `providers = ["claude:haiku", "shortcuts:apple-pro", "fm"]`+"\n" {
+	if got := read(t, e.cfgPath); got != `providers = ["fm", "claude:haiku", "shortcuts:apple-pro"]`+"\n" {
 		t.Errorf("file %q", got)
+	}
+	if !strings.Contains(out, "saved fm → claude:haiku → shortcuts:apple-pro") || errOut != "" {
+		t.Errorf("stdout %q, stderr %q", out, errOut)
+	}
+	if scr.started || scr.stops != scr.starts {
+		t.Errorf("screen left started: %d starts, %d stops", scr.starts, scr.stops)
 	}
 }
 
-func TestConfigChainInteractiveEnterKeeps(t *testing.T) {
-	e := isolateCfg(t, "\n", true)
-	out, _, err := runOut(t, "config", "chain")
-	if err != nil || !strings.Contains(out, "chain unchanged") {
-		t.Errorf("got (%q, %v)", out, err)
+func TestConfigChainInteractiveQuitKeeps(t *testing.T) {
+	for _, quit := range []any{"q", kEsc} {
+		e := isolateCfg(t, "", true)
+		withScreen(t, newFakeScreen(keys(quit)...))
+		out, _, err := runWithTimeout(t, "config", "chain")
+		if err != nil || !strings.Contains(out, "no changes") {
+			t.Errorf("%v: got (%q, %v)", quit, out, err)
+		}
+		if _, serr := os.Stat(e.cfgPath); serr == nil {
+			t.Errorf("%v: file written", quit)
+		}
+	}
+}
+
+// Ctrl-C quits at once, unsaved changes and all: exit 130, no message.
+func TestConfigChainInteractiveCtrlC(t *testing.T) {
+	e := isolateCfg(t, "", true)
+	scr := newFakeScreen(keys("J", term.CtrlC)...)
+	withScreen(t, scr)
+	out, _, err := runWithTimeout(t, "config", "chain")
+	if code, show := exitCode(context.Background(), err); code != 130 || show {
+		t.Errorf("exit %d (show %v), err %v", code, show, err)
+	}
+	if out != "" {
+		t.Errorf("printed %q", out)
 	}
 	if _, serr := os.Stat(e.cfgPath); serr == nil {
 		t.Error("file written")
 	}
-	// EOF behaves the same.
-	stdin = strings.NewReader("")
-	if out, _, err = runOut(t, "config", "chain"); err != nil || !strings.Contains(out, "chain unchanged") {
-		t.Errorf("EOF: got (%q, %v)", out, err)
+	if scr.started {
+		t.Error("screen left started")
 	}
 }
 
@@ -396,9 +430,10 @@ func guidedFakes(t *testing.T, f *setupFakes) {
 }
 
 func TestGuidedSetupAllSteps(t *testing.T) {
-	e := isolateCfg(t, "\n\ny\n2 1\n", true)
+	e := isolateCfg(t, "\n\ny\n", true)
 	f := &setupFakes{shortcutNeed: true}
 	guidedFakes(t, f)
+	withScreen(t, newFakeScreen(keys("J", "s", "q")...))
 	out, _, err := runOut(t, "setup")
 	t.Logf("shelp setup (guided):\n%s", out)
 	if err != nil {
@@ -407,7 +442,7 @@ func TestGuidedSetupAllSteps(t *testing.T) {
 	if !f.shellRan || !f.shortcutsRan {
 		t.Errorf("steps ran: shell=%v shortcuts=%v", f.shellRan, f.shortcutsRan)
 	}
-	for _, w := range []string{"Add shelp's hook to ~/.zshrc? [Y/n] ", "The shortcut is outdated (format v4, current v5). Set it up now", "Change it? [y/N] ", "New order", "saved fm → shortcuts:apple-pro"} {
+	for _, w := range []string{"Add shelp's hook to ~/.zshrc? [Y/n] ", "The shortcut is outdated (format v4, current v5). Set it up now", "Change it (and add routes) in the provider manager? [y/N] ", "saved fm → shortcuts:apple-pro"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("output lacks %q", w)
 		}

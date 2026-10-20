@@ -50,6 +50,17 @@ var kindCases = []struct {
 	{[]string{"config", "--help"}, "command"},
 	{[]string{"config", "of", "nginx"}, "task"},
 	{[]string{"config", "files", "for", "nginx"}, "task"},
+	{[]string{"config", "add"}, "command"}, // run's usage error
+	{[]string{"config", "add", "-h"}, "command"},
+	{[]string{"config", "add", "endpoint", "or", "--preset", "openrouter", "--model", "a/b"}, "command"},
+	{[]string{"config", "add", "endpoint"}, "command"},
+	{[]string{"config", "add", "local", "box", "--base-url", "http://10.0.0.2/v1"}, "command"},
+	{[]string{"config", "add", "a", "cron", "job"}, "task"},
+	{[]string{"config", "add", "user", "to", "sudoers"}, "task"},
+	{[]string{"config", "remove"}, "command"}, // run's usage error
+	{[]string{"config", "remove", "openrouter"}, "command"},
+	{[]string{"config", "remove", "-h"}, "command"},
+	{[]string{"config", "remove", "old", "kernels"}, "task"},
 
 	{[]string{"setup"}, "command"},
 	{[]string{"setup", "shell"}, "command"},
