@@ -31,7 +31,8 @@ var CompletionCommands = []CompletionCommand{
 // valueFlagOrder lists the flags that take a value. Their values complete
 // by name in the scripts: providers (-p), shells (--shell), templates,
 // context fields; --bind is free text.
-var valueFlagOrder = []string{"-p", "--provider", "--shell", "--template", "--context", "--bind"}
+var valueFlagOrder = []string{"-p", "--provider", "--shell", "--template", "--context", "--bind",
+	"--preset", "--base-url", "--key-env", "--model", "--label", "-n", "-s", "--search"}
 
 // completionFlags is what each command's flags complete to. "" is the
 // top level (the suggest flags plus -e and --version); "setup shell" is
@@ -60,8 +61,10 @@ var completionFlags = map[string][]string{
 // know those by kind. To give a new command subcommands, add it here; the
 // scripts ask the binary (`shelp __complete subcommands CMD`) at Tab time.
 var completionSubcommands = map[string][]string{
-	"setup":  {"shell", "shortcuts"},
-	"config": {"chain", "edit"},
+	"setup":      {"shell", "shortcuts"},
+	"config":     {"chain", "edit", "add", "remove"},
+	"config add": {"endpoint", "local"},
+	"history":    {"show", "clear", "path"},
 }
 
 // CompletionSubcommands returns the subcommands completion offers for a

@@ -25,6 +25,10 @@ function __shelp_values
             end
         case templates
             command shelp __complete templates 2>/dev/null
+        case presets
+            command shelp __complete presets 2>/dev/null
+        case routes
+            command shelp __complete routes 2>/dev/null
         case context
             for v in ⟦.Context⟧
                 echo $argv[2]$v
@@ -75,7 +79,9 @@ function __shelp_complete
             __shelp_values context "$prefix"; return
         case --shell
             __shelp_values shells ''; return
-        case --bind
+        case --preset
+            __shelp_values presets ''; return
+        case --bind --base-url --key-env --model --label -n -s --search
             return
     end
 
@@ -101,9 +107,17 @@ function __shelp_complete
             if test "$arg1" = chain; and test $isflag = 0
                 __shelp_values providers "$prefix"; return
             end
+            if test "$arg1" = remove; and test $npos = 1; and test $isflag = 0
+                __shelp_values routes ''; return
+            end
     end
     if test $npos = 0; and test $isflag = 0
         set -l subs (command shelp __complete subcommands $cmd 2>/dev/null)
+        if test (count $subs) -gt 0
+            printf '%s\n' $subs; return
+        end
+    else if test $npos = 1; and test $isflag = 0
+        set -l subs (command shelp __complete subcommands $cmd $arg1 2>/dev/null)
         if test (count $subs) -gt 0
             printf '%s\n' $subs; return
         end

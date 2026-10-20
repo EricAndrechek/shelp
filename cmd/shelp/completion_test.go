@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ericandrechek/shelp/internal/prompt"
+	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
 )
 
@@ -45,6 +46,7 @@ func TestCompletionFlagsCoverHelp(t *testing.T) {
 		"suggest":     commandHelp["suggest"],
 		"explain":     commandHelp["explain"],
 		"providers":   commandHelp["providers"],
+		"history":     commandHelp["history"],
 		"init":        commandHelp["init"],
 		"setup shell": commandHelp["setup"],
 		"completion":  commandHelp["completion"],
@@ -66,7 +68,7 @@ func TestCompletionFlagsCoverHelp(t *testing.T) {
 		}
 	}
 	// and nothing stale the other way, for commands whose help lists every flag
-	for _, key := range []string{"suggest", "explain", "providers", "init", "setup shell", "config add"} {
+	for _, key := range []string{"suggest", "explain", "providers", "history", "init", "setup shell", "config add"} {
 		text := commandHelp[strings.Fields(key)[0]]
 		have := map[string]bool{}
 		for _, f := range helpFlags(text) {
@@ -198,9 +200,15 @@ models = ["alpha-1", "beta-2"]
 		t.Errorf("templates = %q, want %q", got, want)
 	}
 
+	// routes: the configured endpoint/local names, once each
+	out.Reset()
+	if err := run(context.Background(), []string{"__complete", "routes"}, &out, &errb); err != nil || strings.TrimSpace(out.String()) != "zzhost" {
+		t.Errorf("routes = %q, %v", out.String(), err)
+	}
+
 	// never noisy: unknown kind, no kind, and a broken config print nothing
 	os.WriteFile(cfg, []byte("this is = = not toml"), 0o644)
-	for _, args := range [][]string{{"__complete", "bogus"}, {"__complete"}, {"__complete", "providers"}} {
+	for _, args := range [][]string{{"__complete", "bogus"}, {"__complete"}, {"__complete", "providers"}, {"__complete", "routes"}} {
 		out.Reset()
 		errb.Reset()
 		if err := run(context.Background(), args, &out, &errb); err != nil || out.Len() != 0 || errb.Len() != 0 {
@@ -258,8 +266,23 @@ func TestCompleteCommandsFlagsSubcommands(t *testing.T) {
 	if got := completeLines(t, "subcommands", "setup"); strings.Join(got, " ") != "shell shortcuts" {
 		t.Errorf("subcommands setup = %v", got)
 	}
-	if got := completeLines(t, "subcommands", "config"); strings.Join(got, " ") != "chain edit" {
+	if got := completeLines(t, "subcommands", "config"); strings.Join(got, " ") != "chain edit add remove" {
 		t.Errorf("subcommands config = %v", got)
+	}
+	if got := completeLines(t, "subcommands", "config", "add"); strings.Join(got, " ") != "endpoint local" {
+		t.Errorf("subcommands config add = %v", got)
+	}
+	if got := completeLines(t, "subcommands", "history"); strings.Join(got, " ") != "show clear path" {
+		t.Errorf("subcommands history = %v", got)
+	}
+	if got := completeLines(t, "flags", "config", "add", "endpoint"); strings.Join(got, " ") != strings.Join(shellinit.CompletionFlags("config add"), " ") {
+		t.Errorf("flags config add endpoint = %v", got)
+	}
+	if got := completeLines(t, "flags", "history"); strings.Join(got, " ") != "-n --all -s --search --provider --json -h --help" {
+		t.Errorf("flags history = %v", got)
+	}
+	if got := completeLines(t, "presets"); strings.Join(got, " ") != strings.Join(provider.PresetNames(), " ") {
+		t.Errorf("presets = %v", got)
 	}
 	if got := completeLines(t, "subcommands", "providers"); got != nil {
 		t.Errorf("subcommands providers = %v, want none", got)

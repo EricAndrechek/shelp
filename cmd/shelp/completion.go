@@ -37,7 +37,9 @@ func runCompletion(args []string, stdout, stderr io.Writer) error {
 //	commands                   name<TAB>description of every command
 //	flags [CMD [SUB]]          the flags of CMD (top level when absent);
 //	                           empty for a word that is no command
-//	subcommands CMD            CMD's positional subcommands
+//	subcommands CMD [SUB]      CMD's (or `CMD SUB`'s) positional subcommands
+//	presets                    the endpoint presets of `config add endpoint`
+//	routes                     the configured routes `config remove` takes
 //
 // It is on the Tab path, so it reads the config and nothing else
 // (provider.All is config + LookPath; no Detect, no network) and never
@@ -71,9 +73,25 @@ func runComplete(args []string, stdout io.Writer) error {
 			fmt.Fprintln(stdout, f)
 		}
 	case "subcommands":
-		if len(args) == 2 {
-			for _, w := range shellinit.CompletionSubcommands(args[1]) {
+		if len(args) >= 2 && len(args) <= 3 {
+			for _, w := range shellinit.CompletionSubcommands(strings.Join(args[1:], " ")) {
 				fmt.Fprintln(stdout, w)
+			}
+		}
+	case "presets":
+		for _, n := range provider.PresetNames() {
+			fmt.Fprintln(stdout, n)
+		}
+	case "routes":
+		cfg, err := loadConfig()
+		if err != nil {
+			return nil
+		}
+		seen := map[string]bool{}
+		for _, r := range provider.ConfiguredRoutes(cfg) {
+			if r.Name != "" && !seen[r.Name] {
+				seen[r.Name] = true
+				fmt.Fprintln(stdout, r.Name)
 			}
 		}
 	}

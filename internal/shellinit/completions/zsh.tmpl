@@ -25,6 +25,12 @@ _shelp_values() {
     templates)
       vals=(${(f)"$(command shelp __complete templates 2>/dev/null)"})
       compadd -a vals ;;
+    presets)
+      vals=(${(f)"$(command shelp __complete presets 2>/dev/null)"})
+      compadd -a vals ;;
+    routes)
+      vals=(${(f)"$(command shelp __complete routes 2>/dev/null)"})
+      compadd -a vals ;;
     context) compset -P '*,'; compadd -S '' -- ⟦.Context⟧ ;;
     shells) compadd -- ⟦.Shells⟧ ;;
   esac
@@ -53,7 +59,8 @@ _shelp() {
       --template) _shelp_values templates; return ;;
       --context) _shelp_values context; return ;;
       --shell) _shelp_values shells; return ;;
-      --bind) return ;;
+      --preset) _shelp_values presets; return ;;
+      --bind|--base-url|--key-env|--model|--label|-n|-s|--search) return ;;
     esac
   fi
 
@@ -77,11 +84,15 @@ _shelp() {
         return
       fi ;;
     config)
-      if [[ $arg1 == chain && $cur != -* ]]; then _shelp_values providers; return; fi ;;
+      if [[ $arg1 == chain && $cur != -* ]]; then _shelp_values providers; return; fi
+      if [[ $arg1 == remove && $cur != -* ]] && (( npos == 1 )); then _shelp_values routes; return; fi ;;
   esac
   if [[ -n $cmd ]]; then
     if (( npos == 0 )) && [[ $cur != -* ]]; then
       subs=(${(f)"$(command shelp __complete subcommands $cmd 2>/dev/null)"})
+      if (( $#subs )); then compadd -- $subs; return; fi
+    elif (( npos == 1 )) && [[ $cur != -* ]]; then
+      subs=(${(f)"$(command shelp __complete subcommands $cmd $arg1 2>/dev/null)"})
       if (( $#subs )); then compadd -- $subs; return; fi
     fi
     [[ $cur == -* ]] || return 0
