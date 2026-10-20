@@ -48,6 +48,10 @@ func exitCode(ctx context.Context, err error) (code int, show bool) {
 	if ctx.Err() != nil {
 		return 130, false
 	}
+	var es exitStatus // Ctrl-C in an interactive screen, or a caught SIGTERM
+	if errors.As(err, &es) {
+		return es.code, false
+	}
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2, true

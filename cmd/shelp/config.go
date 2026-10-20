@@ -21,6 +21,7 @@ import (
 	"github.com/ericandrechek/shelp/internal/provider"
 	"github.com/ericandrechek/shelp/internal/shellinit"
 	"github.com/ericandrechek/shelp/internal/style"
+	"github.com/ericandrechek/shelp/internal/term"
 )
 
 // Seams: tests replace these so nothing reaches a real backend, rc file,
@@ -176,39 +177,91 @@ func showConfig(ctx context.Context, stdout io.Writer) error {
 
 // ---- prompts ----
 
-// prompter reads line answers. One bufio.Reader is shared by every prompt
-// of a run, since a second one would swallow the first's buffered input.
+// prompter asks questions. On a terminal a yes/no question reads one key
+// in raw mode, so Esc answers no and Ctrl-C quits; otherwise (tests, piped
+// input) it reads lines from one shared bufio.Reader, since a second one
+// would swallow the first's buffered input. Ctrl-C ends any prompt: the
+// answer is no, and err() then returns errInterrupted (exit 130, no
+// message) for the caller to return.
 type prompter struct {
-	in  *bufio.Reader
-	out io.Writer
+	ctx         context.Context
+	in          *bufio.Reader
+	out         io.Writer
+	key         func(stop <-chan struct{}) (term.Key, bool, error) // nil: line mode
+	interrupted bool
 }
 
-func newPrompter(in io.Reader, out io.Writer) *prompter {
-	return &prompter{in: bufio.NewReader(in), out: out}
+func newPrompter(ctx context.Context, in io.Reader, out io.Writer) *prompter {
+	p := &prompter{ctx: ctx, in: bufio.NewReader(in), out: out}
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) && style.IsTerminal(out) {
+		fd := int(f.Fd())
+		p.key = func(stop <-chan struct{}) (term.Key, bool, error) {
+			st, err := term.MakeRaw(fd)
+			if err != nil {
+				return term.Key{}, false, err
+			}
+			defer term.Restore(fd, st)
+			return term.ReadKey(fd, stop)
+		}
+	}
+	return p
+}
+
+// err is errInterrupted after Ctrl-C (or the context's error once it is
+// done), else nil.
+func (p *prompter) err() error {
+	if p.interrupted {
+		return errInterrupted
+	}
+	return p.ctx.Err()
 }
 
 // line prints q and reads one line (trimmed). ok is false at EOF with
-// nothing read.
+// nothing read, on Ctrl-C (the context ends), and for an answer with an
+// Esc in it.
 func (p *prompter) line(q string) (s string, ok bool) {
 	fmt.Fprint(p.out, q)
-	s, err := p.in.ReadString('\n')
-	if err != nil && s == "" {
+	type res struct {
+		s   string
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() {
+		s, err := p.in.ReadString('\n')
+		ch <- res{s, err}
+	}()
+	var r res
+	select {
+	case r = <-ch:
+	case <-p.ctx.Done():
+		fmt.Fprintln(p.out)
+		p.interrupted = true
+		return "", false
+	}
+	if r.err != nil && r.s == "" {
 		fmt.Fprintln(p.out)
 		return "", false
 	}
-	return strings.TrimSpace(s), true
+	if strings.ContainsRune(r.s, 0x1b) {
+		return "\x1b", false // Esc: cancel
+	}
+	return strings.TrimSpace(r.s), true
 }
 
-// yesNo asks q with a [Y/n] or [y/N] suffix; Enter and EOF choose def.
+// yesNo asks q with a [Y/n] or [y/N] suffix; Enter and EOF choose def,
+// Esc and Ctrl-C answer no.
 func (p *prompter) yesNo(q string, def bool) bool {
 	suffix := " [y/N] "
 	if def {
 		suffix = " [Y/n] "
 	}
+	if p.key != nil {
+		return p.yesNoKey(q+suffix, def)
+	}
 	for {
 		s, ok := p.line(q + suffix)
 		if !ok {
-			return def
+			return def && !p.interrupted && s != "\x1b"
 		}
 		switch strings.ToLower(s) {
 		case "":
@@ -218,6 +271,34 @@ func (p *prompter) yesNo(q string, def bool) bool {
 		case "n", "no":
 			return false
 		}
+	}
+}
+
+func (p *prompter) yesNoKey(q string, def bool) bool {
+	fmt.Fprint(p.out, q)
+	for {
+		k, ok, err := p.key(p.ctx.Done())
+		if !ok || err != nil {
+			fmt.Fprintln(p.out)
+			p.interrupted = p.interrupted || p.ctx.Err() != nil
+			return false
+		}
+		ans := def
+		switch {
+		case k.IsCtrl('c'):
+			fmt.Fprintln(p.out)
+			p.interrupted = true
+			return false
+		case k.Code == term.KeyEsc, k.Is('n'), k.Is('N'):
+			ans = false
+		case k.Is('y'), k.Is('Y'):
+			ans = true
+		case k.Code == term.KeyEnter:
+		default:
+			continue
+		}
+		fmt.Fprintln(p.out, map[bool]string{true: "yes", false: "no"}[ans])
+		return ans
 	}
 }
 
@@ -255,7 +336,7 @@ func runConfigChain(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stdout, "set it with: shelp config chain fm,claude:haiku   (see `shelp providers` for IDs)")
 		return nil
 	}
-	return pickChain(ctx, cfg, newPrompter(stdin, stdout), stdout, stderr)
+	return pickChain(ctx, cfg, newPrompter(ctx, stdin, stdout), stdout, stderr)
 }
 
 // setChain validates ids against the known providers, warns about ones
@@ -401,6 +482,9 @@ func pickChain(ctx context.Context, cfg *config.Config, pr *prompter, stdout, st
 	var ids []string
 	for {
 		s, ok := pr.line("New order (numbers, e.g. 3 1 5; Enter keeps the current one): ")
+		if err := pr.err(); err != nil {
+			return err
+		}
 		if !ok || s == "" {
 			fmt.Fprintln(stdout, pal.Dim("chain unchanged"))
 			return nil
@@ -574,7 +658,7 @@ func runShortcutsSetupStep(ctx context.Context, cfg *config.Config, stdout, stde
 // Shortcut, chain; each step is skippable.
 func runGuidedSetup(ctx context.Context, stdout, stderr io.Writer) error {
 	pal := style.For(stdout)
-	pr := newPrompter(stdin, stdout)
+	pr := newPrompter(ctx, stdin, stdout)
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -586,10 +670,12 @@ func runGuidedSetup(ctx context.Context, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, pal.Warn(err.Error()))
 	} else if installed {
 		fmt.Fprintln(stdout, pal.OK("✓")+" already set up ("+tildePath(rc)+")")
-	} else if pr.yesNo("Add shelp's hook to "+tildePath(rc)+"?", true) {
+	} else if pr.yesNo("Add shelp's hook to "+tildePath(rc)+"?", true) && pr.err() == nil {
 		if err := runShellSetupFn(ctx, nil, stdout, stderr); err != nil {
 			fmt.Fprintln(stdout, pal.Err("shell hook: "+err.Error()))
 		}
+	} else if err := pr.err(); err != nil {
+		return err
 	} else {
 		fmt.Fprintln(stdout, pal.Dim("skipped; run `shelp setup shell` any time"))
 	}
@@ -598,10 +684,12 @@ func runGuidedSetup(ctx context.Context, stdout, stderr io.Writer) error {
 		heading("Apple Shortcut")
 		if need, why := shortcutsNeedFn(ctx, cfg); !need {
 			fmt.Fprintln(stdout, pal.OK("✓")+" nothing to do")
-		} else if pr.yesNo("The shortcut is "+why+". Set it up now (it needs one click in Shortcuts)?", true) {
+		} else if pr.yesNo("The shortcut is "+why+". Set it up now (it needs one click in Shortcuts)?", true) && pr.err() == nil {
 			if err := runShortcutsStep(ctx, cfg, stdout, stderr); err != nil {
 				fmt.Fprintln(stdout, pal.Err("shortcut: "+err.Error()))
 			}
+		} else if err := pr.err(); err != nil {
+			return err
 		} else {
 			fmt.Fprintln(stdout, pal.Dim("skipped; run `shelp setup shortcuts` any time"))
 		}
@@ -619,6 +707,8 @@ func runGuidedSetup(ctx context.Context, stdout, stderr io.Writer) error {
 		if err := pickChain(ctx, cfg, pr, stdout, stderr); err != nil {
 			return err
 		}
+	} else if err := pr.err(); err != nil {
+		return err
 	}
 	fmt.Fprintln(stdout, "\n"+pal.Dim("done; `shelp config` shows your settings"))
 	return nil
