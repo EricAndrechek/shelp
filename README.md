@@ -330,6 +330,11 @@ models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
 [shell]
 bind = "^G"           # keybinding for shelp-widget; --bind on `shelp init` wins
 line_mode = true      # raw-line Enter interception; default true
+
+# Request history (see "History"). Both keys are optional.
+[history]
+enabled = true        # false: record nothing
+max_entries = 1000    # keep the newest this-many; older ones are dropped
 ```
 
 ### Colors
@@ -466,6 +471,41 @@ the reason and expiry time, without probing it. `shelp providers
 --reset-cooldowns` clears the whole store. `--force` calls a provider even
 while it's cooled down -- including when it's the only ID you named with
 `-p`, which is otherwise still skipped by default.
+
+## History
+
+Every suggest and explain call is appended to a local file,
+`$XDG_STATE_HOME/shelp/history.jsonl` (`~/.local/state/shelp/` by default;
+`shelp history path` prints it). Only you can read it (0600, in a 0700
+directory), since it holds your prompts. A record has the time, the mode,
+your input, the text shelp printed, the provider that answered, the
+latency (and time to first chunk when streamed), tokens when the backend
+reports them (OpenAI-compatible endpoints and `claude` suggest do; `fm`
+and `shortcuts:*` do not), the providers that failed before it, the
+template and shell, an error when every provider failed, and a stable
+`key` hashed from the rendered request (for a future answer cache). The
+working directory and environment are never stored.
+
+```sh
+shelp history                  # the last 20, newest last
+shelp history -n 50 -s tar     # search input and answers (case-insensitive)
+shelp history --provider fm --all
+shelp history --json           # raw records, one per line
+shelp history show 12          # one entry in full (numbers as in the list)
+shelp history clear            # asks first; --yes skips that
+```
+
+Recording never fails or slows a command: it is one appended line, errors
+are ignored, and a Ctrl-C-cancelled call is not recorded. Once the file
+holds more than 1.5x `max_entries` lines it is rewritten with the newest
+`max_entries`. `[history] enabled = false` or `SHELP_HISTORY=0` in the
+environment turns recording off. `shelp history` is a command only when
+it has no words, only flags, or starts with `show`, `clear` or `path`;
+`shelp history of git commits for main.go` is still a task.
+
+On a terminal, `shelp explain` ends with a dim line naming the provider and
+how long it took (`fm · 1.4s`, plus `· 412 tokens` when known). `--json`
+carries `tokens` when known and `-v` prints them.
 
 ## Privacy
 

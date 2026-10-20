@@ -49,7 +49,7 @@ Flags
   --template NAME      prompt template (default: ` + prompt.Default + `)
   --context FIELDS     what to tell the model: os,shell,cwd,tools
                        (default: os,shell)
-  --json               print {"text","provider","latency_ms"} instead of text
+  --json               print {"text","provider","latency_ms",...} instead of text
   -v, --verbose        show which provider answered, and how fast
   --force              call a provider even if it is in a rate-limit cooldown
   -h, --help           show help
@@ -271,6 +271,12 @@ Keys
   line_mode = true
       Intercept Enter on lines starting with "shelp ". Default true.
 
+[history]
+  enabled = true
+      Record each request ("shelp help history"). Default true.
+  max_entries = 1000
+      How many entries to keep. Default 1000.
+
 [[openai.endpoint]]   (repeatable; hosted, key-authenticated)
   name = "openrouter"
       Prefix of this endpoint's provider IDs, "<name>:<model>".
@@ -309,6 +315,8 @@ Keys
 Environment
   SHELP_PROVIDER    provider chain, like -p (overrides config "providers")
   SHELP_CONFIG      path of the config file
+  SHELP_HISTORY     0 turns request history off
+  XDG_STATE_HOME    where history.jsonl lives (default ~/.local/state)
   NO_COLOR          turn off colors
   CLICOLOR_FORCE    keep colors when output is not a terminal
 `,
