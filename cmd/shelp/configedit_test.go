@@ -144,7 +144,7 @@ func TestConfigAddErrors(t *testing.T) {
 	}
 	// `config add remote ...` is a task (add claims endpoint and local
 	// only), so parseAddArgs's own check is tested directly.
-	if _, _, err := parseAddArgs([]string{"remote", "x"}); err == nil || !strings.Contains(err.Error(), "unknown kind") {
+	if _, _, _, err := parseAddArgs([]string{"remote", "x"}); err == nil || !strings.Contains(err.Error(), "unknown kind") {
 		t.Errorf("unknown kind: %v", err)
 	}
 	if _, serr := os.Stat(e.cfgPath); serr == nil {
@@ -355,5 +355,108 @@ func TestChainGuideWithoutTerminal(t *testing.T) {
 	var ue usageError
 	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "needs a terminal") {
 		t.Errorf("providers -i: %v", err)
+	}
+}
+
+const replaceSrc = `providers = ["fm", "work:big", "work:small"]
+
+# the work gateway
+[[openai.endpoint]]
+name = "work"   # do not rename
+base_url = "https://llm.example.com/v1"
+api_key_env = "WORK_KEY"
+models = [
+  "big",
+  "small",
+]
+temperature = 0.2
+
+[openai.endpoint.labels]
+big = "Big one"
+
+[shell]
+bind = "^G"
+`
+
+// An edit rewrites only the keys that change, where the entry is: its
+// comments, other keys and sub-tables stay, and it reads back as asked.
+func TestConfigOpsEditInPlace(t *testing.T) {
+	old := provider.CustomRoute{Name: "work", BaseURL: "https://llm.example.com/v1", KeyEnv: "WORK_KEY", Models: []string{"big", "small"}}
+	r := old
+	r.Models, r.Label = []string{"big", "huge"}, "Work"
+	out, err := configOps{edits: []routeEdit{{name: "work", route: r}}}.apply(replaceSrc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(replaceSrc, "models = [\n  \"big\",\n  \"small\",\n]\ntemperature = 0.2\n", "models = [\"big\", \"huge\"]\ntemperature = 0.2\nlabel = \"Work\"\n", 1)
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	// To a preset: the custom URL and key go, name is written (it would
+	// otherwise follow the preset).
+	r = provider.CustomRoute{Name: "work", Preset: "groq", Models: []string{"big"}}
+	out, err = configOps{edits: []routeEdit{{name: "work", route: r}}}.apply(replaceSrc)
+	if err != nil || strings.Contains(out, "base_url") || strings.Contains(out, "WORK_KEY") || !strings.Contains(out, "name = \"work\"   # do not rename\nmodels = [\"big\"]\ntemperature = 0.2\npreset = \"groq\"\n") {
+		t.Errorf("to a preset: %v\n%s", err, out)
+	}
+	// A file the line edits cannot handle safely is refused.
+	inline := "[openai]\nendpoint = [{ name = \"work\", base_url = \"https://h/v1\", models = [\"m\"] }]\n"
+	if _, err := (configOps{edits: []routeEdit{{name: "work", route: provider.CustomRoute{Name: "work", BaseURL: "https://h/v1", Models: []string{"n"}}}}}).apply(inline); err == nil {
+		t.Error("an inline-table edit was not refused")
+	}
+	// The way to make it by hand, for a file managed elsewhere.
+	d := strings.Join(configOps{edits: []routeEdit{{name: "work", route: provider.CustomRoute{Name: "team", BaseURL: "https://llm.example.com/v1", KeyEnv: "WORK_KEY", Models: []string{"big", "small"}, Label: "x"}}}}.describe(replaceSrc), "\n")
+	if !strings.Contains(d, "in the [[openai.endpoint]] entry with name = \"work\":\n    name = \"team\"\n    label = \"x\"") {
+		t.Errorf("describe:\n%s", d)
+	}
+}
+
+// --replace changes an existing route in place; without it a taken name
+// stays an error that says so.
+func TestConfigAddReplace(t *testing.T) {
+	e := routeEnv(t, "", false)
+	write(t, e.cfgPath, replaceSrc)
+	_, _, err := runOut(t, "config", "add", "endpoint", "work", "--base-url", "https://llm.example.com/v1", "--model", "big")
+	if err == nil || !strings.Contains(err.Error(), "already in the config") || !strings.Contains(err.Error(), "--replace replaces it") {
+		t.Errorf("without --replace: %v", err)
+	}
+	out, _, err := runOut(t, "config", "add", "endpoint", "work", "--base-url", "https://llm.example.com/v1", "--key-env", "WORK_KEY", "--model", "big", "--replace")
+	t.Logf("stdout:\n%s", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, e.cfgPath)
+	want := strings.Replace(strings.Replace(replaceSrc, "models = [\n  \"big\",\n  \"small\",\n]\n", "models = [\"big\"]\n", 1),
+		`providers = ["fm", "work:big", "work:small"]`, `providers = ["fm", "work:big"]`, 1)
+	if got != want {
+		t.Errorf("file:\n%s\nwant:\n%s", got, want)
+	}
+	for _, w := range []string{"updated work (work:big)", "also taken out of your chain: work:small"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("output lacks %q", w)
+		}
+	}
+	if strings.Contains(out, "use it:") {
+		t.Error("suggests a chain though nothing is new")
+	}
+	// A new model: the chain command to use it.
+	out, _, err = runOut(t, "config", "add", "endpoint", "work", "--base-url", "https://llm.example.com/v1", "--key-env", "WORK_KEY", "--model", "big,huge", "--replace")
+	if err != nil || !strings.Contains(out, "use it: shelp config chain fm,work:big,work:huge") {
+		t.Errorf("new model: %v\n%s", err, out)
+	}
+	// Another kind: removed and added at the end.
+	if _, _, err := runOut(t, "config", "add", "local", "work", "--base-url", "http://10.0.0.2/v1", "--replace"); err != nil {
+		t.Fatal(err)
+	}
+	got = read(t, e.cfgPath)
+	if strings.Contains(got, "[[openai.endpoint]]") || !strings.HasSuffix(got, "[[openai.local]]\nname = \"work\"\nbase_url = \"http://10.0.0.2/v1\"\n") || !strings.HasPrefix(got, `providers = ["fm"]`) {
+		t.Errorf("kind change:\n%s", got)
+	}
+	// No such route: --replace adds it.
+	if _, _, err := runOut(t, "config", "add", "local", "box", "--base-url", "http://10.0.0.3/v1", "--replace"); err != nil || !strings.Contains(read(t, e.cfgPath), `name = "box"`) {
+		t.Errorf("replace of nothing: %v", err)
+	}
+	if _, _, err := runOut(t, "config", "add", "local", "box", "--base-url", "http://h/v1", "--replace=yes"); err == nil || !strings.Contains(err.Error(), "--replace takes no value") {
+		t.Errorf("--replace=yes: %v", err)
 	}
 }

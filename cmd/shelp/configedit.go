@@ -40,16 +40,29 @@ var (
 )
 
 // configOps is one edit of the config file: a new chain, routes to add,
-// routes (by name) to remove. Every writer of the file -- `config chain`,
-// `config add`/`remove`, the provider manager -- goes through it, so a
-// file managed elsewhere is handled the same way everywhere.
+// routes (by name) to remove, routes to change in place. Every writer of
+// the file -- `config chain`, `config add`/`remove`, the provider manager
+// -- goes through it, so a file managed elsewhere is handled the same way
+// everywhere.
 type configOps struct {
 	chain   []string // nil leaves the providers line alone
 	adds    []provider.CustomRoute
 	removes []string
+	edits   []routeEdit
 }
 
-func (o configOps) empty() bool { return o.chain == nil && len(o.adds) == 0 && len(o.removes) == 0 }
+// routeEdit changes the route named name (as the file has it) into route,
+// in place: only the keys that differ are rewritten, so comments, other
+// keys (temperature, labels) and the entry's place in the file stay.
+type routeEdit struct {
+	name  string
+	local bool
+	route provider.CustomRoute // same kind (local or not)
+}
+
+func (o configOps) empty() bool {
+	return o.chain == nil && len(o.adds) == 0 && len(o.removes) == 0 && len(o.edits) == 0
+}
 
 // routeKey names a configured route for comparisons: table + name.
 func routeKey(local bool, name string) string {
@@ -68,7 +81,8 @@ func routeKeys(cfg *config.Config) []string {
 	return out
 }
 
-// applyRoutes edits src's [[openai.*]] entries only.
+// applyRoutes edits src's [[openai.*]] entries only: removes, then edits,
+// then adds.
 func (o configOps) applyRoutes(src string) string {
 	out := src
 	for _, name := range o.removes {
@@ -81,23 +95,164 @@ func (o configOps) applyRoutes(src string) string {
 			}
 		}
 	}
+	for _, e := range o.edits {
+		bs := config.ArrayTableBlocks(out, provider.CustomRoute{Local: e.local}.Table())
+		for i := len(bs) - 1; i >= 0; i-- {
+			if old, ok := blockRoute(bs[i].Text); ok && old.Name == e.name {
+				out = config.ReplaceBlock(out, bs[i], config.EditTableKeys(bs[i].Text, routeKeyEdits(old, e.route)))
+			}
+		}
+	}
 	for _, r := range o.adds {
 		out = config.AppendBlock(out, r.Block())
 	}
 	return out
 }
 
-// blockRouteName is the route name a lone [[openai.*]] block declares.
-func blockRouteName(text string) string {
+// blockRoute is the route a lone [[openai.*]] block declares.
+func blockRoute(text string) (provider.CustomRoute, bool) {
 	cfg, err := config.Parse(text)
 	if err != nil {
-		return ""
+		return provider.CustomRoute{}, false
 	}
 	rs := provider.ConfiguredRoutes(cfg)
 	if len(rs) != 1 {
-		return ""
+		return provider.CustomRoute{}, false
 	}
-	return rs[0].Name
+	return rs[0], true
+}
+
+// blockRouteName is the route name a lone [[openai.*]] block declares.
+func blockRouteName(text string) string {
+	r, _ := blockRoute(text)
+	return r.Name
+}
+
+// routeKeyEdits are the key changes that turn old's entry into r's: only
+// what differs (by effect: a preset's own base URL or key variable is the
+// same as leaving it out), each written the way Block writes it. The name
+// is written whenever the preset changes, since an entry without one is
+// named after its preset.
+func routeKeyEdits(old, r provider.CustomRoute) []config.KeyEdit {
+	var out []config.KeyEdit
+	set := func(k, v string) { out = append(out, config.KeyEdit{Key: k, Value: v}) }
+	quote := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return config.Quote(s)
+	}
+	if old.Name != r.Name || old.Preset != r.Preset {
+		set("name", config.Quote(r.Name))
+	}
+	if r.Local {
+		if old.BaseURL != r.BaseURL {
+			set("base_url", quote(r.BaseURL))
+		}
+	} else {
+		pb, pk, _ := provider.PresetDefaults(r.Preset)
+		if old.Preset != r.Preset {
+			set("preset", quote(r.Preset))
+		}
+		if old.Preset != r.Preset || old.EffectiveBaseURL() != r.EffectiveBaseURL() {
+			v := ""
+			if r.BaseURL != "" && r.BaseURL != pb {
+				v = config.Quote(r.BaseURL)
+			}
+			set("base_url", v)
+		}
+		if old.Preset != r.Preset || old.EffectiveKeyEnv() != r.EffectiveKeyEnv() {
+			v := ""
+			if r.KeyEnv != "" && r.KeyEnv != pk {
+				v = config.Quote(r.KeyEnv)
+			}
+			set("api_key_env", v)
+		}
+		if !slices.Equal(old.Models, r.Models) {
+			q := make([]string, len(r.Models))
+			for i, m := range r.Models {
+				q[i] = config.Quote(m)
+			}
+			set("models", "["+strings.Join(q, ", ")+"]")
+		}
+	}
+	if old.Label != r.Label {
+		set("label", quote(r.Label))
+	}
+	return out
+}
+
+// sameRoute reports whether a and b have the same effect: kind, name,
+// preset, base URL, key variable, models and label.
+func sameRoute(a, b provider.CustomRoute) bool {
+	return a.Local == b.Local && a.Name == b.Name && a.Preset == b.Preset && a.EffectiveBaseURL() == b.EffectiveBaseURL() &&
+		a.EffectiveKeyEnv() == b.EffectiveKeyEnv() && slices.Equal(a.Models, b.Models) && a.Label == b.Label
+}
+
+// routeIDChange says what becomes of provider id when route old becomes r:
+// its new ID, or "" when it is gone; ok is false when id is not old's. A
+// local server's IDs follow its name (its models are discovered); a hosted
+// endpoint's follow each model that stays.
+func routeIDChange(old, r provider.CustomRoute, id string) (to string, ok bool) {
+	if old.Local {
+		rest, isModel := strings.CutPrefix(id, old.Name+":")
+		switch {
+		case id != old.Name && !isModel:
+			return "", false
+		case !r.Local:
+			return "", true
+		case isModel:
+			return r.Name + ":" + rest, true
+		}
+		return r.Name, true
+	}
+	for _, m := range old.Models {
+		if id != strings.ToLower(old.Name+":"+m) {
+			continue
+		}
+		for _, n := range r.Models {
+			if !r.Local && strings.EqualFold(n, m) {
+				return strings.ToLower(r.Name + ":" + n), true
+			}
+		}
+		return "", true
+	}
+	return "", false
+}
+
+// chainAfterEdit is chain with route old's entries following it to r:
+// renamed in place ("old → new" in renamed), or dropped when gone.
+func chainAfterEdit(chain []string, old, r provider.CustomRoute) (out, renamed, dropped []string) {
+	out = []string{}
+	for _, id := range chain {
+		to, ok := routeIDChange(old, r, id)
+		switch {
+		case !ok:
+			to = id
+		case to == "":
+			dropped = append(dropped, id)
+			continue
+		case to != id:
+			renamed = append(renamed, id+" → "+to)
+		}
+		if !slices.Contains(out, to) {
+			out = append(out, to)
+		}
+	}
+	return out, renamed, dropped
+}
+
+// withoutRoute is src's config without route r's entry: what a changed r
+// is checked against (its own name and IDs are free).
+func withoutRoute(src string, r provider.CustomRoute) (*config.Config, error) {
+	out := src
+	bs := config.ArrayTableBlocks(out, r.Table())
+	for i := len(bs) - 1; i >= 0; i-- {
+		if blockRouteName(bs[i].Text) == r.Name {
+			out = config.RemoveBlock(out, bs[i])
+		}
+	}
+	return config.Parse(out)
 }
 
 // apply returns src with ops made. The result must parse and hold exactly
@@ -117,6 +272,12 @@ func (o configOps) apply(src string) (string, error) {
 		delete(want, routeKey(false, name))
 		delete(want, routeKey(true, name))
 	}
+	for _, e := range o.edits {
+		if want[routeKey(e.local, e.name)]--; want[routeKey(e.local, e.name)] <= 0 {
+			delete(want, routeKey(e.local, e.name))
+		}
+		want[routeKey(e.route.Local, e.route.Name)]++
+	}
 	for _, r := range o.adds {
 		want[routeKey(r.Local, r.Name)]++
 	}
@@ -135,6 +296,15 @@ func (o configOps) apply(src string) (string, error) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		return "", errors.New("could not make this change safely in the file as written; make it with `shelp config edit`")
 	}
+	// An edited route must read back as exactly what was asked.
+	for _, e := range o.edits {
+		i := slices.IndexFunc(provider.ConfiguredRoutes(after), func(r provider.CustomRoute) bool {
+			return r.Local == e.route.Local && r.Name == e.route.Name
+		})
+		if i < 0 || !sameRoute(provider.ConfiguredRoutes(after)[i], e.route) {
+			return "", fmt.Errorf("could not change %s safely in the file as written; make the change with `shelp config edit`", e.name)
+		}
+	}
 	if o.chain != nil && !slices.Equal(after.Providers, o.chain) && !(len(o.chain) == 0 && len(after.Providers) == 0) {
 		return "", errors.New("could not set the providers line safely; make the change with `shelp config edit`")
 	}
@@ -151,6 +321,21 @@ func (o configOps) describe(src string) []string {
 		for _, r := range provider.ConfiguredRoutes(mustParse(src)) {
 			if r.Name == name {
 				out = append(out, fmt.Sprintf("delete the [[%s]] entry with name = %s", r.Table(), config.Quote(name)))
+			}
+		}
+	}
+	for _, e := range o.edits {
+		for _, r := range provider.ConfiguredRoutes(mustParse(src)) {
+			if r.Name != e.name || r.Local != e.local {
+				continue
+			}
+			out = append(out, fmt.Sprintf("in the [[%s]] entry with name = %s:", r.Table(), config.Quote(e.name)))
+			for _, ke := range routeKeyEdits(r, e.route) {
+				if ke.Value == "" {
+					out = append(out, "    delete the "+ke.Key+" line")
+				} else {
+					out = append(out, "    "+ke.Key+" = "+ke.Value)
+				}
 			}
 		}
 	}
@@ -225,6 +410,13 @@ func opsSummary(pal style.Palette, ops configOps) []string {
 	var out []string
 	for _, name := range ops.removes {
 		out = append(out, pal.OK("removed")+" "+name)
+	}
+	for _, e := range ops.edits {
+		what := e.name
+		if e.route.Name != e.name {
+			what += " → " + e.route.Name
+		}
+		out = append(out, pal.OK("updated")+" "+what+" "+pal.Dim("("+strings.Join(e.route.IDs(), ", ")+")"))
 	}
 	for _, r := range ops.adds {
 		out = append(out, pal.OK("added")+" "+r.Name+" "+pal.Dim("("+strings.Join(r.IDs(), ", ")+")"))
@@ -321,25 +513,31 @@ func chezmoiSourceKind(source string) string {
 
 // ---- config add / remove ----
 
-const addUsage = `usage: shelp config add endpoint NAME (--preset P | --base-url URL) [--key-env VAR] --model M [--model M2 ...] [--label TEXT]
-       shelp config add local NAME --base-url URL [--label TEXT]`
+const addUsage = `usage: shelp config add endpoint NAME (--preset P | --base-url URL) [--key-env VAR] --model M [--model M2 ...] [--label TEXT] [--replace]
+       shelp config add local NAME --base-url URL [--label TEXT] [--replace]`
 
 func addUsageErr(format string, args ...any) error {
 	return usageError{fmt.Errorf(format+"\n"+addUsage, args...)}
 }
 
 // parseAddArgs reads `config add` arguments: two positionals (kind, name)
-// and flags in any order, as --flag value or --flag=value.
-func parseAddArgs(args []string) (r provider.CustomRoute, keySet bool, err error) {
+// and flags in any order, as --flag value or --flag=value; --replace
+// takes no value.
+func parseAddArgs(args []string) (r provider.CustomRoute, keySet, replace bool, err error) {
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		name, val, hasVal := strings.Cut(a, "=")
 		switch name {
+		case "--replace":
+			if hasVal {
+				return r, false, false, addUsageErr("--replace takes no value")
+			}
+			replace = true
 		case "--preset", "--base-url", "--key-env", "--model", "--label":
 			if !hasVal {
 				if i+1 >= len(args) {
-					return r, false, addUsageErr("%s needs a value", name)
+					return r, false, false, addUsageErr("%s needs a value", name)
 				}
 				i++
 				val = args[i]
@@ -362,16 +560,16 @@ func parseAddArgs(args []string) (r provider.CustomRoute, keySet bool, err error
 			}
 		case "--api-key", "--key", "--token":
 			// Never echo the value: it is a secret.
-			return r, false, addUsageErr("shelp never takes an API key: put `export NAME=<key>` in your shell rc or env file and pass NAME with --key-env")
+			return r, false, false, addUsageErr("shelp never takes an API key: put `export NAME=<key>` in your shell rc or env file and pass NAME with --key-env")
 		default:
 			if strings.HasPrefix(a, "-") {
-				return r, false, addUsageErr("unknown flag %s", name)
+				return r, false, false, addUsageErr("unknown flag %s", name)
 			}
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 2 {
-		return r, false, addUsageErr("config add needs a kind (endpoint or local) and a name")
+		return r, false, false, addUsageErr("config add needs a kind (endpoint or local) and a name")
 	}
 	r.Name = strings.ToLower(strings.TrimSpace(pos[1]))
 	switch pos[0] {
@@ -382,12 +580,12 @@ func parseAddArgs(args []string) (r provider.CustomRoute, keySet bool, err error
 	case "local":
 		r.Local = true
 		if r.Preset != "" || keySet || len(r.Models) > 0 {
-			return r, false, addUsageErr("a local server takes --base-url and --label only (its models are discovered)")
+			return r, false, false, addUsageErr("a local server takes --base-url and --label only (its models are discovered)")
 		}
 	default:
-		return r, false, addUsageErr("unknown kind %q: endpoint or local", pos[0])
+		return r, false, false, addUsageErr("unknown kind %q: endpoint or local", pos[0])
 	}
-	return r, keySet, nil
+	return r, keySet, replace, nil
 }
 
 func runConfigAdd(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -399,7 +597,7 @@ func runConfigAdd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		printHelp(stdout, "config")
 		return nil
 	}
-	r, _, err := parseAddArgs(args)
+	r, _, replace, err := parseAddArgs(args)
 	if err != nil {
 		return err
 	}
@@ -407,22 +605,62 @@ func runConfigAdd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
-	if err := r.Validate(cfg); err != nil {
+	ops := configOps{adds: []provider.CustomRoute{r}}
+	check := cfg
+	var old *provider.CustomRoute
+	for _, cr := range provider.ConfiguredRoutes(cfg) {
+		if cr.Name == r.Name {
+			old = &cr
+		}
+	}
+	if old != nil && replace {
+		// --replace: checked against the file without the old entry, and
+		// changed in place (or, for another kind, removed and added).
+		src, err := readConfigText(config.Path())
+		if err != nil {
+			return err
+		}
+		if check, err = withoutRoute(src, *old); err != nil {
+			return err
+		}
+		if old.Local == r.Local {
+			ops = configOps{edits: []routeEdit{{name: old.Name, local: old.Local, route: r}}}
+		} else {
+			ops = configOps{removes: []string{old.Name}, adds: []provider.CustomRoute{r}}
+		}
+	}
+	if err := r.Validate(check); err != nil {
+		if old != nil && !replace {
+			err = fmt.Errorf("%w; --replace replaces it", err)
+		}
 		return usageError{err}
 	}
 	pal := style.For(stdout)
-	ids := r.IDs()
-	ops := configOps{adds: []provider.CustomRoute{r}}
 	chain := cfg.Providers
 	if len(chain) == 0 {
 		chain = provider.DefaultChain
+	}
+	var dropped []string
+	if old != nil && replace {
+		var kept []string
+		kept, _, dropped = chainAfterEdit(chain, *old, r)
+		if len(dropped) > 0 && len(cfg.Providers) > 0 {
+			ops.chain = kept
+		}
+		chain = kept
+	}
+	var ids []string // r's providers not in the chain yet
+	for _, id := range r.IDs() {
+		if !slices.Contains(chain, id) {
+			ids = append(ids, id)
+		}
 	}
 	newChain := append(slices.Clone(chain), ids...)
 	var pr *prompter
 	if isInteractive(stdout) {
 		pr = newPrompter(ctx, stdin, stdout)
 		describeRoute(pal, r, stdout)
-		if pr.yesNo(fmt.Sprintf("Also put %s at the end of your chain?", strings.Join(ids, ", ")), true) {
+		if len(ids) > 0 && pr.yesNo(fmt.Sprintf("Also put %s at the end of your chain?", strings.Join(ids, ", ")), true) {
 			ops.chain = newChain
 		}
 		if err := pr.err(); err != nil {
@@ -436,7 +674,10 @@ func runConfigAdd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if pr == nil {
 		describeRoute(pal, r, stdout)
 	}
-	if ops.chain == nil || !res.saved {
+	if res.saved && len(dropped) > 0 {
+		fmt.Fprintln(stdout, pal.Dim("also taken out of your chain: "+strings.Join(dropped, ", ")))
+	}
+	if len(ids) > 0 && (!slices.Equal(ops.chain, newChain) || !res.saved) {
 		fmt.Fprintln(stdout, "use it: "+pal.Bold("shelp config chain "+strings.Join(newChain, ",")))
 	}
 	return nil
@@ -567,6 +808,7 @@ func printChainGuide(cfg *config.Config, stdout io.Writer) {
 		{"shelp config chain ID,ID,...", "set the chain, in the order to try"},
 		{"shelp config add endpoint NAME --preset P --model M", "add a hosted endpoint (its key stays in an env var)"},
 		{"shelp config add local NAME --base-url URL", "add a local OpenAI-compatible server"},
+		{"shelp config add endpoint|local NAME ... --replace", "change one you added, in place"},
 		{"shelp config remove NAME", "remove one you added"},
 		{"shelp config edit", "edit the file"},
 	} {

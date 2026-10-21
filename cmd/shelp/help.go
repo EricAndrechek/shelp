@@ -209,6 +209,9 @@ Usage
                                add a hosted OpenAI-compatible endpoint
   shelp config add local NAME --base-url URL
                                add a local OpenAI-compatible server
+  shelp config add ... --replace
+                               replace the endpoint or local server NAME
+                               in place (or add it if there is none)
   shelp config remove NAME     remove an endpoint or local server you added
   shelp config edit            open the file in $VISUAL / $EDITOR / vi,
                                creating it with a commented starter
@@ -223,6 +226,9 @@ Flags (config add)
                    shelp never takes or stores a key itself
   --model M        a model ID as the API names it; repeat, or comma-separate
   --label TEXT     how it reads in lists, e.g. "Haiku via OpenRouter"
+  --replace        NAME is already in the config: replace it where it is,
+                   keeping its comments and any other keys; provider IDs
+                   that go away are taken out of the chain
   -h, --help       show help
 
 Provider manager (shelp providers -i, or shelp config chain on a terminal)
@@ -234,9 +240,10 @@ Provider manager (shelp providers -i, or shelp config chain on a terminal)
   shift+↑↓ (or K/J, +/-) move a chain entry; → (or enter, l) opens a
   provider's details: where it runs, its status, its route and how to make
   it work (enter there runs the Apple Shortcut's setup), ← (or esc) goes
-  back and ↑↓ show the next one; a adds a route; x removes one you added;
-  s saves; q or esc quits, asking first about unsaved changes; ctrl+c
-  quits at once without saving.
+  back and ↑↓ show the next one; a adds a route; e edits one you added, in
+  place (renamed or dropped IDs follow in the chain); x removes one; s
+  saves; q or esc quits, asking first about unsaved changes; ctrl+c quits
+  at once without saving.
 
 chain, add and remove change only their own lines and leave the rest of the
 file as it is. If the file is managed by chezmoi or is a symlink, shelp does

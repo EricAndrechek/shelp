@@ -427,7 +427,7 @@ func TestManagerDetailPage(t *testing.T) {
 		"key       $WORK_KEY · not set in this shell",
 		"models    big (this one), small",
 		"label     Work",
-		"← to go back · space to remove · x to remove · r to check again · ? for shortcuts",
+		"← to go back · space to remove · e to edit · x to remove · r to check again · ? for shortcuts",
 	} {
 		if !strings.Contains(flat, strings.Join(strings.Fields(w), " ")) {
 			t.Errorf("work:big details lack %q", w)
@@ -918,5 +918,166 @@ func TestFixLines(t *testing.T) {
 		hasRoute: true, route: provider.Route{Local: true, Name: "ollama", BaseURL: "http://127.0.0.1:11434/v1", Builtin: true}}
 	if got := strings.Join(fixLines(style.Plain(), ol), "\n"); !strings.Contains(got, "ollama serve") {
 		t.Errorf("ollama:\n%s", got)
+	}
+}
+
+// e on a configured route opens the form filled in; the edit renames the
+// route, changes its models, and the chain follows: renamed IDs in place,
+// a new one only when asked.
+func TestManagerEditRoute(t *testing.T) {
+	m := testManager(t, routedSrc, true) // chain: fm, work:big, lmstudio
+	m.cur = "work:big"
+	m.sync()
+	press(m, keys("e")...)
+	if m.mode != modeForm || m.form.orig == nil {
+		t.Fatalf("e did not open the edit form: mode %v", m.mode)
+	}
+	v := viewOf(m)
+	if !strings.Contains(v, "shelp providers › edit work") || !strings.Contains(v, "Which service?") || !strings.Contains(v, "❯ custom") {
+		t.Fatalf("first step:\n%s", v)
+	}
+	press(m, kEnter) // custom stays
+	if m.form.step != stepURL || m.form.val(stepURL) != "https://llm.example.com/v1" {
+		t.Fatalf("url step %v %q", m.form.step, m.form.val(stepURL))
+	}
+	press(m, kEnter)
+	if m.form.val(stepName) != "work" {
+		t.Fatalf("name %q", m.form.val(stepName))
+	}
+	press(m, term.Key{Code: term.KeyCtrl, Rune: 'u'})
+	press(m, keys("team", kEnter)...)
+	if m.form.step != stepKeyEnv || m.form.val(stepKeyEnv) != "WORK_KEY" {
+		t.Fatalf("key step %v %q (the name is free: it was the route's own)", m.form.step, m.form.val(stepKeyEnv))
+	}
+	press(m, kEnter)
+	if m.form.val(stepModels) != "big, small" {
+		t.Fatalf("models %q", m.form.val(stepModels))
+	}
+	press(m, term.Key{Code: term.KeyCtrl, Rune: 'u'})
+	press(m, keys("big, medium", kEnter, kEnter)...) // models, label (kept)
+	v = viewOf(m)
+	t.Logf("review:\n%s", v)
+	for _, w := range []string{"Make this change?", `name = "team"`, `models = ["big", "medium"]`,
+		"work:big → team:big, work:small goes, team:medium (new)", "enter to make the change"} {
+		if !strings.Contains(v, w) {
+			t.Errorf("review lacks %q", w)
+		}
+	}
+	if strings.Contains(v, "label =") || strings.Contains(v, "base_url") {
+		t.Error("the review lists keys that did not change")
+	}
+	press(m, kEnter)
+	if !strings.Contains(viewOf(m), "Put the new team:medium at the end of your chain? y/n") {
+		t.Fatalf("chain step:\n%s", viewOf(m))
+	}
+	press(m, keys("n")...)
+	if m.mode != modeList || !slices.Equal(m.chain, []string{"fm", "team:big", "lmstudio"}) || m.cur != "team:big" {
+		t.Fatalf("after: mode %v chain %v cur %s", m.mode, m.chain, m.cur)
+	}
+	if !strings.Contains(m.msg, "updated work (now team); in the chain: work:big → team:big") {
+		t.Errorf("msg %q", m.msg)
+	}
+	if m.rows["work:big"] != nil || m.rows["team:medium"] == nil || m.rows["team:medium"].probed {
+		t.Error("rows not rebuilt (and the new one probed)")
+	}
+	out, err := m.ops().apply(routedSrc)
+	want := `providers = ["fm", "team:big", "lmstudio"]
+
+[[openai.endpoint]]
+name = "team"
+base_url = "https://llm.example.com/v1"
+api_key_env = "WORK_KEY"
+models = ["big", "medium"]
+label = "Work"
+
+[[openai.local]]
+name = "lmstudio"
+base_url = "http://127.0.0.1:1235/v1"
+`
+	if err != nil || out != want {
+		t.Errorf("apply: %v\n%s\nwant:\n%s", err, out, want)
+	}
+	// Editing it again changes the same pending edit, from the details.
+	probeAll(m)
+	press(m, keys(kRight, "e")...)
+	press(m, kEnter, kEnter, kEnter, kEnter, kEnter) // preset, url, name, key, models
+	press(m, keys("Team", kEnter, kEnter)...)        // label, review
+	if m.mode != modeDetail || len(m.ops().edits) != 1 || m.ops().edits[0].name != "work" || m.ops().edits[0].route.Label != "WorkTeam" {
+		t.Errorf("second edit: mode %v edits %+v", m.mode, m.ops().edits)
+	}
+	// No change at all says so and records nothing new.
+	press(m, keys("e")...)
+	for m.mode == modeForm {
+		press(m, kEnter)
+	}
+	if m.msg != "nothing changed" {
+		t.Errorf("unchanged edit: %q", m.msg)
+	}
+	// Editing it back to what the file has leaves nothing pending for it.
+	ctrlU := term.Key{Code: term.KeyCtrl, Rune: 'u'}
+	press(m, keys("e", kEnter, kEnter, ctrlU, "work", kEnter, kEnter, ctrlU, "big, small", kEnter, ctrlU, "Work", kEnter, kEnter, "n")...)
+	if o := m.ops(); m.mode != modeDetail || m.dirty() || !slices.Equal(m.chain, []string{"fm", "work:big", "lmstudio"}) {
+		t.Errorf("edited back to the file: mode %v ops %+v chain %v", m.mode, o, m.chain)
+	}
+	// Removing an edited route removes the file's entry by its old name.
+	press(m, keys("e", kEnter, kEnter, kEnter, kEnter, kEnter, "!", kEnter, kEnter)...)
+	if o := m.ops(); len(o.edits) != 1 || o.edits[0].route.Label != "Work!" {
+		t.Fatalf("label edit: %+v", o.edits)
+	}
+	press(m, keys("x", "y")...)
+	if o := m.ops(); len(o.edits) != 0 || !slices.Equal(o.removes, []string{"work"}) || slices.Contains(m.chain, "team:big") {
+		t.Errorf("remove after edit: %+v chain %v", o, m.chain)
+	}
+}
+
+// A local server renamed: its chain entry follows; a route added in this
+// session is edited in place in the pending adds; e explains itself where
+// there is nothing to edit.
+func TestManagerEditLocalAndNew(t *testing.T) {
+	m := testManager(t, "providers = [\"box\", \"fm\"]\n\n[[openai.local]]\nname = \"box\"\nbase_url = \"http://10.0.0.2:8080/v1\"\n", true)
+	m.cur = "box"
+	m.sync()
+	press(m, keys("e")...)
+	if m.form.step != stepName || m.form.val(stepName) != "box" {
+		t.Fatalf("local edit starts at the name: %v %q", m.form.step, m.form.val(stepName))
+	}
+	press(m, keys("2", kEnter, kEnter, kEnter, kEnter)...) // name box2, url, label, review: no chain question
+	if m.mode != modeList || !slices.Equal(m.chain, []string{"box2", "fm"}) || m.cur != "box2" {
+		t.Fatalf("mode %v chain %v cur %s msg %q", m.mode, m.chain, m.cur, m.msg)
+	}
+	out, err := m.ops().apply("providers = [\"box\", \"fm\"]\n\n[[openai.local]]\nname = \"box\"\nbase_url = \"http://10.0.0.2:8080/v1\"\n")
+	if err != nil || out != "providers = [\"box2\", \"fm\"]\n\n[[openai.local]]\nname = \"box2\"\nbase_url = \"http://10.0.0.2:8080/v1\"\n" {
+		t.Errorf("apply: %v\n%s", err, out)
+	}
+	// A route added this session: the add itself changes.
+	press(m, keys("a", kDown, kEnter, "lan", kEnter, "http://10.0.0.9/v1", kEnter, kEnter, kEnter, "y")...)
+	if len(m.ops().adds) != 1 || m.cur != "lan" {
+		t.Fatalf("add: %+v cur %s", m.ops().adds, m.cur)
+	}
+	press(m, keys("e", kEnter)...) // name kept
+	press(m, term.Key{Code: term.KeyCtrl, Rune: 'u'})
+	press(m, keys("http://10.0.0.10/v1", kEnter, kEnter, kEnter)...)
+	if o := m.ops(); len(o.adds) != 1 || o.adds[0].BaseURL != "http://10.0.0.10/v1" || len(o.edits) != 1 {
+		t.Errorf("edit of a new route: %+v", o)
+	}
+	// Nothing to edit: built in, or not a route.
+	for id, want := range map[string]string{"fm": "only routes you added", "ollama": "built in: to use another address"} {
+		m.cur = id
+		m.sync()
+		if id == "ollama" {
+			m.rows["ollama"].hasRoute, m.rows["ollama"].route = true, provider.Route{Local: true, Name: "ollama", Builtin: true}
+		}
+		press(m, keys("e")...)
+		if m.mode != modeList || !strings.Contains(m.msg, want) {
+			t.Errorf("%s: mode %v msg %q", id, m.mode, m.msg)
+		}
+	}
+	// Esc in an edit changes nothing.
+	m.cur = "box2"
+	m.sync()
+	press(m, keys("e")...)
+	press(m, kEsc)
+	if m.msg != "nothing changed" || len(m.ops().edits) != 1 {
+		t.Errorf("esc: %q %+v", m.msg, m.ops().edits)
 	}
 }

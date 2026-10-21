@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -123,6 +124,155 @@ func AppendBlock(src, block string) string {
 		src += "\n"
 	}
 	return src + block
+}
+
+// ReplaceBlock returns src with b's lines replaced by text (which should
+// end in "\n"; one is added if not). Everything around b is left as is.
+func ReplaceBlock(src string, b Block, text string) string {
+	lines := splitLines(src)
+	if b.Start < 0 || b.End > len(lines) || b.Start >= b.End {
+		return src
+	}
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return strings.Join(lines[:b.Start], "") + text + strings.Join(lines[b.End:], "")
+}
+
+// KeyEdit sets one key of a table to Value, a TOML value as text (e.g.
+// Quote(s) or `["a", "b"]`); an empty Value removes the key.
+type KeyEdit struct{ Key, Value string }
+
+// EditTableKeys returns block -- one [[name]] entry, as ArrayTableBlocks
+// finds it -- with edits made to the keys of its own table (not of its
+// sub-tables). A key's line is replaced where it is (a multi-line value's
+// lines with it; a comment after it on the line is kept) or removed; a
+// key that is not there is added after the table's last key ("name" right
+// after the header). Comments, blank lines, other keys and sub-tables are
+// left as they are.
+func EditTableKeys(block string, edits []KeyEdit) string {
+	lines := splitLines(block)
+	for _, e := range edits {
+		header, spans := tableKeys(lines)
+		if header < 0 {
+			return block
+		}
+		i := slices.IndexFunc(spans, func(s keySpan) bool { return s.key == e.Key })
+		switch {
+		case i >= 0 && e.Value == "":
+			lines = slices.Delete(lines, spans[i].start, spans[i].end)
+		case i >= 0:
+			sp := spans[i]
+			first := lines[sp.start]
+			indent := first[:len(first)-len(strings.TrimLeft(first, " \t"))]
+			line := indent + e.Key + " = " + e.Value
+			if sp.end == sp.start+1 {
+				line += trailingComment(first)
+			}
+			lines = slices.Replace(lines, sp.start, sp.end, line+"\n")
+		case e.Value != "":
+			at, indent := header+1, ""
+			if len(spans) > 0 {
+				first := lines[spans[0].start]
+				indent = first[:len(first)-len(strings.TrimLeft(first, " \t"))]
+				if e.Key != "name" {
+					at = spans[len(spans)-1].end
+				}
+			}
+			if at > 0 && !strings.HasSuffix(lines[at-1], "\n") {
+				lines[at-1] += "\n"
+			}
+			lines = slices.Insert(lines, at, indent+e.Key+" = "+e.Value+"\n")
+		}
+	}
+	return strings.Join(lines, "")
+}
+
+// keySpan is one key of a table: lines [start, end).
+type keySpan struct {
+	key        string
+	start, end int
+}
+
+// tableKeys finds the first table header in lines and the keys of that
+// table, up to the next header.
+func tableKeys(lines []string) (header int, spans []keySpan) {
+	hs := headerLines(lines)
+	if len(hs) == 0 {
+		return -1, nil
+	}
+	header = hs[0]
+	end := len(lines)
+	if len(hs) > 1 {
+		end = hs[1]
+	}
+	depth, inML := 0, ""
+	for i := header + 1; i < end; i++ {
+		l := lines[i]
+		switch {
+		case inML != "":
+			if strings.Count(l, inML)%2 == 1 {
+				inML = ""
+			}
+			spans[len(spans)-1].end = i + 1
+			continue
+		case depth > 0:
+			depth = scanDepth(l, depth)
+			spans[len(spans)-1].end = i + 1
+			continue
+		}
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		k, val, ok := strings.Cut(t, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		if len(k) >= 2 && (k[0] == '"' || k[0] == '\'') && k[len(k)-1] == k[0] {
+			k = k[1 : len(k)-1]
+		}
+		spans = append(spans, keySpan{key: k, start: i, end: i + 1})
+		for _, d := range []string{`"""`, `'''`} {
+			if strings.Count(val, d)%2 == 1 {
+				inML = d
+			}
+		}
+		if inML == "" {
+			depth = scanDepth(val, 0)
+		}
+	}
+	return header, spans
+}
+
+// trailingComment is the "# ..." at the end of a one-line assignment, with
+// the space before it ("" if none), found outside strings.
+func trailingComment(l string) string {
+	var quote rune
+	esc := false
+	for i, r := range l {
+		switch {
+		case quote != 0:
+			switch {
+			case esc:
+				esc = false
+			case r == '\\' && quote == '"':
+				esc = true
+			case r == quote:
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#':
+			j := i
+			for j > 0 && (l[j-1] == ' ' || l[j-1] == '\t') {
+				j--
+			}
+			return strings.TrimRight(l[j:], "\r\n")
+		}
+	}
+	return ""
 }
 
 func splitLines(src string) []string {

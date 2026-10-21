@@ -124,3 +124,61 @@ func TestAppendBlock(t *testing.T) {
 		t.Errorf("no trailing newline: %q", got)
 	}
 }
+
+func TestEditTableKeys(t *testing.T) {
+	bs := ArrayTableBlocks(tablesSrc, "openai.endpoint")
+	got := EditTableKeys(bs[0].Text, []KeyEdit{
+		{Key: "name", Value: Quote("router")},           // replaced in place
+		{Key: "models", Value: `["c/d", "e/f"]`},        // a multi-line array, replaced
+		{Key: "label", Value: Quote("Router")},          // added after the last key
+		{Key: "preset", Value: ""},                      // removed
+		{Key: "api_key_env", Value: ""},                 // not there: nothing to remove
+		{Key: "base_url", Value: Quote("https://x/v1")}, // added after label
+	})
+	want := `# my router
+[[openai.endpoint]]
+name = "router"
+models = ["c/d", "e/f"]
+label = "Router"
+base_url = "https://x/v1"
+
+[openai.endpoint.labels]
+"a/b" = "AB"
+`
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// A trailing comment stays; a key inside a sub-table is not the
+	// table's; name goes right after the header; a quoted key matches.
+	src := "[[openai.endpoint]]\n  # the gateway\n  \"preset\" = \"groq\"  # cheap\n  models = [\"m\"]\n[openai.endpoint.labels]\nlabel = \"x\"\n"
+	got = EditTableKeys(src, []KeyEdit{{Key: "preset", Value: Quote("openai")}, {Key: "name", Value: Quote("n")}, {Key: "label", Value: Quote("L")}})
+	want = "[[openai.endpoint]]\n  name = \"n\"\n  # the gateway\n  preset = \"openai\"  # cheap\n  models = [\"m\"]\n  label = \"L\"\n[openai.endpoint.labels]\nlabel = \"x\"\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+	// A multi-line string value is one key.
+	ml := "[[x]]\nnotes = \"\"\"\nname = \"no\"\n\"\"\"\nname = \"a\"\n"
+	if got := EditTableKeys(ml, []KeyEdit{{Key: "notes", Value: ""}, {Key: "name", Value: Quote("b")}}); got != "[[x]]\nname = \"b\"\n" {
+		t.Errorf("multi-line string: %q", got)
+	}
+	// No final newline.
+	if got := EditTableKeys("[[x]]\nname = \"a\"", []KeyEdit{{Key: "label", Value: Quote("L")}}); got != "[[x]]\nname = \"a\"\nlabel = \"L\"\n" {
+		t.Errorf("no final newline: %q", got)
+	}
+}
+
+func TestReplaceBlock(t *testing.T) {
+	bs := ArrayTableBlocks(tablesSrc, "openai.endpoint")
+	text := EditTableKeys(bs[1].Text, []KeyEdit{{Key: "name", Value: Quote("team")}})
+	out := ReplaceBlock(tablesSrc, bs[1], text)
+	if want := strings.Replace(tablesSrc, "name = \"work\"", "name = \"team\"", 1); out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+	var v map[string]any
+	if _, err := toml.Decode(out, &v); err != nil {
+		t.Errorf("does not parse: %v", err)
+	}
+	if got := ReplaceBlock("a = 1\n[[x]]\nk = 1", Block{Start: 1, End: 3}, "[[x]]\nk = 2"); got != "a = 1\n[[x]]\nk = 2\n" {
+		t.Errorf("no final newline: %q", got)
+	}
+}

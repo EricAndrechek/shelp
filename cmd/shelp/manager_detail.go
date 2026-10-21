@@ -51,6 +51,8 @@ func (m *manager) updateDetail(k term.Key) {
 			return
 		}
 		m.recheck([]string{m.cur})
+	case k.Is('e'):
+		m.askEdit()
 	case k.Is('x') || k.Code == term.KeyDelete:
 		m.askRemove()
 	case k.Is('s'):
@@ -393,7 +395,7 @@ func (m *manager) detailHints() []keyHint {
 		hs = append(hs, keyHint{"space to add", keepMid})
 	}
 	if r != nil && r.hasRoute && (r.route.Configured || r.isNew) {
-		hs = append(hs, keyHint{"x to remove", keepLow})
+		hs = append(hs, keyHint{"e to edit", keepLow}, keyHint{"x to remove", keepLow})
 	}
 	if r != nil {
 		hs = append(hs, keyHint{"r to check again", keepLow})
@@ -408,7 +410,8 @@ func (m *manager) detailHints() []keyHint {
 func detailKeyCells() []string {
 	return []string{
 		"← to go back", "↑↓ for other providers", "space to add or remove", "r to check again",
-		"enter to run its setup", "x to remove a route", "s to save", "pgup/pgdn to scroll",
+		"enter to run its setup", "e to edit a route", "x to remove a route", "s to save",
+		"pgup/pgdn to scroll",
 		"ctrl+c to quit now", "? to close",
 	}
 }

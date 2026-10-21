@@ -121,8 +121,8 @@ func wrapPhrases(prefix string, phrases []string, width int) []string {
 func listKeyCells() []string {
 	return []string{
 		"↑↓ to move", "→ for details", "space to add or remove", "shift+↑↓ to reorder",
-		"a to add a route", "x to remove a route", "r to check again", "s to save",
-		"q to quit", "ctrl+c to quit now", "? to close",
+		"a to add a route", "e to edit a route", "x to remove a route", "r to check again",
+		"s to save", "q to quit", "ctrl+c to quit now", "? to close",
 	}
 }
 
@@ -149,7 +149,7 @@ func (m *manager) listHints() []keyHint {
 		hs = append(hs, keyHint{"→ for details", keepMid})
 	}
 	if r != nil && r.hasRoute && (r.route.Configured || r.isNew) {
-		hs = append(hs, keyHint{"x to remove", keepLow})
+		hs = append(hs, keyHint{"e to edit", keepLow}, keyHint{"x to remove", keepLow})
 	}
 	switch {
 	case m.dirty():

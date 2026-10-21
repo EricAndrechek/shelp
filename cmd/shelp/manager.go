@@ -23,10 +23,10 @@ import (
 // how to make it work. Both stay on the one screen; only running the Apple
 // Shortcut's setup leaves it, and comes back to the details.
 //
-// Nothing is written until `s`: the chain, routes added with `a` and
-// routes removed with `x` are pending until then, and the provider list
-// already shows them (it is built from the file's text with the pending
-// route edits applied).
+// Nothing is written until `s`: the chain, routes added with `a`, edited
+// with `e` and removed with `x` are pending until then, and the provider
+// list already shows them (it is built from the file's text with the
+// pending route edits applied).
 
 // mgrRow is one provider as the manager shows it.
 type mgrRow struct {
@@ -98,6 +98,7 @@ type manager struct {
 	chainSet bool     // the file sets providers
 	adds     []provider.CustomRoute
 	removes  []string
+	edits    []routeEdit
 
 	cur  string // provider ID under the cursor
 	idx  int    // its index in items()
@@ -262,7 +263,7 @@ func (m *manager) dirty() bool { return !m.ops().empty() }
 
 // ops is what `s` writes.
 func (m *manager) ops() configOps {
-	o := configOps{adds: slices.Clone(m.adds), removes: slices.Clone(m.removes)}
+	o := configOps{adds: slices.Clone(m.adds), removes: slices.Clone(m.removes), edits: slices.Clone(m.edits)}
 	if !slices.Equal(m.chain, m.saved) {
 		o.chain = append([]string{}, m.chain...)
 	}
@@ -358,6 +359,8 @@ func (m *manager) Update(k term.Key) {
 	case k.Is('a'):
 		m.form = newAddForm(m.cfg, m.path)
 		m.back, m.mode = modeList, modeForm
+	case k.Is('e'):
+		m.askEdit()
 	case k.Is('x') || k.Code == term.KeyDelete:
 		m.askRemove()
 	case k.Is('s'):
@@ -451,17 +454,50 @@ func (m *manager) routeIDs(name string) []string {
 	return out
 }
 
-func (m *manager) askRemove() {
-	r := m.rows[m.cur]
+// editableRoute is the row under the cursor when e and x can act on its
+// route: one from the config file or added in this session. Otherwise it
+// is nil, and why says so.
+func (m *manager) editableRoute(verb string) (r *mgrRow, why string) {
+	r = m.rows[m.cur]
 	switch {
 	case r == nil:
-		m.say(true, "space takes %s out of the chain", m.cur)
-		return
+		return nil, fmt.Sprintf("shelp has no provider %s here; space takes it out of the chain", m.cur)
 	case r.hasRoute && r.route.Builtin && !r.route.Configured:
-		m.say(true, "%s is built in; to stop using it, leave it out of the chain (space)", r.route.Name)
-		return
+		if verb == "edit" {
+			return nil, fmt.Sprintf("%s is built in: to use another address, add a local server named %s (a in the list)", r.route.Name, r.route.Name)
+		}
+		return nil, fmt.Sprintf("%s is built in; to stop using it, leave it out of the chain (space)", r.route.Name)
 	case !r.hasRoute || (!r.route.Configured && !r.isNew):
-		m.say(true, "only routes you added (with a, or in the config file) can be removed; space takes %s out of the chain", r.ID)
+		return nil, fmt.Sprintf("only routes you added (with a, or in the config file) can be %s; space takes %s out of the chain", map[string]string{"edit": "edited", "remove": "removed"}[verb], r.ID)
+	}
+	return r, ""
+}
+
+// askEdit opens the form on the route under the cursor, filled in.
+func (m *manager) askEdit() {
+	r, why := m.editableRoute("edit")
+	if r == nil {
+		m.say(true, "%s", why)
+		return
+	}
+	cur, ok := m.configuredRoute(r.route)
+	if !ok {
+		m.say(true, "could not find %s's entry; `shelp config edit` opens the file", r.route.Name)
+		return
+	}
+	base, err := withoutRoute(m.ops().applyRoutes(m.src), cur)
+	if err != nil {
+		m.say(true, "%v", err)
+		return
+	}
+	m.form = newEditForm(base, m.path, cur)
+	m.back, m.mode = m.page(), modeForm
+}
+
+func (m *manager) askRemove() {
+	r, why := m.editableRoute("remove")
+	if r == nil {
+		m.say(true, "%s", why)
 		return
 	}
 	name := r.route.Name
@@ -484,6 +520,9 @@ func (m *manager) removeRoute(name string) {
 	before := m.routeIDs(name)
 	if i := slices.IndexFunc(m.adds, func(r provider.CustomRoute) bool { return r.Name == name }); i >= 0 {
 		m.adds = slices.Delete(m.adds, i, i+1)
+	} else if i := slices.IndexFunc(m.edits, func(e routeEdit) bool { return e.route.Name == name }); i >= 0 {
+		m.removes = append(m.removes, m.edits[i].name) // the name the file has
+		m.edits = slices.Delete(m.edits, i, i+1)
 	} else {
 		m.removes = append(m.removes, name)
 	}
@@ -524,6 +563,76 @@ func (m *manager) addRoute(r provider.CustomRoute, toChain bool) {
 	m.say(false, "added %s: %s (not saved yet: s saves)", r.Name, strings.Join(ids, ", "))
 }
 
+// editRoute changes route old into r (pending until saved): a route added
+// in this session is replaced, one from the file gets an in-place edit.
+// Chain entries follow the IDs that are renamed and leave with those that
+// go; with toChain, r's new IDs go at the end of the chain.
+func (m *manager) editRoute(old, r provider.CustomRoute, toChain bool) {
+	if sameRoute(old, r) {
+		m.say(false, "nothing changed")
+		return
+	}
+	adds, edits := slices.Clone(m.adds), slices.Clone(m.edits)
+	match := func(c provider.CustomRoute) bool { return c.Name == old.Name && c.Local == old.Local }
+	if i := slices.IndexFunc(m.adds, match); i >= 0 {
+		m.adds[i] = r
+	} else if i := slices.IndexFunc(m.edits, func(e routeEdit) bool { return match(e.route) }); i >= 0 {
+		m.edits[i].route = r
+		if f, ok := fileRoute(m.src, m.edits[i].name, r.Local); ok && sameRoute(f, r) {
+			m.edits = slices.Delete(m.edits, i, i+1) // back to what the file has
+		}
+	} else {
+		m.edits = append(m.edits, routeEdit{name: old.Name, local: old.Local, route: r})
+	}
+	if err := m.recompute(); err != nil {
+		m.adds, m.edits = adds, edits
+		m.say(true, "%v", err)
+		return
+	}
+	chain, renamed, dropped := chainAfterEdit(m.chain, old, r)
+	var added []string
+	if toChain {
+		for _, id := range r.IDs() {
+			if !slices.Contains(chain, id) {
+				chain = append(chain, id)
+				added = append(added, id)
+			}
+		}
+	}
+	m.chain = chain
+	if to, ok := routeIDChange(old, r, m.cur); ok {
+		if to == "" && len(r.IDs()) > 0 {
+			to = r.IDs()[0]
+		}
+		m.cur = to
+	}
+	m.sync()
+	msg := "updated " + old.Name
+	if r.Name != old.Name {
+		msg += " (now " + r.Name + ")"
+	}
+	if len(renamed) > 0 {
+		msg += "; in the chain: " + strings.Join(renamed, ", ")
+	}
+	if len(dropped) > 0 {
+		msg += "; out of the chain: " + strings.Join(dropped, ", ")
+	}
+	if len(added) > 0 {
+		msg += "; added to the chain: " + strings.Join(added, ", ")
+	}
+	m.say(len(dropped) > 0, "%s (not saved yet: s saves)", msg)
+}
+
+// fileRoute is the route named name in the config text src.
+func fileRoute(src, name string, local bool) (provider.CustomRoute, bool) {
+	for _, r := range provider.ConfiguredRoutes(mustParse(src)) {
+		if r.Name == name && r.Local == local {
+			return r, true
+		}
+	}
+	return provider.CustomRoute{}, false
+}
+
 // recompute rebuilds the provider list from the file text with the
 // pending route edits applied, and asks for probes of new rows.
 func (m *manager) recompute() error {
@@ -546,7 +655,7 @@ func (m *manager) markSaved(newSrc string, summary string) {
 	} else {
 		m.src = m.ops().applyRoutes(m.src)
 	}
-	m.adds, m.removes = nil, nil
+	m.adds, m.removes, m.edits = nil, nil, nil
 	m.saved = slices.Clone(m.chain)
 	m.chainSet = m.chainSet || len(m.chain) > 0
 	if cfg, err := config.Parse(m.src); err == nil {

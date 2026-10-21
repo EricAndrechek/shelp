@@ -50,7 +50,7 @@ var completionFlags = map[string][]string{
 	"init":        {"--bind", "--no-line-mode", "-h", "--help"},
 	"completion":  {"-h", "--help"},
 	"config":      {"-h", "--help"},
-	"config add":  {"--preset", "--base-url", "--key-env", "--model", "--label", "-h", "--help"},
+	"config add":  {"--preset", "--base-url", "--key-env", "--model", "--label", "--replace", "-h", "--help"},
 	"help":        {"-h", "--help"},
 	"version":     {"-h", "--help"},
 }

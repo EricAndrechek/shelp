@@ -15,6 +15,10 @@ import (
 // OpenAI-compatible endpoint (preset or custom base URL, name, the NAME of
 // the key's environment variable, models, label) or a local server (name,
 // base URL, label). It never asks for a key: only where one lives.
+//
+// `e` opens the same form on an existing route, filled in (newEditForm):
+// its kind stays, every answer can change, and the chain question comes
+// only when the edit adds provider IDs.
 
 type formStep int
 
@@ -45,6 +49,9 @@ type addForm struct {
 	toChain   bool
 	done      bool
 	cancelled bool
+
+	orig      *provider.CustomRoute // the route being edited; nil when adding
+	presetURL bool                  // editing a preset endpoint that sets its own base_url
 }
 
 func newAddForm(cfg *config.Config, path string) *addForm {
@@ -55,29 +62,84 @@ func newAddForm(cfg *config.Config, path string) *addForm {
 	return f
 }
 
+// newEditForm is the form on route r, every answer filled in from it.
+// cfg is the working config without r, so r's own name and IDs are free.
+func newEditForm(cfg *config.Config, path string, r provider.CustomRoute) *addForm {
+	f := newAddForm(cfg, path)
+	f.orig, f.local, f.preset = &r, r.Local, r.Preset
+	f.custom = !r.Local && r.Preset == ""
+	pb, pk, _ := provider.PresetDefaults(r.Preset)
+	f.presetURL = r.Preset != "" && r.BaseURL != "" && r.BaseURL != pb
+	fill := func(s formStep, v string) { f.inputs[s].set(v); f.inputs[s].edited = true }
+	fill(stepName, r.Name)
+	fill(stepURL, r.BaseURL)
+	fill(stepModels, strings.Join(r.Models, ", "))
+	fill(stepLabel, r.Label)
+	if r.Preset == "" || (r.KeyEnv != "" && r.KeyEnv != pk) {
+		fill(stepKeyEnv, r.KeyEnv) // else it follows the preset, as when adding
+	}
+	f.enter(f.steps()[0])
+	return f
+}
+
 func (m *manager) updateForm(k term.Key) {
 	f := m.form
 	f.update(k)
 	switch {
+	case f.cancelled && f.orig != nil:
+		m.mode, m.form = m.back, nil
+		m.say(false, "nothing changed")
 	case f.cancelled:
 		m.mode, m.form = m.back, nil
 		m.say(false, "nothing added")
+	case f.done && f.orig != nil:
+		m.mode, m.form = m.back, nil
+		m.editRoute(*f.orig, f.route, f.toChain)
 	case f.done:
 		m.mode, m.form = m.back, nil
 		m.addRoute(f.route, f.toChain)
 	}
 }
 
-// steps are the questions this form asks, given the answers so far.
+// steps are the questions this form asks, given the answers so far. An
+// edit keeps the route's kind and asks about the chain only for new IDs.
 func (f *addForm) steps() []formStep {
-	if f.local {
-		return []formStep{stepKind, stepName, stepURL, stepLabel, stepReview, stepChain}
+	var s []formStep
+	if f.orig == nil {
+		s = append(s, stepKind)
 	}
-	s := []formStep{stepKind, stepPreset}
-	if f.preset == "" {
-		s = append(s, stepURL)
+	switch {
+	case f.local:
+		s = append(s, stepName, stepURL, stepLabel, stepReview)
+	default:
+		s = append(s, stepPreset)
+		if f.preset == "" || f.presetURL {
+			s = append(s, stepURL)
+		}
+		s = append(s, stepName, stepKeyEnv, stepModels, stepLabel, stepReview)
 	}
-	return append(s, stepName, stepKeyEnv, stepModels, stepLabel, stepReview, stepChain)
+	if f.orig == nil || len(f.newIDs()) > 0 {
+		s = append(s, stepChain)
+	}
+	return s
+}
+
+// newIDs are the provider IDs the route gets that it did not have.
+func (f *addForm) newIDs() []string {
+	r := f.build()
+	if f.orig == nil {
+		return r.IDs()
+	}
+	if r.Local {
+		return nil
+	}
+	var out []string
+	for _, m := range r.Models {
+		if !slices.ContainsFunc(f.orig.Models, func(o string) bool { return strings.EqualFold(o, m) }) {
+			out = append(out, strings.ToLower(r.Name+":"+m))
+		}
+	}
+	return out
 }
 
 func (f *addForm) val(s formStep) string { return f.inputs[s].value() }
@@ -205,8 +267,11 @@ func (f *addForm) next() {
 		f.route = f.build()
 	}
 	steps := f.steps()
-	if i := slices.Index(steps, f.step); i >= 0 && i+1 < len(steps) {
+	switch i := slices.Index(steps, f.step); {
+	case i >= 0 && i+1 < len(steps):
 		f.enter(steps[i+1])
+	case f.step == stepReview: // an edit that adds no IDs: no chain question
+		f.done = true
 	}
 }
 
@@ -261,7 +326,7 @@ func (f *addForm) build() provider.CustomRoute {
 		return r
 	}
 	r.Preset = f.preset
-	if f.preset == "" {
+	if f.preset == "" || f.presetURL {
 		r.BaseURL = f.val(stepURL)
 	}
 	r.KeyEnv = f.val(stepKeyEnv)
@@ -274,9 +339,14 @@ func (f *addForm) build() provider.CustomRoute {
 func (f *addForm) view(p style.Palette, width int) []string {
 	steps := f.steps()
 	n := slices.Index(steps, f.step) + 1
+	title, intro := "add a route", "It goes in "+tildePath(f.path)+" when you save (s). shelp never asks for a key: only the name of the variable that holds it."
+	if f.orig != nil {
+		title = "edit " + f.orig.Name
+		intro = "The change goes in " + tildePath(f.path) + " when you save (s), in place: the entry's comments and other keys stay."
+	}
 	out := []string{
-		p.Bold(p.Accent("shelp providers")) + p.Dim(" › ") + p.Bold("add a route") + p.Dim(fmt.Sprintf("   step %d of %d", n, len(steps))),
-		p.Dim("It goes in " + tildePath(f.path) + " when you save (s) in the list. shelp never asks for a key: only the name of the variable that holds it."),
+		p.Bold(p.Accent("shelp providers")) + p.Dim(" › ") + p.Bold(title) + p.Dim(fmt.Sprintf("   step %d of %d", n, len(steps))),
+		p.Dim(intro),
 		"",
 	}
 	for _, l := range f.summary(p) {
@@ -302,6 +372,10 @@ func (f *addForm) view(p style.Palette, width int) []string {
 			out = append(out, mark+name+"  "+p.Dim(o[1]))
 		}
 	case stepReview:
+		if f.orig != nil {
+			out = append(out, f.editReview(p)...)
+			break
+		}
 		r := f.build()
 		for _, l := range strings.Split(strings.TrimSuffix(r.Block(), "\n"), "\n") {
 			out = append(out, "    "+p.Dim(l))
@@ -330,8 +404,45 @@ func (f *addForm) view(p style.Palette, width int) []string {
 		keys = []keyHint{{"y for yes", keepAlways}, {"n for no", keepAlways}, {"esc to cancel", keepAlways}}
 	case stepReview:
 		keys[0].text = "enter to add it"
+		if f.orig != nil {
+			keys[0].text = "enter to make the change"
+		}
 	}
 	return append(out, "", p.Dim(fitHints(keys, width)))
+}
+
+// editReview lists what an edit changes: the keys it rewrites in the
+// entry, then what happens to the provider IDs.
+func (f *addForm) editReview(p style.Palette) []string {
+	r := f.build()
+	edits := routeKeyEdits(*f.orig, r)
+	if len(edits) == 0 {
+		return []string{"    " + p.Dim("nothing changed")}
+	}
+	var out []string
+	for _, e := range edits {
+		if e.Value == "" {
+			out = append(out, "    "+p.Dim(e.Key+": removed"))
+		} else {
+			out = append(out, "    "+p.Dim(e.Key+" = "+e.Value))
+		}
+	}
+	var ids []string
+	for _, id := range f.orig.IDs() {
+		switch to, _ := routeIDChange(*f.orig, r, id); {
+		case to == "":
+			ids = append(ids, id+" goes")
+		case to != id:
+			ids = append(ids, id+" → "+to)
+		}
+	}
+	for _, id := range f.newIDs() {
+		ids = append(ids, id+" (new)")
+	}
+	if len(ids) > 0 {
+		out = append(out, "", "  "+strings.Join(ids, ", "))
+	}
+	return out
 }
 
 func routeKind(r provider.CustomRoute) provider.Kind {
@@ -400,8 +511,14 @@ func (f *addForm) question() (q, hint string) {
 	case stepLabel:
 		return "Label (optional)", "how it reads in lists, e.g. \"Haiku via OpenRouter\"; enter skips it"
 	case stepReview:
+		if f.orig != nil {
+			return "Make this change?", "chain entries follow renamed IDs and leave with ones that go; s saves it all"
+		}
 		return "Add this route?", "it goes in your config file when you save in the list (s)"
 	case stepChain:
+		if f.orig != nil {
+			return fmt.Sprintf("Put the new %s at the end of your chain? y/n", strings.Join(f.newIDs(), ", ")), ""
+		}
 		return fmt.Sprintf("Put %s at the end of your chain? y/n", strings.Join(f.build().IDs(), ", ")), ""
 	}
 	return "", ""
