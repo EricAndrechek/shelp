@@ -150,6 +150,11 @@ func TestCommandsExist_TruePositivesStillWork(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.want, func(t *testing.T) {
+			// These are real names models invent on macOS; Linux has
+			// some of them (ip, from iproute2).
+			if _, err := exec.LookPath(c.want); err == nil {
+				t.Skipf("%s is installed here", c.want)
+			}
 			ok, missing := CommandsExist(ctx, c.shell, c.cmd)
 			if ok == nil || *ok {
 				t.Fatalf("CommandsExist(%q, %q) = %v %v, want false (missing %q)", c.shell, c.cmd, ok, missing, c.want)
