@@ -1233,6 +1233,20 @@ def pid_alive(pid):
     return True
 
 
+def pid_gone_by(s, pid, deadline):
+    """Poll until pid exits or deadline (a time.time() value) passes,
+    reading the session meanwhile. INT, TERM, then KILL can outlast a fixed
+    short wait on a slow CI machine. Callers set the deadline before the Ctrl-C
+    stub would finish on its own, so a stub that was never killed still fails."""
+    while pid is not None:
+        if not pid_alive(pid):
+            return True
+        if time.time() >= deadline:
+            return False
+        s.read_for(0.1)
+    return False
+
+
 def zsh_anim_checks(s, results, label, scratch):
     """The animated in-progress status: shelp runs in the background while
     the frame spins; afterwards the line holds the suggestion and the
@@ -1381,7 +1395,7 @@ def zsh_anim_checks(s, results, label, scratch):
     seen += s.buf
     note_pid()
     pid = pids[-1] if pids else None
-    gone = pid is not None and not pid_alive(pid)
+    gone = pid_gone_by(s, pid, t0 + CTRLC_STUB_SLEEP - 0.3)
     results.check(f"{label}: Ctrl-C shows the cursor again", CURSOR_SHOW in after_enter,
                   after_enter[-200:])
     results.check(f"{label}: Ctrl-C kills the background shelp", started and early and gone,
@@ -1779,7 +1793,7 @@ def bash_widget_checks(s, results, scratch):
     except (OSError, ValueError):
         pid = None
     results.check("bash: Ctrl-C in shelp-widget stops shelp",
-                  started and early and pid is not None and not pid_alive(pid),
+                  started and early and pid_gone_by(s, pid, t0 + CTRLC_STUB_SLEEP - 0.3),
                   f"started={started} early={early} pid={pid} buf={after[-300:]!r}")
     rows = s.screen()
     if rows is None:
