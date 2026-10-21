@@ -30,14 +30,24 @@ $ lsof -nP -iTCP:8080 -sTCP:LISTEN
 wrapping; command names link to their man pages. Piped, you get the raw
 text.)
 
-Status: early, local-only (no remote for this repo yet).
+Status: early (0.x) and macOS-first; flags and config may still change.
+On Linux, the OpenAI-compatible providers (hosted or local servers), the
+`claude` CLI provider, and the bash/zsh/fish shell hooks all work. The
+Apple-specific providers need a Mac: `fm` (Apple's on-device model) needs
+macOS 27, and the Shortcuts-based ones (Apple Intelligence Pro, ChatGPT)
+need the Shortcuts app.
 
 ## Install
 
 ```sh
-# Homebrew (local tap while the repo has no public remote)
-brew tap ericandrechek/shelp ~/Code/public-projects/shelp
-brew install ericandrechek/shelp/shelp
+# Homebrew (macOS and Linux)
+brew install ericandrechek/tap/shelp
+
+# or with Go (1.27 or newer)
+go install github.com/ericandrechek/shelp/cmd/shelp@latest
+
+# or download a binary (macOS/Linux, arm64/amd64, with shell completions)
+# from https://github.com/EricAndrechek/shelp/releases
 
 # or from a checkout
 make install                 # -> ~/.local/bin/shelp
@@ -406,6 +416,12 @@ same provider to help stay under a rate limit in the first place. See
 [bench/README.md](bench/README.md) for details and the `run.json`/
 `results.jsonl` schema.
 
+> **Outdated numbers.** The table below is from a run on 2026-09-30 with
+> the older `v2` prompt template (the default is now `v4`). Apple
+> Intelligence Pro was rate-limited for most of that run (72% unavailable),
+> so its row covers few trials. A fresh run is planned.
+> <!-- TODO: link the benchmark issue -->
+
 <!-- bench:start -->
 | Provider | Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -424,7 +440,7 @@ with many targeting macOS/BSD vs Linux/GNU traps (`sed -i ''`, `date -v` vs
 `-d`, `ps --sort`, `du -d`) and zsh/bash/fish differences. Each case runs in
 every shell/OS combination it lists (112 trials per provider and template).
 Every distinct answer was graded 0/1/2 against the case's rubric by Claude
-(Opus 5.5), with suspicious claims checked by actually running them on this
+(Opus 5.5), with suspicious claims checked by actually running them on a
 Mac (e.g. `sips -s format jpg` fails, `mv File file` works on APFS);
 identical answers share one grade, and answers matching a case's reference
 list are graded 2 automatically. "Mean score" is the average grade as a
