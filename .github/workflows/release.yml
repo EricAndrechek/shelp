@@ -1,0 +1,107 @@
+name: Release
+
+# A pushed v* tag builds the binaries and publishes the GitHub release; the
+# tag's message becomes the release notes. workflow_dispatch is a dry run:
+# it builds and uploads workflow artifacts and publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "${REF_TYPE}" = tag ]; then
+            # checkout can leave an annotated tag as a bare ref; refetch the
+            # real tag object so its type (and message) are visible.
+            git fetch --force origin "refs/tags/${REF_NAME}:refs/tags/${REF_NAME}"
+            if [ "$(git cat-file -t "refs/tags/${REF_NAME}")" != tag ]; then
+              echo "::error::${REF_NAME} is not an annotated tag; recreate it with 'git tag -s ${REF_NAME}'"
+              exit 1
+            fi
+            VERSION="${REF_NAME#v}"
+          else
+            VERSION="0.0.0-dryrun.$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Vet, test, build
+        run: make vet test build
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist/completions
+          for sh in bash zsh fish; do
+            ./bin/shelp completion "${sh}" > "dist/completions/shelp.${sh}"
+          done
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            name="shelp_${VERSION}_${os}_${arch}"
+            stage="dist/${name}"
+            mkdir -p "${stage}/completions"
+            CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "${stage}/shelp" ./cmd/shelp
+            cp LICENSE README.md "${stage}/"
+            cp dist/completions/shelp.* "${stage}/completions/"
+            tar -C "${stage}" -czf "dist/${name}.tar.gz" shelp LICENSE README.md completions
+            rm -rf "${stage}"
+          done
+          rm -rf dist/completions
+          (cd dist && sha256sum -- *.tar.gz > checksums.txt)
+          ls -l dist
+          cat dist/checksums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+      - name: Publish the release
+        run: |
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          if [ "$(git cat-file -t "refs/tags/${TAG}")" != tag ]; then
+            echo "::error::${TAG} is not an annotated tag"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          gh release create "${TAG}" --verify-tag --notes-from-tag \
+            --title "shelp ${VERSION}" dist/*.tar.gz dist/checksums.txt
