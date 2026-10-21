@@ -25,6 +25,16 @@ func commandFor(args []string) string {
 		return "help"
 	}
 	rest := args[1:]
+	// A flag right after help, version, config or history is that command's:
+	// a mistyped one gets the command's own flag error, never a model call.
+	// (`shelp suggest config -i` and `shelp -- config -i` are the ways to
+	// ask the model.)
+	switch args[0] {
+	case "help", "version", "config", "history":
+		if len(rest) > 0 && isFlagWord(rest[0]) {
+			return args[0]
+		}
+	}
 	switch args[0] {
 	case "-h", "--help":
 		return "help"
@@ -72,6 +82,10 @@ func commandFor(args []string) string {
 	return ""
 }
 
+// isFlagWord reports whether s looks like a flag: "-x", "--x", not "-" and
+// not "--" (which ends flags).
+func isFlagWord(s string) bool { return len(s) > 1 && s[0] == '-' && s != "--" }
+
 func isHelpFlag(s string) bool { return s == "-h" || s == "--help" }
 
 // isHelpTopic reports whether `shelp help <s>` shows a command's help.
@@ -84,7 +98,11 @@ func isHelpTopic(s string) bool {
 // command's name included (help and version need to know which spelling
 // was used).
 var commands = map[string]func(ctx context.Context, args []string, stdout, stderr io.Writer) error{
-	"help": func(_ context.Context, args []string, stdout, _ io.Writer) error {
+	"help": func(_ context.Context, args []string, stdout, stderr io.Writer) error {
+		if len(args) > 1 && isFlagWord(args[1]) && !isHelpFlag(args[1]) {
+			printHelp(stderr, "help")
+			return usageError{fmt.Errorf("unknown flag %q", args[1])}
+		}
 		topic := ""
 		if len(args) == 2 && args[0] == "help" {
 			topic = args[1]
@@ -95,10 +113,14 @@ var commands = map[string]func(ctx context.Context, args []string, stdout, stder
 		printHelp(stdout, topic)
 		return nil
 	},
-	"version": func(_ context.Context, args []string, stdout, _ io.Writer) error {
-		if len(args) > 1 { // version -h
-			printHelp(stdout, "version")
-			return nil
+	"version": func(_ context.Context, args []string, stdout, stderr io.Writer) error {
+		if len(args) > 1 { // version -h, or a flag it doesn't have
+			if isHelpFlag(args[1]) {
+				printHelp(stdout, "version")
+				return nil
+			}
+			printHelp(stderr, "version")
+			return usageError{fmt.Errorf("unknown flag %q", args[1])}
 		}
 		printVersion(stdout)
 		return nil

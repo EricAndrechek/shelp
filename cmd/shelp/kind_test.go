@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ var kindCases = []struct {
 	{[]string{"version", "of", "node"}, "task"},
 	{[]string{"version", "of", "node", "installed"}, "task"},
 	{[]string{"--version", "x"}, "task"},
-	{[]string{"version", "-h", "x"}, "task"},
+	{[]string{"version", "-h", "x"}, "command"}, // a flag first is version's own
 
 	{[]string{"config"}, "command"},
 	{[]string{"config", "chain"}, "command"},
@@ -49,6 +50,19 @@ var kindCases = []struct {
 	{[]string{"config", "-h"}, "command"},
 	{[]string{"config", "--help"}, "command"},
 	{[]string{"config", "of", "nginx"}, "task"},
+	{[]string{"config", "-i"}, "command"},
+	{[]string{"config", "--interactive"}, "command"},
+	{[]string{"config", "--bogus"}, "command"},
+	{[]string{"config", "-x", "nginx"}, "command"},
+	{[]string{"version", "-x"}, "command"},
+	{[]string{"version", "--bogus", "of", "node"}, "command"},
+	{[]string{"help", "-x"}, "command"},
+	{[]string{"help", "--bogus", "me"}, "command"},
+	{[]string{"config", "-"}, "task"},
+	{[]string{"config", "--"}, "task"},
+	// suggest and -- are the ways to ask the model
+	{[]string{"--", "config", "-i"}, "task"},
+	{[]string{"suggest", "config", "-i"}, "command"}, // suggest's, a task for the model
 	{[]string{"config", "files", "for", "nginx"}, "task"},
 	{[]string{"config", "add"}, "command"}, // run's usage error
 	{[]string{"config", "add", "-h"}, "command"},
@@ -73,7 +87,8 @@ var kindCases = []struct {
 	{[]string{"history", "clear", "--yes"}, "command"},
 	{[]string{"history", "path"}, "command"},
 	{[]string{"history", "of", "git", "commits", "for", "main.go"}, "task"},
-	{[]string{"history", "-n", "5", "of", "git"}, "task"},
+	{[]string{"history", "-n", "5", "of", "git"}, "command"}, // flag first: history's own error
+	{[]string{"history", "--nope"}, "command"},
 	{[]string{"history", "git"}, "task"},
 	{[]string{"History"}, "task"},
 
@@ -200,6 +215,32 @@ func TestRunAgreesWithKind(t *testing.T) {
 	for name := range realCommands {
 		if !reached[name] {
 			t.Errorf("command %q: no case in kindCases reaches it; add one", name)
+		}
+	}
+}
+
+// A flag right after help/version/config/history is that command's: a
+// mistyped one is a usage error (exit 2) with the command's help on
+// stderr, never a model call (runTask is replaced by one that fails).
+func TestCommandFlagErrors(t *testing.T) {
+	realTask := runTask
+	t.Cleanup(func() { runTask = realTask })
+	runTask = func(context.Context, []string, io.Writer, io.Writer) error {
+		t.Error("a task reached the model")
+		return nil
+	}
+	t.Setenv("SHELP_HISTORY", "0")
+	for _, args := range [][]string{
+		{"config", "--bogus"}, {"config", "-x", "nginx"}, {"version", "-x"},
+		{"help", "-x"}, {"history", "--nope"},
+	} {
+		_, errOut, err := runOut(t, args...)
+		var ue usageError
+		if !errors.As(err, &ue) {
+			t.Errorf("%q: err = %v, want a usage error", args, err)
+		}
+		if !strings.Contains(errOut, "shelp "+args[0]) {
+			t.Errorf("%q: stderr lacks the command's help: %q", args, errOut)
 		}
 	}
 }
