@@ -117,7 +117,10 @@ func managerLoop(ctx context.Context, m *manager, scr screen, stdout, stderr io.
 	defer cancel()
 	cds := cooldown.Load()
 	results := make(chan providerRow)
-	probe := func(ids []string) {
+	probe := func(ids []string, fresh bool) {
+		if fresh { // r: forget what the process memoized (the Shortcuts list)
+			provider.ResetDetectCache()
+		}
 		// Fresh instances: some providers memoize Detect per instance.
 		m.rebuildProviders()
 		probeFn := probeProviders
@@ -135,7 +138,8 @@ func managerLoop(ctx context.Context, m *manager, scr screen, stdout, stderr io.
 			}()
 		}
 	}
-	// suspend leaves the screen for line output, then waits for a key.
+	// suspend leaves the screen for line output (a save to a file managed
+	// elsewhere), then waits for a key.
 	suspend := func(f func(pr *prompter) error) error {
 		scr.Stop()
 		pr := newPrompter(ctx, stdin, stdout)
@@ -161,18 +165,23 @@ func managerLoop(ctx context.Context, m *manager, scr screen, stdout, stderr io.
 		for _, e := range m.takeEffects() {
 			switch e.kind {
 			case "probe":
-				probe(e.ids)
-			case "fix":
-				var again []string
-				if err := suspend(func(pr *prompter) error {
-					var err error
-					again, err = runFix(ctx, m, e.ids[0], pr, stdout, stderr)
-					return err
-				}); err != nil {
+				probe(e.ids, e.fresh)
+			case "setup":
+				// The one thing that leaves the screen: Shortcuts opens and
+				// waits for the user's click. Then straight back to the
+				// details, which check the shortcut again.
+				scr.Stop()
+				pal := style.For(stdout)
+				fmt.Fprintln(stdout, pal.Bold("Setting up the Apple Shortcut for "+e.ids[0])+pal.Dim(" · shelp providers comes back when it is done"))
+				serr := runShortcutsStep(ctx, m.cfg, stdout, stderr)
+				provider.ResetDetectCache()
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if err := scr.Start(); err != nil {
 					return err
 				}
-				m.markChecking(again)
-				probe(again)
+				probe(m.setupDone(serr), false)
 			case "save":
 				if err := saveFromManager(ctx, m, suspend, stdout, stderr); err != nil {
 					return err
@@ -256,64 +265,22 @@ func (m *manager) rebuildProviders() {
 	}
 }
 
-// markChecking shows ids as being checked again.
-func (m *manager) markChecking(ids []string) {
-	for _, id := range ids {
-		if r := m.rows[id]; r != nil {
-			r.probed = false
-		}
-	}
-	m.sync()
-}
-
-// runFix is Enter on a provider that does not work here: it says why and
-// what to do, using the provider's own Fix text, and for the Apple
-// Shortcut offers to run its setup. It returns the IDs to check again.
-func runFix(ctx context.Context, m *manager, id string, pr *prompter, stdout, stderr io.Writer) ([]string, error) {
-	r := m.rows[id]
-	if r == nil {
-		return nil, nil
-	}
-	pal := style.For(stdout)
-	fmt.Fprintln(stdout, pal.Bold(pal.Accent(id))+"  "+rowLabel(r.providerRow))
-	for _, l := range fixLines(pal, r) {
-		fmt.Fprintln(stdout, l)
-	}
-	if provider.Kind(r.Kind) == provider.AppleCloud && strings.Contains(r.Fix, "shelp setup shortcuts") {
-		fmt.Fprintln(stdout)
-		if !pr.yesNo("Set up the Apple Shortcut now? Shortcuts opens and you click Add Shortcut.", true) {
-			return []string{id}, pr.err()
-		}
-		err := runShortcutsStep(ctx, m.cfg, stdout, stderr)
-		provider.ResetDetectCache()
-		var again []string
-		for _, oid := range m.order {
-			if m.rows[oid].Kind == string(provider.AppleCloud) {
-				again = append(again, oid)
-			}
-		}
-		return again, err
-	}
-	return []string{id}, nil
-}
-
-// fixLines explains how to make row r work. It reuses the provider's Fix
-// where it has one and adds what only the manager knows: how to start a
-// local server, where a key variable goes.
+// fixLines explains how to make row r work, for the detail page's "To
+// make it work". It reuses the provider's Fix where it has one and adds
+// what only the manager knows: how to start a local server, where a key
+// variable goes, the exact command to run.
 func fixLines(p style.Palette, r *mgrRow) []string {
-	reason := r.Reason
-	if reason == "" {
-		reason = "unavailable"
-	}
-	out := []string{"  " + p.Warn(reason), ""}
+	var out []string
 	add := func(s ...string) { out = append(out, s...) }
 	switch provider.Kind(r.Kind) {
 	case provider.OnDevice:
-		if r.Fix != "" {
+		switch cmd := backticked(r.Fix); {
+		case strings.HasPrefix(cmd, "sudo "):
+			add("  Accept Apple's terms for the on-device model, once per Mac. In a terminal, run:",
+				"      "+p.Bold(cmd),
+				p.Dim("  shelp never runs sudo for you."))
+		case r.Fix != "":
 			add("  To use Apple's on-device model: " + r.Fix + ".")
-		}
-		if strings.Contains(r.Fix, "sudo") {
-			add(p.Dim("  shelp never runs sudo for you: run it in a terminal and accept Apple's terms (once per Mac)."))
 		}
 		if strings.Contains(r.Fix, "Apple Intelligence") {
 			add(p.Dim("  System Settings › Apple Intelligence & Siri; the model downloads in the background after that."))
@@ -337,18 +304,32 @@ func fixLines(p style.Palette, r *mgrRow) []string {
 		} else if r.Fix != "" {
 			add("  " + r.Fix)
 		}
+	case provider.AppleCloud:
+		if r.Fix != "" {
+			add("  " + strings.ToUpper(r.Fix[:1]) + r.Fix[1:] + ".")
+		}
 	default:
 		if r.Fix != "" {
 			add("  " + r.Fix)
 		}
 	}
-	if r.Fix != "" && provider.Kind(r.Kind) == provider.AppleCloud {
-		add("  " + strings.ToUpper(r.Fix[:1]) + r.Fix[1:] + ".")
-	}
 	if r.Detail != "" {
 		add("", p.Dim("  ("+r.Detail+")"))
 	}
 	return out
+}
+
+// backticked is the first `command` in s ("" if none).
+func backticked(s string) string {
+	_, rest, ok := strings.Cut(s, "`")
+	if !ok {
+		return ""
+	}
+	cmd, _, ok := strings.Cut(rest, "`")
+	if !ok {
+		return ""
+	}
+	return cmd
 }
 
 // localStartHint says how to start a local server shelp looks for.

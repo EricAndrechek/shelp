@@ -16,7 +16,12 @@ import (
 // terminal. This file is its terminal-free half -- state, Update(key) and
 // View(width, height) -- so tests drive it with key sequences; the runner
 // (manager_run.go) owns the terminal, probes providers in the background
-// and carries out the effects Update asks for (probe, fix, save).
+// and carries out the effects Update asks for (probe, setup, save).
+//
+// Two pages: the list, and a provider's details (→ or enter on a row;
+// manager_detail.go), which says where it runs, its status, its route and
+// how to make it work. Both stay on the one screen; only running the Apple
+// Shortcut's setup leaves it, and comes back to the details.
 //
 // Nothing is written until `s`: the chain, routes added with `a` and
 // routes removed with `x` are pending until then, and the provider list
@@ -40,6 +45,14 @@ const (
 	clsChecking
 )
 
+// classOr is r's class, clsUnavailable for nil (an ID shelp does not know).
+func (r *mgrRow) classOr() int {
+	if r == nil {
+		return clsUnavailable
+	}
+	return r.class()
+}
+
 func (r *mgrRow) class() int {
 	switch {
 	case !r.probed:
@@ -56,14 +69,16 @@ type mgrMode int
 
 const (
 	modeList mgrMode = iota
+	modeDetail
 	modeConfirm
 	modeForm
 )
 
 // mgrEffect is work Update hands the runner.
 type mgrEffect struct {
-	kind string   // "probe" (re-list, then Detect ids), "fix" (ids[0]), "save"
-	ids  []string // probe/fix
+	kind  string   // "probe" (re-list, then Detect ids), "setup" (the Apple Shortcut, for ids[0]), "save"
+	ids   []string // probe/setup
+	fresh bool     // probe: forget memoized checks first (r)
 }
 
 type manager struct {
@@ -87,9 +102,11 @@ type manager struct {
 	cur  string // provider ID under the cursor
 	idx  int    // its index in items()
 	top  int    // first body line shown, when the body is cropped
+	dtop int    // the same for the detail page
 	help bool
 
 	mode      mgrMode
+	back      mgrMode // the page a question or the form goes back to
 	question  string
 	onYes     func()
 	saveFirst bool // the question is "discard changes?": s saves, then quits
@@ -215,7 +232,7 @@ func (m *manager) items() []string {
 }
 
 // sync puts the cursor back on m.cur after the list changed, or keeps its
-// position when m.cur is gone.
+// position when m.cur is gone (and leaves its detail page for the list).
 func (m *manager) sync() {
 	items := m.items()
 	if i := slices.Index(items, m.cur); i >= 0 {
@@ -223,6 +240,12 @@ func (m *manager) sync() {
 		return
 	}
 	m.moveTo(m.idx)
+	if m.mode == modeDetail {
+		m.mode = modeList
+	}
+	if (m.mode == modeConfirm || m.mode == modeForm) && m.back == modeDetail {
+		m.back = modeList
+	}
 }
 
 func (m *manager) moveTo(i int) {
@@ -251,7 +274,45 @@ func (m *manager) say(warn bool, format string, args ...any) {
 }
 
 func (m *manager) ask(q string, yes func()) {
+	m.back = m.page()
 	m.mode, m.question, m.onYes, m.saveFirst = modeConfirm, q, yes, false
+}
+
+// page is the page on screen: the list or the details (under a question
+// or the form, the one it goes back to).
+func (m *manager) page() mgrMode {
+	if m.mode == modeConfirm || m.mode == modeForm {
+		return m.back
+	}
+	return m.mode
+}
+
+// openDetail shows the details of the provider under the cursor.
+func (m *manager) openDetail() {
+	if m.cur == "" {
+		return
+	}
+	m.mode, m.dtop = modeDetail, 0
+}
+
+// save asks the runner to write the pending changes.
+func (m *manager) save() {
+	if !m.dirty() {
+		m.say(false, "nothing to save")
+		return
+	}
+	m.effects = append(m.effects, mgrEffect{kind: "save"})
+}
+
+// recheck probes ids again, forgetting memoized checks.
+func (m *manager) recheck(ids []string) {
+	for _, id := range ids {
+		if r := m.rows[id]; r != nil {
+			r.probed = false
+		}
+	}
+	m.effects = append(m.effects, mgrEffect{kind: "probe", ids: slices.Clone(ids), fresh: true})
+	m.sync()
 }
 
 // Update handles one key.
@@ -267,6 +328,9 @@ func (m *manager) Update(k term.Key) {
 		return
 	case modeForm:
 		m.updateForm(k)
+		return
+	case modeDetail:
+		m.updateDetail(k)
 		return
 	}
 	page := max(1, m.height-8)
@@ -289,25 +353,17 @@ func (m *manager) Update(k term.Key) {
 		m.moveTo(m.idx + page)
 	case k.Is(' '):
 		m.toggle()
-	case k.Code == term.KeyEnter:
-		m.enter()
+	case k.Code == term.KeyRight || k.Code == term.KeyEnter || k.Is('l'):
+		m.openDetail()
 	case k.Is('a'):
 		m.form = newAddForm(m.cfg, m.path)
-		m.mode = modeForm
+		m.back, m.mode = modeList, modeForm
 	case k.Is('x') || k.Code == term.KeyDelete:
 		m.askRemove()
 	case k.Is('s'):
-		if !m.dirty() {
-			m.say(false, "nothing to save")
-			return
-		}
-		m.effects = append(m.effects, mgrEffect{kind: "save"})
+		m.save()
 	case k.Is('r'):
-		for _, r := range m.rows {
-			r.probed = false
-		}
-		m.effects = append(m.effects, mgrEffect{kind: "probe", ids: slices.Clone(m.order)})
-		m.sync()
+		m.recheck(m.order)
 	case k.Is('?'):
 		m.help = !m.help
 	case k.Code == term.KeyEsc && m.help: // Esc closes the key grid first
@@ -325,14 +381,14 @@ func (m *manager) Update(k term.Key) {
 func (m *manager) updateConfirm(k term.Key) {
 	switch {
 	case k.Is('y') || k.Is('Y'):
-		m.mode = modeList
+		m.mode = m.back
 		m.onYes()
 	case m.saveFirst && k.Is('s'):
-		m.mode = modeList
+		m.mode = m.back
 		m.quitAfterSave = true
 		m.effects = append(m.effects, mgrEffect{kind: "save"})
 	case k.Is('n') || k.Is('N') || k.Code == term.KeyEsc || k.Is('q') || k.Code == term.KeyEnter:
-		m.mode = modeList
+		m.mode = m.back
 	}
 }
 
@@ -358,8 +414,12 @@ func (m *manager) toggle() {
 	m.sync()
 	r := m.rows[id]
 	switch {
+	case r != nil && r.class() != clsOK && r.class() != clsChecking && m.mode == modeDetail:
+		m.say(true, "added %s as #%d, but it does not work here yet: see below", id, len(m.chain))
 	case r != nil && r.class() != clsOK && r.class() != clsChecking:
-		m.say(true, "added %s, but it does not work here yet: enter shows how to set it up", id)
+		m.say(true, "added %s, but it does not work here yet: → shows how to set it up", id)
+	case m.mode == modeDetail:
+		m.say(false, "added %s to the chain as #%d", id, len(m.chain))
 	default:
 		m.say(false, "added %s as #%d; shift+↑ moves it up", id, len(m.chain))
 	}
@@ -378,22 +438,6 @@ func (m *manager) moveEntry(d int) {
 	}
 	m.chain[i], m.chain[j] = m.chain[j], m.chain[i]
 	m.sync()
-}
-
-func (m *manager) enter() {
-	r := m.rows[m.cur]
-	switch {
-	case r == nil:
-		m.say(true, "%s is not a provider shelp knows here; space takes it out of the chain", m.cur)
-	case r.class() == clsChecking:
-		m.say(false, "still checking %s…", r.ID)
-	case r.Status == statusCooldown:
-		m.say(false, "%s is rate-limited, so shelp skips it %s; `shelp providers --reset-cooldowns` clears that", r.ID, r.Reason)
-	case r.class() == clsOK:
-		m.say(false, "%s works; space puts it in the chain or takes it out", r.ID)
-	default:
-		m.effects = append(m.effects, mgrEffect{kind: "fix", ids: []string{r.ID}})
-	}
 }
 
 // routeIDs are the IDs of the providers route name has right now.
@@ -552,9 +596,12 @@ func (m *manager) widths(width int) mgrWidths {
 func (m *manager) View(width, height int) string {
 	m.height = height
 	var lines []string
-	if m.mode == modeForm {
+	switch {
+	case m.mode == modeForm:
 		lines = m.form.view(m.pal, width)
-	} else {
+	case m.page() == modeDetail:
+		lines = m.detailView(width, height)
+	default:
 		head := m.headLines()
 		body, at := m.bodyLines(width)
 		foot := m.footLines(width)
@@ -632,8 +679,8 @@ func (m *manager) bodyLines(width int) (out []string, at int) {
 	out = append(out, "", p.Bold("Other providers")+p.Dim(" · space adds one to the end of the chain"))
 	titles := map[int]string{
 		clsOK:          "available",
-		clsSetup:       "needs setup · enter shows how",
-		clsUnavailable: "not available here · enter shows how to start or install it",
+		clsSetup:       "needs setup · → shows how",
+		clsUnavailable: "not available here · → shows how to start or install it",
 		clsChecking:    "checking…",
 	}
 	last := -1

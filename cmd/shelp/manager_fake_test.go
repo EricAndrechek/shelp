@@ -104,6 +104,8 @@ var (
 	kEsc       = term.Key{Code: term.KeyEsc}
 	kUp        = term.Key{Code: term.KeyUp}
 	kDown      = term.Key{Code: term.KeyDown}
+	kLeft      = term.Key{Code: term.KeyLeft}
+	kRight     = term.Key{Code: term.KeyRight}
 	kShiftUp   = term.Key{Code: term.KeyUp, Shift: true}
 	kShiftDown = term.Key{Code: term.KeyDown, Shift: true}
 	kBackTab   = term.Key{Code: term.KeyBackTab}

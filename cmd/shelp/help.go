@@ -228,12 +228,15 @@ Flags (config add)
 Provider manager (shelp providers -i, or shelp config chain on a terminal)
   Your chain on top, numbered in the order it is tried, then every other
   provider: available, needing setup, unavailable. "local" runs on this
-  machine and works offline; "cloud" needs the internet. Keys: up/down or
-  k/j move; space puts a provider in the chain or takes it out; Shift+up/down,
-  K/J or +/- move a chain entry; enter shows how to set up a provider (and
-  runs the Apple Shortcut setup); a adds a route; x removes one you added;
-  s saves; ? lists the keys; q or Esc quits, asking first about unsaved
-  changes; Ctrl-C quits at once without saving.
+  machine and works offline; "cloud" needs the internet. The bottom line
+  says what the keys do on the row under the cursor; ? shows them all.
+  ↑↓ (or k/j) move; space puts a provider in the chain or takes it out;
+  shift+↑↓ (or K/J, +/-) move a chain entry; → (or enter, l) opens a
+  provider's details: where it runs, its status, its route and how to make
+  it work (enter there runs the Apple Shortcut's setup), ← (or esc) goes
+  back and ↑↓ show the next one; a adds a route; x removes one you added;
+  s saves; q or esc quits, asking first about unsaved changes; ctrl+c
+  quits at once without saving.
 
 chain, add and remove change only their own lines and leave the rest of the
 file as it is. If the file is managed by chezmoi or is a symlink, shelp does

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -126,7 +127,7 @@ func TestManagerLayout(t *testing.T) {
 	if !slices.Equal(order, []string{"ollama", "shortcuts:apple-pro", "shortcuts:chatgpt", "groq:llama", "claude:sonnet", "lmstudio"}) {
 		t.Errorf("others order %v", order)
 	}
-	for _, w := range []string{"  available", "  needs setup · enter shows how", "  not available here"} {
+	for _, w := range []string{"  available", "  needs setup · → shows how", "  not available here"} {
 		if !strings.Contains(v, w) {
 			t.Errorf("view lacks group %q", w)
 		}
@@ -202,7 +203,7 @@ func TestManagerToggleAndReorder(t *testing.T) {
 	m.cur = "claude:sonnet"
 	m.sync()
 	press(m, keys(" ")...)
-	if !m.msgWarn || !strings.Contains(m.msg, "enter shows how") {
+	if !m.msgWarn || !strings.Contains(m.msg, "→ shows how") {
 		t.Errorf("msg %q", m.msg)
 	}
 	if o := m.ops(); !slices.Equal(o.chain, []string{"fm", "ollama", "claude:sonnet"}) {
@@ -246,18 +247,18 @@ func TestManagerFooterHints(t *testing.T) {
 		lines := strings.Split(m.View(0, 0), "\n")
 		return lines[len(lines)-1]
 	}
-	if got, want := foot(), "space to remove · shift+↑↓ to reorder · ? for shortcuts"; got != want {
+	if got, want := foot(), "space to remove · shift+↑↓ to reorder · → for details · ? for shortcuts"; got != want {
 		t.Errorf("chain row footer\n got %q\nwant %q", got, want)
 	}
 	m.cur = "ollama"
 	m.sync()
-	if got, want := foot(), "space to add · a to add a route · ? for shortcuts"; got != want {
+	if got, want := foot(), "space to add · → for details · a to add a route · ? for shortcuts"; got != want {
 		t.Errorf("other row footer\n got %q\nwant %q", got, want)
 	}
 	m.cur = "lmstudio" // not running: says what this row needs
 	m.sync()
-	if got := foot(); !strings.Contains(got, "enter for how to set it up") {
-		t.Errorf("needs-setup row footer %q", got)
+	if got, want := foot(), "space to add · → for how to set it up · a to add a route · ? for shortcuts"; got != want {
+		t.Errorf("needs-setup row footer\n got %q\nwant %q", got, want)
 	}
 	// One hint line, no glyph modifiers anywhere.
 	v := m.View(0, 0)
@@ -270,8 +271,8 @@ func TestManagerFooterHints(t *testing.T) {
 	m.cur = "shortcuts:apple-pro"
 	m.sync()
 	press(m, keys("J")...) // dirty: s to save joins in
-	if got := fitHints(m.listHints(), 0); !strings.Contains(got, "s to save") {
-		t.Errorf("dirty footer %q", got)
+	if got, want := fitHints(m.listHints(), 0), "space to remove · shift+↑↓ to reorder · → for details · s to save · ? for shortcuts"; got != want {
+		t.Errorf("dirty chain row footer\n got %q\nwant %q", got, want)
 	}
 	if got := fitHints(m.listHints(), 40); style.Width(got) > 39 || !strings.HasSuffix(got, "? for shortcuts") || !strings.HasPrefix(got, "space to remove") {
 		t.Errorf("40 columns: %q", got)
@@ -381,22 +382,194 @@ func TestManagerSaveAndEnter(t *testing.T) {
 	if m.dirty() || strings.Contains(viewOf(m), "unsaved") || !strings.Contains(viewOf(m), "saved fm") {
 		t.Errorf("after save:\n%s", viewOf(m))
 	}
-	// Enter: a fix effect for a provider that needs setup or is not
-	// available; a note for one that works.
-	for id, want := range map[string]string{"shortcuts:chatgpt": "fix", "lmstudio": "fix", "groq:llama": "fix", "ollama": ""} {
-		m.cur = id
-		m.sync()
-		press(m, kEnter)
-		e := m.takeEffects()
-		if want == "" {
-			if len(e) != 0 || !strings.Contains(m.msg, "works") {
-				t.Errorf("%s: effects %+v msg %q", id, e, m.msg)
+	// s works from the detail page too.
+	press(m, keys(kRight, " ", "s")...)
+	if e := m.takeEffects(); len(e) != 1 || e[0].kind != "save" || m.mode != modeDetail {
+		t.Errorf("s in the details: effects %+v mode %v", e, m.mode)
+	}
+}
+
+// →, enter and l open any row's details; ←, esc, h and q go back.
+func TestManagerDetailOpenAndBack(t *testing.T) {
+	for _, open := range []term.Key{kRight, kEnter, keys("l")[0]} {
+		for _, back := range []term.Key{kLeft, kEsc, keys("h")[0], keys("q")[0]} {
+			m := testManager(t, "", true)
+			press(m, kDown, open)
+			if m.mode != modeDetail || !strings.Contains(viewOf(m), "shelp providers › fm") {
+				t.Fatalf("%+v did not open the details:\n%s", open, viewOf(m))
 			}
-			continue
+			press(m, back)
+			if m.mode != modeList || m.quit || m.cur != "fm" {
+				t.Errorf("%+v did not go back to the list on fm: mode %v quit %v cur %s", back, m.mode, m.quit, m.cur)
+			}
 		}
-		if len(e) != 1 || e[0].kind != want || e[0].ids[0] != id {
-			t.Errorf("%s: effects %+v", id, e)
+	}
+}
+
+func TestManagerDetailPage(t *testing.T) {
+	t.Setenv("WORK_KEY", "")
+	m := testManager(t, routedSrc, true) // chain: fm, work:big, lmstudio
+	m.setProbe(providerRow{ID: "work:big", Kind: "api", Description: m.rows["work:big"].Description, Status: statusUnavailable, Reason: "no API key", Fix: "set $WORK_KEY"})
+	press(m, kDown, kRight)
+	v := m.View(100, 0)
+	t.Logf("work:big at 100 columns:\n%s", v)
+	flat := strings.Join(strings.Fields(v), " ") // wrapped lines joined
+	for _, w := range []string{
+		"shelp providers › work:big   2 of ",
+		"Work · big",
+		"cloud · a hosted API at llm.example.com: your request goes over the internet, with the key from $WORK_KEY",
+		"status    ! no API key",
+		"chain     #2 of 3",
+		"To make it work",
+		"$WORK_KEY is not set in this shell",
+		"Route · your [[openai.endpoint]] entry in /home/u/.config/shelp/config.toml",
+		"base URL  https://llm.example.com/v1",
+		"key       $WORK_KEY · not set in this shell",
+		"models    big (this one), small",
+		"label     Work",
+		"← to go back · space to remove · x to remove · r to check again · ? for shortcuts",
+	} {
+		if !strings.Contains(flat, strings.Join(strings.Fields(w), " ")) {
+			t.Errorf("work:big details lack %q", w)
 		}
+	}
+	// ↑↓ step to the neighbours without leaving the page.
+	press(m, kDown)
+	if m.cur != "lmstudio" || m.mode != modeDetail {
+		t.Fatalf("down: %s %v", m.cur, m.mode)
+	}
+	v = m.View(100, 0)
+	for _, w := range []string{"local · an OpenAI-compatible server on this machine (127.0.0.1:1235)", "not running", "Start the OpenAI-compatible server at http://127.0.0.1:1235/v1",
+		"Route · your [[openai.local]] entry, replacing the built-in lmstudio at 127.0.0.1:1234", "the server's first loaded model"} {
+		if !strings.Contains(v, w) {
+			t.Errorf("lmstudio details lack %q:\n%s", w, v)
+		}
+	}
+	if strings.Contains(v, "key ") {
+		t.Error("a local server shows a key")
+	}
+	press(m, kUp, kUp)
+	if v := m.View(100, 0); m.cur != "fm" || !strings.Contains(v, "runs on this Mac with Apple's on-device model") || !strings.Contains(v, "✓ works here") || !strings.Contains(v, "#1 of 3: tried first") {
+		t.Errorf("fm details:\n%s", v)
+	}
+	press(m, kUp) // at the top: stays
+	if m.cur != "fm" || m.mode != modeDetail {
+		t.Errorf("up at the top: %s %v", m.cur, m.mode)
+	}
+	// space takes it out of the chain and stays on its page; again puts it back.
+	press(m, keys(" ")...)
+	if m.cur != "fm" || m.mode != modeDetail || slices.Contains(m.chain, "fm") || !strings.Contains(m.View(100, 0), "not in your chain") {
+		t.Errorf("space: cur %s mode %v chain %v", m.cur, m.mode, m.chain)
+	}
+	if v := m.View(100, 0); !strings.Contains(v, "← to go back · space to add · r to check again · s to save · ? for shortcuts") {
+		t.Errorf("footer after space:\n%s", v)
+	}
+	press(m, keys(" ")...)
+	if !slices.Contains(m.chain, "fm") || !strings.Contains(m.msg, "added fm to the chain as #3") {
+		t.Errorf("space again: chain %v msg %q", m.chain, m.msg)
+	}
+	// r checks this one again, from scratch.
+	press(m, keys("r")...)
+	if e := m.takeEffects(); len(e) != 1 || e[0].kind != "probe" || !e[0].fresh || !slices.Equal(e[0].ids, []string{"fm"}) || m.rows["fm"].probed {
+		t.Errorf("r: effects %+v", e)
+	}
+	probeAll(m)
+	// enter only runs something for the Apple Shortcut.
+	press(m, kEnter)
+	if e := m.takeEffects(); len(e) != 0 || !strings.Contains(m.msg, "nothing to run") {
+		t.Errorf("enter on fm: %+v %q", e, m.msg)
+	}
+	// ? shows the page's keys; esc closes the grid, then goes back.
+	press(m, keys("?")...)
+	if v := m.View(100, 0); !strings.Contains(v, "↑↓ for other providers") || !strings.Contains(v, "? to close") || strings.Contains(v, "? for shortcuts") {
+		t.Errorf("detail grid:\n%s", v)
+	}
+	press(m, kEsc)
+	if m.help || m.mode != modeDetail {
+		t.Errorf("esc with the grid: help %v mode %v", m.help, m.mode)
+	}
+	// Ctrl-C quits from here too.
+	press(m, term.CtrlC)
+	if !m.quit || m.code != 130 {
+		t.Error("ctrl+c in the details")
+	}
+}
+
+// x on a route's page asks, then removes it and goes back to the list; on
+// the lmstudio override the provider stays (built in), and so does the page.
+func TestManagerDetailRemoveRoute(t *testing.T) {
+	m := testManager(t, routedSrc, true)
+	m.cur = "lmstudio"
+	m.sync()
+	press(m, keys(kRight, "x")...)
+	if m.mode != modeConfirm || !strings.Contains(m.View(100, 0), "Route · your [[openai.local]]") {
+		t.Fatalf("x: mode %v\n%s", m.mode, m.View(100, 0))
+	}
+	press(m, keys("n")...)
+	if m.mode != modeDetail {
+		t.Errorf("n went to %v", m.mode)
+	}
+	press(m, keys("x", "y")...)
+	if m.mode != modeDetail || m.cur != "lmstudio" || strings.Contains(m.View(100, 0), "Route · your") {
+		t.Errorf("after removing the override: mode %v cur %s\n%s", m.mode, m.cur, m.View(100, 0))
+	}
+	m.cur = "work:big"
+	m.sync()
+	press(m, keys("x", "y")...)
+	if m.mode != modeList || m.rows["work:big"] != nil {
+		t.Errorf("after removing work: mode %v", m.mode)
+	}
+}
+
+// The Apple Shortcut's page offers to run its setup: enter asks the runner
+// (the one action that leaves the screen); the shortcut rows are checked
+// again when it is done.
+func TestManagerDetailShortcutSetup(t *testing.T) {
+	m := testManager(t, "", true)
+	m.cur = "shortcuts:chatgpt"
+	m.sync()
+	press(m, kRight)
+	v := m.View(100, 0)
+	t.Logf("shortcuts:chatgpt:\n%s", v)
+	flat := strings.Join(strings.Fields(v), " ")
+	for _, w := range []string{"hands your request to OpenAI's ChatGPT", "! not installed", "Run `shelp setup shortcuts`.",
+		"enter to set up the Apple Shortcut (opens the Shortcuts app, where you click Add Shortcut, then comes back here)",
+		"← to go back · enter to set up the Apple Shortcut · space to add"} {
+		if !strings.Contains(flat, w) {
+			t.Errorf("lacks %q", w)
+		}
+	}
+	press(m, kEnter)
+	if e := m.takeEffects(); len(e) != 1 || e[0].kind != "setup" || e[0].ids[0] != "shortcuts:chatgpt" {
+		t.Fatalf("effects %+v", e)
+	}
+	again := m.setupDone(nil)
+	if !slices.Contains(again, "shortcuts:chatgpt") || !slices.Contains(again, "shortcuts:apple-pro") || slices.Contains(again, "fm") {
+		t.Errorf("checks again %v", again)
+	}
+	if m.mode != modeDetail || m.cur != "shortcuts:chatgpt" || !strings.Contains(m.View(100, 0), "checking") {
+		t.Errorf("after setup: mode %v cur %s", m.mode, m.cur)
+	}
+	m.setupDone(errors.New("open: refused"))
+	if !m.msgWarn || !strings.Contains(m.msg, "open: refused") {
+		t.Errorf("failed setup msg %q", m.msg)
+	}
+}
+
+// A long line on the details page wraps instead of being cut.
+func TestManagerDetailWraps(t *testing.T) {
+	m := testManager(t, "", true)
+	m.cur = "claude:sonnet"
+	m.sync()
+	press(m, kRight)
+	v := m.View(60, 0)
+	for _, l := range strings.Split(v, "\n") {
+		if style.Width(l) > 59 || strings.HasSuffix(l, "…") && !strings.Contains(l, "checking") {
+			t.Errorf("cut or too wide: %q", l)
+		}
+	}
+	if !strings.Contains(strings.Join(strings.Fields(v), " "), "your request goes to Anthropic over the internet and counts against your Claude plan") {
+		t.Errorf("where sentence lost:\n%s", v)
 	}
 }
 
@@ -441,6 +614,17 @@ func TestManagerViewColorStripsToPlain(t *testing.T) {
 	colored := viewOf(m)
 	if colored == plain || style.Strip(colored) != plain {
 		t.Errorf("colored view differs from plain once stripped:\n%s\n---\n%s", style.Strip(colored), plain)
+	}
+	// The same for the detail pages, wrapped at 70 columns.
+	for _, id := range []string{"fm", "nosuch:x", "shortcuts:chatgpt", "groq:llama", "claude:sonnet"} {
+		m.pal = style.Plain()
+		m.cur, m.mode = id, modeDetail
+		m.sync()
+		plain := m.View(70, 0)
+		m.pal = style.Forced(style.TrueColor)
+		if colored := m.View(70, 0); style.Strip(colored) != plain {
+			t.Errorf("%s: colored details differ from plain once stripped:\n%s\n---\n%s", id, style.Strip(colored), plain)
+		}
 	}
 }
 
@@ -713,10 +897,10 @@ func TestFixLines(t *testing.T) {
 	m.setProbe(providerRow{ID: "lmstudio", Kind: "local-server", Description: m.rows["lmstudio"].Description, Status: statusUnavailable, Reason: "not running (127.0.0.1:1235)"})
 	join := func(id string) string { return strings.Join(fixLines(style.Plain(), m.rows[id]), "\n") }
 	for id, wants := range map[string][]string{
-		"work:big":          {"no API key", "$WORK_KEY is not set", "export WORK_KEY=…", "never stores it"},
-		"lmstudio":          {"not running", "http://127.0.0.1:1235/v1"},
-		"shortcuts:chatgpt": {"not installed", "Run `shelp setup shortcuts`."},
-		"claude:sonnet":     {"not logged in", "Run `claude /login`."},
+		"work:big":          {"$WORK_KEY is not set", "export WORK_KEY=…", "never stores it"},
+		"lmstudio":          {"http://127.0.0.1:1235/v1"},
+		"shortcuts:chatgpt": {"  Run `shelp setup shortcuts`."},
+		"claude:sonnet":     {"Run `claude /login`."},
 	} {
 		got := join(id)
 		for _, w := range wants {
@@ -726,7 +910,8 @@ func TestFixLines(t *testing.T) {
 		}
 	}
 	fm := &mgrRow{providerRow: providerRow{ID: "fm", Kind: "on-device", Status: statusUnavailable, Reason: "license not accepted", Fix: "run `sudo fm license`"}, probed: true}
-	if got := strings.Join(fixLines(style.Plain(), fm), "\n"); !strings.Contains(got, "run `sudo fm license`") || !strings.Contains(got, "never runs sudo") {
+	// fm's fix needs sudo: the exact command, on its own line; never run.
+	if got := strings.Join(fixLines(style.Plain(), fm), "\n"); !strings.Contains(got, "\n      sudo fm license\n") || !strings.Contains(got, "never runs sudo") {
 		t.Errorf("fm:\n%s", got)
 	}
 	ol := &mgrRow{providerRow: providerRow{ID: "ollama", Kind: "local-server", Reason: "not running (127.0.0.1:11434)"}, probed: true,

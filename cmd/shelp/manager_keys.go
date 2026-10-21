@@ -120,14 +120,14 @@ func wrapPhrases(prefix string, phrases []string, width int) []string {
 // listKeyCells are the list's keys for the ? grid.
 func listKeyCells() []string {
 	return []string{
-		"↑↓ to move", "space to add or remove", "shift+↑↓ to reorder", "enter for how to set up",
+		"↑↓ to move", "→ for details", "space to add or remove", "shift+↑↓ to reorder",
 		"a to add a route", "x to remove a route", "r to check again", "s to save",
 		"q to quit", "ctrl+c to quit now", "? to close",
 	}
 }
 
 // listAlternates are the other keys the list takes, under the grid.
-var listAlternates = []string{"j/k to move", "K/J or +/- to reorder", "g/G or home/end for top/bottom", "pgup/pgdn to page", "esc to quit"}
+var listAlternates = []string{"j/k to move", "K/J or +/- to reorder", "enter or l for details", "g/G or home/end for top/bottom", "pgup/pgdn to page", "esc to quit"}
 
 // listHints are the footer's phrases for the row under the cursor.
 func (m *manager) listHints() []keyHint {
@@ -142,13 +142,14 @@ func (m *manager) listHints() []keyHint {
 	default:
 		hs = append(hs, keyHint{"space to add", keepHigh})
 	}
-	if r != nil {
-		if c := r.class(); c == clsSetup || c == clsUnavailable {
-			hs = append(hs, keyHint{"enter for how to set it up", keepHigh})
-		}
-		if r.hasRoute && (r.route.Configured || r.isNew) {
-			hs = append(hs, keyHint{"x to remove", keepLow})
-		}
+	switch c := r.classOr(); {
+	case c == clsSetup || c == clsUnavailable:
+		hs = append(hs, keyHint{"→ for how to set it up", keepHigh})
+	default:
+		hs = append(hs, keyHint{"→ for details", keepMid})
+	}
+	if r != nil && r.hasRoute && (r.route.Configured || r.isNew) {
+		hs = append(hs, keyHint{"x to remove", keepLow})
 	}
 	switch {
 	case m.dirty():
@@ -159,17 +160,22 @@ func (m *manager) listHints() []keyHint {
 	return append(hs, keyHint{"? for shortcuts", keepAlways})
 }
 
-// keyLines are the footer's key lines: the hint line, or with ? the grid.
+// keyLines are the footer's key lines for the page on screen: the hint
+// line, or with ? the grid.
 func (m *manager) keyLines(width int) []string {
 	p := m.pal
+	hints, cells, also := m.listHints, listKeyCells, listAlternates
+	if m.page() == modeDetail {
+		hints, cells, also = m.detailHints, detailKeyCells, detailAlternates
+	}
 	if !m.help {
-		return []string{p.Dim(fitHints(m.listHints(), width))}
+		return []string{p.Dim(fitHints(hints(), width))}
 	}
 	var out []string
-	for _, l := range keyGrid(listKeyCells(), width) {
+	for _, l := range keyGrid(cells(), width) {
 		out = append(out, p.Dim(l))
 	}
-	for _, l := range wrapPhrases("also: ", listAlternates, width) {
+	for _, l := range wrapPhrases("also: ", also, width) {
 		out = append(out, p.Dim(l))
 	}
 	return out

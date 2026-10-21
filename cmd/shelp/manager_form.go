@@ -60,10 +60,10 @@ func (m *manager) updateForm(k term.Key) {
 	f.update(k)
 	switch {
 	case f.cancelled:
-		m.mode, m.form = modeList, nil
+		m.mode, m.form = m.back, nil
 		m.say(false, "nothing added")
 	case f.done:
-		m.mode, m.form = modeList, nil
+		m.mode, m.form = m.back, nil
 		m.addRoute(f.route, f.toChain)
 	}
 }

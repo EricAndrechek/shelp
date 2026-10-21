@@ -17,11 +17,11 @@ import (
 	"github.com/ericandrechek/shelp/internal/term"
 )
 
-// Enter on a provider that needs the Apple Shortcut: the screen is left,
-// the fix is explained, setup runs (through the seam) when accepted, and
-// the shortcut rows are checked again once back.
-func TestManagerFixRunsShortcutsSetup(t *testing.T) {
-	isolateCfg(t, "y\n", true)
+// The Apple Shortcut's detail page runs its setup (through the seam): the
+// screen is left only for that, then shelp comes straight back to the same
+// page, where the shortcut rows are checked again. Nothing else prints.
+func TestManagerDetailRunsShortcutsSetup(t *testing.T) {
+	isolateCfg(t, "", true)
 	var setupRan atomic.Bool
 	fakes := append(listProviders(nil), fakeProv{"shortcuts:chatgpt", "ChatGPT", provider.AppleCloud,
 		provider.Status{Reason: "not installed", Fix: "run `shelp setup shortcuts`"}})
@@ -44,8 +44,9 @@ func TestManagerFixRunsShortcutsSetup(t *testing.T) {
 	}
 	t.Cleanup(func() { runShortcutsStep = oldStep })
 	// #1, #2 are the default chain; the first other is shortcuts:chatgpt
-	// (needs setup; Apple's cloud sorts before claude).
-	scr := newFakeScreen(keys("j", "j", kEnter, "q")...)
+	// (needs setup; Apple's cloud sorts before claude). → opens its page,
+	// enter runs the setup, ← goes back, q quits.
+	scr := newFakeScreen(keys("j", "j", kRight, kEnter, kLeft, "q")...)
 	withScreen(t, scr)
 	out, _, err := runWithTimeout(t, "providers", "-i")
 	t.Logf("stdout:\n%s", out)
@@ -55,32 +56,70 @@ func TestManagerFixRunsShortcutsSetup(t *testing.T) {
 	if !setupRan.Load() {
 		t.Fatal("setup did not run")
 	}
-	for _, w := range []string{"shortcuts:chatgpt  ChatGPT", "not installed", "Run `shelp setup shortcuts`.",
-		"Set up the Apple Shortcut now?", "shortcut installed", "press any key to go back", "no changes"} {
+	for _, w := range []string{"Setting up the Apple Shortcut for shortcuts:chatgpt", "shortcut installed", "no changes"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("output lacks %q", w)
 		}
 	}
-	if !strings.Contains(scr.last(), "✓ shortcuts:chatgpt") {
-		t.Errorf("not checked again:\n%s", scr.last())
+	for _, w := range []string{"press any key", "Run `shelp setup shortcuts`"} {
+		if strings.Contains(out, w) {
+			t.Errorf("output has %q: the details belong on the screen", w)
+		}
 	}
-	if scr.started || scr.starts != scr.stops || scr.starts < 2 {
+	// Before: the page with the action; after: the same page, checked again.
+	var before, after string
+	for i, f := range scr.frames {
+		if strings.Contains(f, "enter to set up the Apple Shortcut") && before == "" {
+			before = f
+		}
+		if strings.Contains(f, "shelp providers › shortcuts:chatgpt") && strings.Contains(f, "✓ works here") {
+			after = scr.frames[i]
+		}
+	}
+	if before == "" || !strings.Contains(before, "To make it work") {
+		t.Errorf("no page with the setup action")
+	}
+	if after == "" {
+		t.Errorf("not back on the page, checked again; last frame:\n%s", scr.last())
+	}
+	if !strings.Contains(scr.last(), "✓ shortcuts:chatgpt") {
+		t.Errorf("list after ←:\n%s", scr.last())
+	}
+	if scr.started || scr.starts != scr.stops || scr.starts != 2 {
 		t.Errorf("screen: %d starts, %d stops, started %v", scr.starts, scr.stops, scr.started)
 	}
 }
 
-// Ctrl-C at "press any key" ends shelp like Ctrl-C anywhere: 130.
-func TestManagerFixCtrlCAtPressAnyKey(t *testing.T) {
+// Ctrl-C on a detail page ends shelp like Ctrl-C anywhere: 130, the
+// terminal restored.
+func TestManagerDetailCtrlC(t *testing.T) {
 	isolateCfg(t, "", true)
-	scr := newFakeScreen(keys("j", "j", kEnter)...) // claude:haiku: needs setup
-	scr.waitKeys = []term.Key{term.CtrlC}
+	scr := newFakeScreen(keys("j", "j", kRight, term.CtrlC)...)
 	withScreen(t, scr)
 	out, _, err := runWithTimeout(t, "providers", "--interactive")
 	if code, show := exitCode(context.Background(), err); code != 130 || show {
 		t.Errorf("exit %d show %v err %v", code, show, err)
 	}
-	if !strings.Contains(out, "Install the claude CLI.") {
-		t.Errorf("fix text missing:\n%s", out)
+	if strings.Contains(out, "Install the claude CLI") {
+		t.Errorf("details printed:\n%s", out)
+	}
+	if !strings.Contains(scr.last(), "shelp providers › ") || scr.started {
+		t.Errorf("not on a detail page, or screen left started:\n%s", scr.last())
+	}
+}
+
+// Ctrl-C at "press any key" (after a save to a file managed elsewhere)
+// ends shelp like Ctrl-C anywhere: 130.
+func TestManagerSaveCtrlCAtPressAnyKey(t *testing.T) {
+	e := isolateCfg(t, "n\n", true)
+	write(t, e.cfgPath, userCfg)
+	chezmoiFakes(t, "config.toml", userCfg)
+	scr := newFakeScreen(keys("J", "s")...)
+	scr.waitKeys = []term.Key{term.CtrlC}
+	withScreen(t, scr)
+	_, _, err := runWithTimeout(t, "config", "chain")
+	if code, show := exitCode(context.Background(), err); code != 130 || show {
+		t.Errorf("exit %d show %v err %v", code, show, err)
 	}
 	if scr.started {
 		t.Error("screen left started")
