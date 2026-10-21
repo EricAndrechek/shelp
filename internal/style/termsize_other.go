@@ -2,4 +2,6 @@
 
 package style
 
+const haveWinszIoctl = false
+
 func ioctlWinsz(fd uintptr, ws *winsize) bool { return false }

@@ -132,3 +132,16 @@ func TestTermWidthNotTerminal(t *testing.T) {
 		t.Errorf("TermWidth(non-file) = %d", w)
 	}
 }
+
+// /dev/null is a character device, not a terminal: treating it as one
+// sent `shelp config -i </dev/null >/dev/null` into raw mode.
+func TestIsTerminalDevNull(t *testing.T) {
+	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer f.Close()
+	if IsTerminal(f) {
+		t.Fatalf("IsTerminal(%s) = true", os.DevNull)
+	}
+}

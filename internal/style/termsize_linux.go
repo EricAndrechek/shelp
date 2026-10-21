@@ -7,6 +7,8 @@ import (
 	"unsafe"
 )
 
+const haveWinszIoctl = true
+
 func ioctlWinsz(fd uintptr, ws *winsize) bool {
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGWINSZ, uintptr(unsafe.Pointer(ws)))
 	return e == 0

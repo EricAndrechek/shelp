@@ -81,7 +81,14 @@ func isTerminal(w io.Writer) bool {
 		return false
 	}
 	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	// /dev/null is a character device too (`shelp config -i </dev/null
+	// >/dev/null` tried raw mode on it): only a terminal answers the
+	// window-size ioctl, where the platform has one to ask.
+	var ws winsize
+	return !haveWinszIoctl || ioctlWinsz(f.Fd(), &ws)
 }
 
 // DetectDepth reads the terminal's color depth from COLORTERM and TERM.

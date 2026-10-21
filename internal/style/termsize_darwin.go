@@ -9,6 +9,8 @@ import (
 
 const tiocgwinsz = syscall.TIOCGWINSZ
 
+const haveWinszIoctl = true
+
 func ioctlWinsz(fd uintptr, ws *winsize) bool {
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, tiocgwinsz, uintptr(unsafe.Pointer(ws)))
 	return e == 0
