@@ -7,7 +7,7 @@ import (
 )
 
 // Default is the template the CLI uses. Change it only on benchmark
-// evidence; the README table records why.
+// evidence; docs/benchmark.md records why.
 const Default = "v4"
 
 func init() {

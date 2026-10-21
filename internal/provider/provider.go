@@ -276,7 +276,8 @@ func Get(cfg *config.Config, id string) (Provider, error) {
 }
 
 // DefaultChain is the fallback order used when neither flags, env nor
-// config name providers. It is tuned from benchmark results; see README.
+// config name providers. It is tuned from benchmark results; see
+// docs/benchmark.md.
 var DefaultChain = []string{"shortcuts:apple-pro", "fm"}
 
 // Result is a completed call with timing.

@@ -96,8 +96,8 @@ shelp-bench run [--providers a,b|available] [--templates v1,...]
   `--min-interval 2s`.
 - **Rate-limit circuit breaker**: a trial whose call comes back as
   `*provider.RateLimitedError` (a usage-limit/quota error, not just a
-  plain failure — see the root README's "Rate limits and cooldowns" and
-  CLAUDE.md) trips a breaker for that provider, the first time, for the
+  plain failure; see "Rate limits and offline" in
+  docs/configuration.md and docs/rate-limits.md) trips a breaker for that provider, the first time, for the
   rest of the run: every other trial for that provider not yet dispatched
   is skipped — **not run, and not written to `results.jsonl`** — so a
   later `--resume <dir>` treats them as still pending and fills them in.

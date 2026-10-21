@@ -13,9 +13,9 @@ wired up here only once there's a documented, verified, flag-only,
 *structural* way back down to a plain completion — "structural" meaning
 shelp can prove no tool call is possible at all, not merely deny specific
 tools by name (see the copilot note below for a CLI that only offered the
-latter, and was dropped for it). See the per-CLI notes below and the
-"Dropped backends" section of README.md for the four that were evaluated
-and rejected:
+latter, and was dropped for it). See the per-CLI notes below and
+"Dropped backends" at the end of this file for the four that were
+evaluated and rejected:
 - **gemini**, **codex**, **antigravity**/`agy`: each is structurally an
   agent harness — a baked-in system prompt, always-available shell
   access, or both — with no plain-completion mode to switch into.
@@ -25,7 +25,7 @@ and rejected:
   only thing that did stop it, `--deny-tool shell`, is a permission-layer
   denylist, not a structural absence of tools — best-effort, not a
   guarantee a future release can't reintroduce an uncovered capability.
-  See README's "Dropped backends" entry, and `git log --all
+  See "Dropped backends" below, and `git log --all
   --oneline -- internal/provider/agentcli.go` for the commit that wired
   copilot up (with the full flag-by-flag investigation in its message)
   before it was removed here.
@@ -57,3 +57,27 @@ and rejected:
   counts (392/463, not thousands) and `num_turns: 1` on both are also the
   evidence that `--setting-sources ""`/`--tools ""` really do keep out
   CLAUDE.md/project memory and any tool round-trip.
+
+## Dropped backends
+
+Four agent CLIs were evaluated and left out, because none can be reduced
+to a single plain completion with documented flags:
+
+- **Copilot CLI** (`copilot`): `copilot help permissions` documents a bare
+  `--available-tools` as disabling every tool, but a live test showed the
+  model still ran its built-in `bash` tool. Only the permission-layer
+  `--deny-tool shell` stopped it. That is a denylist, not an absence of
+  tools: a later release could add a capability it doesn't cover, and
+  shelp couldn't tell. A backend whose tools shelp can't structurally
+  remove is dropped.
+- **Codex CLI** (`codex`): its agent system prompt is built in and can't be
+  replaced (claude has `--system-prompt`), and even its strictest sandbox
+  can run read-only shell commands. Worth another look if it gains a plain
+  completion mode.
+- **Antigravity CLI** (`agy`): an agent by design. It tries to run tools
+  even in `--mode plan` for anything but a trivial prompt, and saves every
+  conversation under `~/.gemini/antigravity-cli/` whatever the flags.
+- **Gemini CLI** (`gemini`): deprecated by Google in favor of Antigravity.
+
+All four were benchmarked before being dropped; their scores are in
+[bench/RESULTS.md](../bench/RESULTS.md) and [benchmark.md](benchmark.md).

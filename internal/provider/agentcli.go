@@ -33,7 +33,7 @@ import (
 // `--available-tools` (documented as disabling every tool) verifiably did
 // NOT stop its built-in bash tool from running a real shell command, so
 // there was no structural way to prove no tool call is possible, only a
-// best-effort one. See the "Dropped backends" section of README.md (and
+// best-effort one. See the "Dropped backends" section of docs/agentcli.md (and
 // CLAUDE.md) for why each one specifically fails this bar -- including
 // copilot's full flag-by-flag investigation, preserved there since it's
 // no longer wired up here -- and don't re-add any of them without first

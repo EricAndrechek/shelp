@@ -1,13 +1,8 @@
 # shelp
 
-shelp turns a task into a shell command, or explains one, using whatever
-model you already have on your machine: Apple's on-device model (`fm`),
-Apple's cloud models via Shortcuts (Apple Intelligence Pro, ChatGPT),
-OpenAI-compatible endpoints (hosted with an API key, or local servers like
-LM Studio, Ollama, or `llama-server`), or installed AI CLIs. It tries
-providers in order and falls back automatically, so it keeps working when
-one backend is offline, unlicensed, or rate-limited. It's the successor to
-the `ghcs`/`ghce` shell functions some of us grew up with.
+Turn a task into a shell command, or explain one, with whatever model you
+already have: Apple's on-device model, Apple Intelligence through
+Shortcuts, any OpenAI-compatible API or local server, or the `claude` CLI.
 
 ```console
 $ shelp what's my ip and is it behind a NAT
@@ -26,400 +21,104 @@ $ lsof -nP -iTCP:8080 -sTCP:LISTEN
   man: lsof
 ```
 
-(On a terminal, explanations are short Markdown rendered with color and
-wrapping; command names link to their man pages. Piped, you get the raw
-text.)
+shelp never runs anything. With the shell hook, the suggested command
+lands on your prompt line, ready to edit or run.
 
-Status: early (0.x) and macOS-first; flags and config may still change.
-On Linux, the OpenAI-compatible providers (hosted or local servers), the
-`claude` CLI provider, and the bash/zsh/fish shell hooks all work. The
-Apple-specific providers need a Mac: `fm` (Apple's on-device model) needs
-macOS 27, and the Shortcuts-based ones (Apple Intelligence Pro, ChatGPT)
-need the Shortcuts app.
+shelp is early (0.x) and macOS-first. On Linux, the OpenAI-compatible and
+`claude` providers work, as do the zsh, bash and fish hooks. The Apple
+providers need a Mac, and `fm` needs macOS 27.
 
 ## Install
 
 ```sh
-# Homebrew (macOS and Linux)
 brew install ericandrechek/tap/shelp
-
-# or with Go (1.27 or newer)
+# or
 go install github.com/ericandrechek/shelp/cmd/shelp@latest
-
-# or download a binary (macOS/Linux, arm64/amd64, with shell completions)
-# from https://github.com/EricAndrechek/shelp/releases
-
-# or from a checkout
-make install                 # -> ~/.local/bin/shelp
 ```
 
-Then hook it into your shell and see what works:
+Binaries for macOS and Linux are on the
+[releases page](https://github.com/EricAndrechek/shelp/releases).
+
+Then run the guided setup. It adds the shell hook, installs the Apple
+Shortcut if you want it, and picks your providers:
 
 ```sh
-shelp setup shell            # add the right eval/source line to your rc file
-# or by hand:
-eval "$(shelp init zsh)"     # add to ~/.zshrc
-eval "$(shelp init bash)"    # add to ~/.bashrc, or:
-shelp init fish | source     # add to ~/.config/fish/config.fish
-
-shelp providers              # which models work on this machine
-shelp setup shortcuts        # optional: Apple Intelligence Pro via Shortcuts
-sudo fm license              # optional: Apple's on-device model (macOS 27+)
+shelp setup
 ```
-
-`shelp setup shell` (see "Shell setup" below) detects your shell, finds
-its rc file, and appends a marked block; it's idempotent and never edits
-an rc file that's a symlink or managed by a dotfiles tool like chezmoi (it
-prints the line to add by hand instead). The shell integration wraps
-`shelp` in a function (zsh/bash/fish, in the style of zoxide/starship) so
-a suggested command lands on your prompt line ready to edit or run —
-shelp never executes anything itself.
 
 ## Usage
 
 ```console
-$ shelp find all files over 100MB in my home dir       # suggest (default)
-$ shelp explain 'tar -xzvf a.tgz'                       # explain (alias: -e)
-$ shelp -p fm,shortcuts:apple-pro list 5 recent commits # explicit fallback chain
-$ shelp --template v2 -v print yesterday as YYYY-MM-DD  # -v: provider+latency on stderr
-$ shelp providers                                       # what works on this machine
-$ shelp providers --json                                # same, machine-readable
-$ shelp providers --reset-cooldowns                     # clear recorded rate-limit cooldowns
-$ shelp providers -i                                    # manage the chain and your own routes
-$ shelp setup shortcuts                                 # install the Apple Shortcut this needs
-$ shelp help                                            # short overview (also -h, --help)
-$ shelp help providers                                  # one command's flags (also: shelp providers -h)
+$ shelp find files over 100MB in my home dir    # suggest a command
+$ shelp explain 'tar -xzvf a.tgz'               # explain one (or -e)
+$ shelp -p fm list the 5 latest commits         # use a specific provider
+$ shelp providers                               # what works on this machine
+$ shelp providers -i                            # manage your providers
+$ shelp history                                 # past requests and answers
+$ shelp help config                             # help for one command
 ```
 
-`shelp help` lists the commands; `shelp help <command>` (or `shelp <command>
--h`) shows that command's flags. `help` and `version` followed by more words
-are a task, so `shelp help me find big files` still works.
-
-**Raw line mode (default on).** Once hooked into your shell, pressing
-Enter on a line that starts with `shelp ` (a task, or a `shelp
-explain`/`shelp -e` target — not a flag, and not one of shelp's own
-commands, which the binary itself decides via `shelp __kind`, so a hook
-never goes stale) sends the REST OF THE LINE to shelp byte-for-byte: no
-shell parsing, so an apostrophe (`shelp what's my ip`), a `*.log` glob, a
-literal `$HOME`, spaces, quotes, and backslashes all reach the model
-exactly as typed — the line is never left dangling on an open quote. The
-suggested command replaces the line in place (cursor at the end, not
-executed — press Enter again to run it) and the line you actually typed
-is added to history; explaining streams the answer below the prompt and
-returns you to an empty line. In zsh a spinner (`⠋ shelp: thinking…`)
-runs after the line while shelp works, and Ctrl-C cancels the call and
-leaves the line you typed in place to edit. Anything shelp prints on stderr
-next to a good answer (a one-time hint such as "your Apple Shortcut is from
-an older shelp", or "that's already a command; to explain it: shelp explain
-...") is shown after the line is replaced, in raw line mode and from the
-widget alike. The `shelp` function itself (`shelp <task>` run from a script
-or after `&&`) calls no other function of the hook, so it still works in an
-environment that keeps only some of a shell's functions. Everything else — `shelp providers`, `shelp
--p fm task`, and running `shelp task` from a script or `zsh -c` — behaves
-exactly as before.
-
-Turn raw line mode off with `shelp init <shell> --no-line-mode` or config
-`[shell] line_mode = false`. With it off (or when it doesn't apply), the
-task goes through normal shell parsing: in zsh the integration still runs
-`shelp` under `noglob`, so `shelp delete all *.log files` reaches the
-model as typed; bash and fish expand globs before any function sees them,
-so quote tasks there that contain `*`, `?` or `[`, and in any shell quote
-tasks containing an apostrophe (`shelp "what's my ip"`).
-
-**Widget keybinding.** `shelp-widget` turns whatever's currently on your
-command line into a suggested command in place — handy when you've
-already typed something shelp should rewrite, or when raw line mode is
-off. Bind it at install time with `shelp init <shell> --bind KEY` (KEY in
-caret notation, e.g. `^G`, or a shell-native escape form like zsh's
-`\eg`) or config `[shell] bind = "^G"`; a flag passed to `shelp init`
-wins over the config value.
-
-Flags for `suggest`/`explain`: `-p`/`--provider` (or `$SHELP_PROVIDER`, or
-config `providers`), `--shell`, `--template`, `--context os,shell,cwd,tools`,
-`--json`, `-v`/`--verbose`, `--force` (call a provider even if it's
-currently in a rate-limit cooldown). Run `shelp -h` for the full usage.
-
-## Shell setup
-
-```console
-$ shelp setup shell                # detect $SHELL, add the block to its rc file
-$ shelp setup shell --shell zsh    # be explicit about which shell
-$ shelp setup shell --bind '^G'    # also bind shelp-widget to Ctrl-G
-$ shelp setup shell --dry-run      # show what would change, write nothing
-```
-
-It picks the rc file (`~/.zshrc`, honoring `$ZDOTDIR`; `~/.bashrc`, and on
-macOS checks whether `~/.bash_profile` sources it — a login shell
-otherwise never reads it — printing a note rather than editing
-`~/.bash_profile` itself; `~/.config/fish/config.fish`, honoring
-`$XDG_CONFIG_HOME`) and appends a marked block:
-
-```sh
-# >>> shelp >>>
-eval "$(shelp init zsh)"
-# <<< shelp <<<
-```
-
-Idempotent: if the rc file already has a `shelp init` line anywhere
-(inside or outside the block), it doesn't add a second one; passing
-`--bind` when a managed block already exists updates just that block.
-It never edits an rc file that's a symlink or that `chezmoi source-path`
-recognizes as managed (the chezmoi check is skipped entirely when
-chezmoi isn't on PATH) — either way it prints the exact line to add to
-your dotfiles yourself and exits cleanly.
-
-## Tab completion
-
-Subcommands, flags, provider IDs (`-p`), template names and the other
-flag values complete with Tab in zsh, bash and fish. A task is free text,
-so nothing completes after its first word. The commands, their flags and
-subcommands are asked of the binary at Tab time (`shelp __complete`), so a
-shell that loaded its completion before a `brew upgrade` still offers the
-new commands. It is on automatically with the
-shell hook (`shelp init`, `shelp setup shell`) and with the Homebrew
-formula. Otherwise generate the script yourself:
-
-```console
-$ shelp completion zsh > "${fpath[1]}/_shelp"
-$ shelp completion bash > ~/.local/share/bash-completion/completions/shelp
-$ shelp completion fish > ~/.config/fish/completions/shelp.fish
-```
+At the prompt, the text after `shelp` reaches it exactly as typed, so
+quotes, globs and `$vars` need no escaping: `shelp what's my ip` works.
+Ctrl-C cancels. Flags go before the text, `shelp suggest <text>` always
+treats the rest as a task, and `--` ends flags.
 
 ## Providers
 
-| ID pattern | kind | needs | setup |
-|---|---|---|---|
-| `fm` | on-device | macOS 27+, Apple Intelligence enabled | `sudo fm license` (once, machine-wide) |
-| `shortcuts:apple`, `shortcuts:apple-web`, `shortcuts:apple-pro`, `shortcuts:apple-pro-web`, `shortcuts:chatgpt`, `shortcuts:chatgpt-web` | apple-cloud | macOS, the Shortcuts app + `shortcuts` CLI; for the chatgpt ones, Apple's ChatGPT extension (System Settings › Siri) | `shelp setup shortcuts` generates and opens one `.shortcut`, "shelp", that serves all six; click "Add Shortcut" once (no import API exists) |
-| `<endpoint-name>:<model>`, e.g. `openai:gpt-4o-mini`, `openrouter:anthropic/claude-3.5-haiku` | api | an `[[openai.endpoint]]` config entry and its API key env var | add the config entry below, `export <KEY>_API_KEY=...` |
-| `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>`, or a name from `[[openai.local]]` | local-server | a local OpenAI-compatible server running on the expected port | start the server (LM Studio, `ollama serve`, `llama-server`, `fm serve`, ...) |
-| `claude:haiku`, `claude:sonnet` | agent-cli | `claude` installed and logged in | `claude /login` |
+shelp tries the providers in your chain in order and uses the first that
+answers. A provider that reports a rate limit is skipped for a while, and
+when you're offline only local ones are tried.
 
-`shelp providers` probes every registered provider and prints which are
-`ok` vs `unavailable` (and why) on this machine right now. `shelp providers
--i` opens the same list as the provider manager (see "Configuration").
+| Provider | Runs on | Setup |
+|---|---|---|
+| `fm` | your Mac (Apple's on-device model) | `sudo fm license` |
+| `shortcuts:apple-pro`, `shortcuts:chatgpt`, … | Apple's cloud, through one Apple Shortcut | `shelp setup shortcuts` |
+| `<name>:<model>` | any OpenAI-compatible API, with your key | `shelp config add endpoint` |
+| `lmstudio:<model>`, `ollama:<model>`, `llamacpp:<model>` | a local server | start the server |
+| `claude:sonnet`, `claude:haiku` | the `claude` CLI, on your Claude plan | `claude /login` |
 
-Only `claude` is shipped among the AI-agent-CLI backends; gemini, codex,
-Antigravity, and Copilot CLI were all evaluated and dropped -- see
-"Dropped backends" below.
+Every provider is used as a single plain completion: shelp's prompt in,
+one answer out, with no tools, no file access and no agent loop. That's why
+`claude` is the only AI CLI supported. [docs/agentcli.md](docs/agentcli.md)
+explains how it's locked down and why Gemini, Codex, Antigravity and
+Copilot CLI were dropped.
 
 ## Configuration
 
-`~/.config/shelp/config.toml` (or `$SHELP_CONFIG`, or
-`$XDG_CONFIG_HOME/shelp/config.toml`). A missing file at the default
-location just means the defaults; a `$SHELP_CONFIG` that names a missing
-file is an error. Every key and table is optional; each provider family
-decodes only its own table, so unrelated tables are ignored.
+Settings live in `~/.config/shelp/config.toml`, and you rarely need to
+edit it by hand:
 
-You don't have to edit it by hand: `shelp config` shows the file and your
-effective settings, `shelp config chain fm,claude:haiku` sets the provider
-chain, `shelp config add`/`remove` add and remove your own routes (below),
-and `shelp config edit` opens the file. Each edit changes only its own
-lines and leaves comments and everything else as they are. On a terminal,
-plain `shelp setup` walks through the shell hook, the Apple Shortcut and
-the chain.
-
-### The provider manager
-
-`shelp providers -i` (or `shelp config chain` with no IDs, on a terminal)
-is a full-screen list: your chain on top, numbered in the order shelp
-tries it, then every other provider -- available, then needing setup, then
-unavailable, what runs on this machine first. Each row says **local**
-(runs on this machine, works offline) or **cloud** (sends your request
-over the internet), and whether it works here; statuses fill in as the
-checks finish. One dim line at the bottom says what the keys do on the
-row under the cursor, e.g. `space to remove · shift+↑↓ to reorder · → for
-details · ? for shortcuts`; `?` swaps it for a grid of every key.
-
-| key | does |
-|---|---|
-| ↑↓ (`k`/`j`) | move |
-| space | put the provider at the end of the chain, or take it out |
-| shift+↑↓ (`K`/`J`, `+`/`-`) | move a chain entry up or down |
-| → (enter, `l`) | open the provider's details |
-| `a` | add a route: a hosted OpenAI-compatible endpoint or a local server |
-| `e` | edit a route you added, in place |
-| `x`, delete | remove a route you added |
-| `s` | save |
-| `r` | check every provider again |
-| `?` | all keys |
-| `q`, esc | quit (asks first when there are unsaved changes) |
-| ctrl+c | quit at once, saving nothing |
-
-**Details.** → on any row opens a page on the same screen: where the
-provider runs, in one plain sentence (on this Mac, on a server on your
-network, or over the internet and to whom); whether it works here and why
-not; its place in your chain; for a route, the entry it comes from, its
-base URL, key variable (set in this shell or not, never its value),
-models and label; and, when it needs setup, **To make it work**: the
-command for fm's license (shelp never runs sudo), how to start a local
-server, where to export a key. ← (esc, `h`, `q`) goes back, ↑↓ show the
-previous or next provider, space adds or removes it, `r` checks it again,
-`e`/`x` edit or remove a route. For the Apple Shortcut, enter runs its
-setup -- the one thing that leaves the screen, since Shortcuts opens and
-waits for your click -- and then comes back to the same page, checked
-again.
-
-**Editing a route.** `e` opens the add form filled in. Saving rewrites
-only the keys that changed, where the entry is, so its comments and other
-keys (`temperature`, `labels`) stay. A new name or a dropped model changes
-provider IDs: chain entries follow a renamed ID in place and leave with a
-dropped one (the status line says which); new models are offered for the
-chain.
-
-Nothing is written until `s`. Without a terminal, `shelp config chain`
-prints the chain, every provider ID with local/cloud, and the commands
-below instead.
-
-### Your own routes
-
-Any OpenAI-compatible endpoint can be added, with a label so it reads well
-in lists. shelp never asks for, takes, or stores an API key: a route names
-the environment variable that holds it, and shelp reads that when it runs.
-
-```console
-$ shelp config add endpoint openrouter --preset openrouter \
-    --model anthropic/claude-haiku-4.5 --label "Haiku via OpenRouter"
-$ shelp config add endpoint work --base-url https://llm.internal.example.com/v1 \
-    --key-env WORK_LLM_API_KEY --model gpt-4o-mini
-$ shelp config add local fm-serve --base-url http://127.0.0.1:11535/v1 --label "fm serve"
-$ shelp config add endpoint work --base-url https://llm.internal.example.com/v1 \
-    --key-env WORK_LLM_API_KEY --model gpt-4o-mini --model gpt-4o --replace
-$ shelp config remove work
+```sh
+shelp config                    # the file and the settings in effect
+shelp config chain shortcuts:apple-pro,claude:sonnet,fm
+shelp config add endpoint openrouter --preset openrouter \
+  --model anthropic/claude-haiku-4.5
+shelp config edit               # open it in $EDITOR
 ```
 
-`--key-env` defaults to the preset's variable (e.g. `OPENROUTER_API_KEY`),
-else `NAME_API_KEY`; `--key-env ""` sends no key. shelp says whether the
-variable is set in your shell (never its value) and, if not, to add
-`export OPENROUTER_API_KEY=…` to your shell rc or env file. `add` appends
-one `[[openai.endpoint]]`/`[[openai.local]]` entry at the end of the file;
-on a terminal it offers to put the new providers at the end of your chain,
-otherwise it prints the `shelp config chain ...` command that would.
-`--replace` changes the route of that name in place instead (keeping the
-entry's comments and other keys; provider IDs that go away leave your
-chain; with no such route it adds one); without it, a taken name is an
-error. `remove` deletes the entry (and its providers from your chain).
+shelp never stores API keys: a route names the environment variable that
+holds its key. If the config file is a symlink or managed by chezmoi,
+shelp prints the change instead of making it.
 
-**chezmoi and symlinks.** If the config file is managed by chezmoi or is a
-symlink, shelp never writes it: it prints the exact change and the
-commands (`chezmoi edit ...`, then `chezmoi apply ...`). On a terminal,
-when the file is chezmoi's and its source is a plain file (not a `.tmpl`
-template, not encrypted), it also offers (default no) to make the same
-change in the source file and run `chezmoi apply` for you.
+Every setting, the provider manager's keys and the shell options are in
+[docs/configuration.md](docs/configuration.md).
 
-```toml
-# Fallback chain shelp tries in order; first success wins. Overridden by
-# -p/--provider and $SHELP_PROVIDER. Default: ["shortcuts:apple-pro", "fm"]
-# (free backends only). Adding claude:sonnet gives the best accuracy after
-# Apple's cloud model, at the cost of your Claude plan's usage.
-providers = ["shortcuts:apple-pro", "claude:sonnet", "fm"]
+## History and privacy
 
-# Prompt template: "v4" (the default: v2's rules for suggest, short Markdown
-# for explain), "v2" (rules), "v1" (minimal), "v3" (v2 + few-shot). See
-# internal/prompt/templates.go; the Benchmark section below has the comparison.
-template = "v4"
+Each request is saved to `~/.local/state/shelp/history.jsonl`, readable
+only by you: what you asked, the answer, which provider answered and how
+long it took. `shelp history` lists it and `-s` searches it. Turn it off
+with `[history] enabled = false` or `SHELP_HISTORY=0`.
 
-# What to tell the model about your environment. cwd/tools are opt-in --
-# they leave the machine once a cloud provider is in the chain. Default:
-# ["os", "shell"].
-context = ["os", "shell"]
-
-# How long a provider is skipped for after it reports a rate limit / usage
-# limit / quota error (see "Rate limits and cooldowns" below). Any
-# time.ParseDuration string. Default: "30m".
-cooldown = "30m"
-
-# Hosted, key-authenticated OpenAI-compatible endpoints. `preset` fills in
-# base_url + api_key_env for a well-known host; set them yourself for
-# anything else (e.g. a self-hosted gateway).
-[[openai.endpoint]]
-name = "openrouter"
-preset = "openrouter"   # openai | openrouter | groq | gemini | anthropic |
-                         # xai | mistral | deepseek | cerebras
-models = ["anthropic/claude-3.5-haiku", "meta-llama/llama-3.1-70b-instruct"]
-# Optional labels, shown in `shelp providers`, the manager and `shelp
-# config`. `label` names the endpoint: as is for a one-model endpoint,
-# "<label> · <model>" for each of several. `labels` names single models
-# and wins over `label`. Without either, a provider reads as its model.
-label = "OpenRouter"
-labels = { "anthropic/claude-3.5-haiku" = "Haiku via OpenRouter" }
-
-[[openai.endpoint]]
-name = "work-llm"
-base_url = "https://llm.internal.example.com/v1"
-api_key_env = "WORK_LLM_API_KEY"
-models = ["gpt-4o-mini"]
-temperature = 0.2
-
-# Local OpenAI-compatible servers, in addition to the built-in ones
-# (lmstudio :1234, ollama :11434, llamacpp :8080).
-[[openai.local]]
-name = "fm-serve"
-base_url = "http://127.0.0.1:11535/v1"   # `fm serve --port 11535`
-label = "fm serve"                       # optional, as for an endpoint
-
-# The one Apple Shortcut every shortcuts:* provider runs (the request
-# names the model), and that `shelp setup shortcuts` installs.
-[shortcuts]
-name = "shelp"   # the default
-
-# Headless AI CLIs: one optional sub-table per CLI (today, just claude --
-# see "Dropped backends" for why gemini/codex/Antigravity/Copilot CLI
-# aren't shipped). `models` overrides that CLI's built-in variant
-# ids/flag values (a name matching a built-in id like "haiku" reuses its
-# flag value; anything else is passed through verbatim as both the id and
-# the -m/--model value). `disabled` drops this CLI's providers even when
-# it's installed.
-[agentcli.claude]
-models = ["haiku", "opus"]   # add opus alongside the built-in haiku/sonnet
-
-# Shell integration `shelp init` renders. Read at every shell start, so
-# keep it fast -- it's just a config read.
-[shell]
-bind = "^G"           # keybinding for shelp-widget; --bind on `shelp init` wins
-line_mode = true      # raw-line Enter interception; default true
-
-# Request history (see "History"). Both keys are optional.
-[history]
-enabled = true        # false: record nothing
-max_entries = 1000    # keep the newest this-many; older ones are dropped
-```
-
-### Colors
-
-shelp colors its human-facing output only on a terminal: the providers
-status, setup progress, explain highlighting, the logo on `shelp version`
-and `--help`, and the shell integration's "thinking" status.
-`NO_COLOR=1` turns it off; `CLICOLOR_FORCE=1` forces it on. The suggested
-command, `--json`, and `shelp init` output are never colored.
+The model is told only your OS and shell unless you opt in to more.
+`fm` and local servers keep everything on your machine; every other
+provider receives your full request.
 
 ## Benchmark
 
-shelp ships a benchmark harness, `shelp-bench` (see
-[bench/README.md](bench/README.md) for the full command reference, case
-format, and scoring rules), that runs every case in `bench/cases/*.toml`
-against whichever providers and prompt templates you choose, applies
-automatic checks (syntax, dangerous commands, GNU-isms on macOS, ...), and
-produces a graded markdown report.
-
-```sh
-make bench-build
-./bin/shelp-bench run --providers available
-./bin/shelp-bench report --readme README.md
-```
-
-If a provider rate-limits mid-run, the runner trips a circuit breaker for
-it: remaining trials for that provider are skipped (not written, so a
-later `--resume <dir>` fills them in) instead of hammering it hundreds
-more times. `--min-interval <duration>` paces consecutive calls to the
-same provider to help stay under a rate limit in the first place. See
-[bench/README.md](bench/README.md) for details and the `run.json`/
-`results.jsonl` schema.
-
-> **Outdated numbers.** The table below is from a run on 2026-09-30 with
-> the older `v2` prompt template (the default is now `v4`). Apple
-> Intelligence Pro was rate-limited for most of that run (72% unavailable),
-> so its row covers few trials. A fresh run is planned:
+> These numbers are outdated. They come from a 2026-09-30 run with the
+> older v2 prompt, and Apple Intelligence Pro hit its usage limit early in
+> that run. A new run is tracked in
 > [#1](https://github.com/EricAndrechek/shelp/issues/1).
 
 <!-- bench:start -->
@@ -433,257 +132,29 @@ same provider to help stay under a rate limit in the first place. See
 _2026-09-30 · 81 cases · up to 1 sample(s) per trial_
 <!-- bench:end -->
 
-**How it's measured.** 81 cases (`bench/cases/*.toml`): 67 "suggest" tasks
-and 14 "explain" commands across files, text processing, processes and
-networking, git, OS-specific system tasks, archives/media, and shell syntax,
-with many targeting macOS/BSD vs Linux/GNU traps (`sed -i ''`, `date -v` vs
-`-d`, `ps --sort`, `du -d`) and zsh/bash/fish differences. Each case runs in
-every shell/OS combination it lists (112 trials per provider and template).
-Every distinct answer was graded 0/1/2 against the case's rubric by Claude
-(Opus 5.5), with suspicious claims checked by actually running them on a
-Mac (e.g. `sips -s format jpg` fails, `mv File file` works on APFS);
-identical answers share one grade, and answers matching a case's reference
-list are graded 2 automatically. "Mean score" is the average grade as a
-percentage of 2. Grades live in `bench/grades.jsonl`; `bench/RESULTS.md` is
-the full report across every run, including dropped backends.
-
-**Findings (2026-09-30, M4 Pro, macOS 27.0):**
-
-- **Apple Intelligence Pro via Shortcuts is the best fit when available:**
-  98% at ~1.3s, pure completion, free. Its catch is a usage limit: ~100
-  calls in quick succession, then "You have reached the usage limit for this
-  model" for more than 1.5 hours (the reset window is unpublished). Only 31
-  of its 112 trials ran before the limit, so treat its score as indicative.
-  shelp's cooldown then skips it instead of retrying.
-- **Claude Sonnet (`claude:sonnet`) is the best fallback:** 97-98% at
-  ~2.1-2.3s end to end, on your Claude plan's usage.
-- **Claude Haiku is not worth it here.** With Claude Code's default hidden
-  thinking it scored 89% but took ~6.6s; with thinking off it's ~1.8s but
-  drops to 77% as plain text (and occasionally wrapped commands in prose) or
-  84% with schema-enforced JSON output, which is what shelp now uses.
-- **Apple's on-device model (`fm`) is fast and private but weak:** 31-36%,
-  ~0.35s warm. It invents flags and tools (`battctl`, `jpegmini`, `ip` on
-  macOS) and falls for most BSD/GNU traps. Keep it as the offline fallback.
-- **The default template is v4**, which is v2 for suggest and only changes
-  explain's format (short Markdown that shelp renders on a terminal), so
-  the suggest numbers here are v2's. v2 beat v1 everywhere: Apple
-  Intelligence Pro 94% -> 98%, Claude Sonnet's format-clean rate
-  91% -> 100%, fm 31% -> 36%. v3 (v2 plus worked examples) added nothing
-  over v2 for any model, and small models copy the examples' shape.
-- **Telling the model which tools are installed (`--context ...,tools`)
-  made fm worse** (36% -> 32%): it reached for the listed tools where they
-  didn't fit. It stays opt-in.
-- Dropped backends, for reference (see "Dropped backends"): Codex CLI
-  scored ~95% and Copilot CLI ~94% at 4-5s before being dropped for harness
-  control reasons, not quality. Codex exhausted a free ChatGPT plan's
-  monthly allowance after 255 calls.
-
-End-to-end latency (process start to printed command, `shelp-bench
-latency`, warm p50 of 5): fm 0.35s (1.25s cold), claude:haiku 1.8s,
-claude:sonnet 2.1s. Apple Intelligence Pro measured ~1.3s per call in the
-benchmark run (it was rate-limited when the latency pass ran).
-
-Caveats: one sample per trial; the grader is itself a Claude model, so a
-bias toward Claude-style answers can't be ruled out, although every
-rubric names concrete pass/fail criteria and every disputed call was
-tested; the Linux cases are graded on the command's correctness for the
-stated OS, not executed on Linux.
-
-## Offline
-
-If the machine has no network route, shelp skips network providers
-(Shortcuts, hosted APIs, `claude`) without calling them and goes straight to
-local ones (`fm`, LM Studio, Ollama...); keep one in your chain. `--force`
-does not override this. A connected-but-no-internet network is not detected
-and falls back to normal provider timeouts.
-
-## Rate limits and cooldowns
-
-Any provider can be rate-limited or out of quota, not just missing or
-offline -- Apple's Shortcuts "Use Model" backends, OpenAI-compatible
-endpoints (HTTP 429), and the agent-CLI backend (`claude`) all report
-this distinctly from a plain failure. When shelp
-sees one, it remembers: the provider ID goes into a small cooldown store
-(`$XDG_CACHE_HOME/shelp/cooldown.json`, `~/.cache/shelp/` by default) for
-30 minutes by default (the `cooldown` config key, or the backend's own
-`Retry-After` when it gives one), and the fallback chain skips it --
-without calling it again -- until the cooldown expires. This matters most
-for Apple Shortcuts: **every failed Shortcuts run posts a macOS
-notification**, so retrying a rate-limited shortcut on every `shelp`
-invocation would spam notifications on top of wasting the call.
-
-```console
-$ shelp -v -p shortcuts:apple-pro,fm list 5 recent commits
-shelp: shortcuts:apple-pro rate-limited until 14:32 (usage limit); skipping
-shelp: fm in 0.7s
-git log --oneline -5
-```
-
-`shelp providers` shows a cooled-down provider as STATUS `cooldown` with
-the reason and expiry time, without probing it. `shelp providers
---reset-cooldowns` clears the whole store. `--force` calls a provider even
-while it's cooled down -- including when it's the only ID you named with
-`-p`, which is otherwise still skipped by default.
-
-## History
-
-Every suggest and explain call is appended to a local file,
-`$XDG_STATE_HOME/shelp/history.jsonl` (`~/.local/state/shelp/` by default;
-`shelp history path` prints it). Only you can read it (0600, in a 0700
-directory), since it holds your prompts. A record has the time, the mode,
-your input, the text shelp printed, the provider that answered, the
-latency (and time to first chunk when streamed), tokens when the backend
-reports them (OpenAI-compatible endpoints and `claude` suggest do; `fm`
-and `shortcuts:*` do not), the providers that failed before it, the
-template and shell, an error when every provider failed, and a stable
-`key` hashed from the rendered request (for a future answer cache). The
-working directory and environment are never stored.
-
-```sh
-shelp history                  # the last 20, newest last
-shelp history -n 50 -s tar     # search input and answers (case-insensitive)
-shelp history --provider fm --all
-shelp history --json           # raw records, one per line
-shelp history show 12          # one entry in full (numbers as in the list)
-shelp history clear            # asks first; --yes skips that
-```
-
-Recording never fails or slows a command: it is one appended line, errors
-are ignored, and a Ctrl-C-cancelled call is not recorded. Once the file
-holds more than 1.5x `max_entries` lines it is rewritten with the newest
-`max_entries`. `[history] enabled = false` or `SHELP_HISTORY=0` in the
-environment turns recording off. `shelp history` is a command only when
-it has no words, only flags, or starts with `show`, `clear` or `path`;
-`shelp history of git commits for main.go` is still a task.
-
-On a terminal, `shelp explain` ends with a dim line naming the provider and
-how long it took (`fm · 1.4s`, plus `· 412 tokens` when known). `--json`
-carries `tokens` when known and `-v` prints them.
-
-## Privacy
-
-By default shelp tells the model only your OS and shell (`context =
-["os", "shell"]`); the `cwd` and `tools` context fields are opt-in
-(`--context os,shell,cwd,tools`, or the config's `context` list) because
-they leave the machine once a cloud provider is in the chain. Apple's
-on-device `fm` never sends anything off your Mac. Any cloud provider —
-Shortcuts' Apple Intelligence Pro / ChatGPT, an `[[openai.endpoint]]`, or
-the agent-CLI backend (`claude`, talking to its own cloud account) —
-receives your full prompt: the task or command you gave it,
-plus whatever context fields are enabled.
-
-## Provider purity
-
-Every provider shelp ships must behave as a single plain chat completion:
-shelp's system prompt plus one user message in, one text answer out. No
-tools, no file/project access, no memory or instructions loaded from the
-user's own config, no multi-turn agent loop, and no hidden "thinking"
-unless the user opts in (nothing does, today). `fm`, the Shortcuts
-backends, and every OpenAI-compatible endpoint are pure completions by
-construction — there's no agent harness in the way. The one agent-CLI
-backend shelp ships (`claude`) is a full coding agent by default, and
-stays in the fallback chain only because there's a verified, flag-only,
-*structural* way to strip every optional capability back down to that
-same one-completion shape — "structural" meaning shelp can prove no tool
-call is possible at all (`--tools ""`), not merely deny specific tools by
-name (see "Dropped backends" for a backend that only offered the latter,
-and was dropped for it):
-
-| provider | tools possible? | hidden input tokens (measured) | thinking/reasoning | turns |
-|---|---|---|---|---|
-| `fm`, `shortcuts:*`, `openai:*`/local servers | no (no agent harness at all) | none | none | 1 |
-| `claude:*` | no (`--tools ""`, `--strict-mcp-config`) | ~392-463 input tokens (haiku/sonnet, `--setting-sources ""`; no CLAUDE.md/memory) | none (`MAX_THINKING_TOKENS=0`; haiku otherwise burns ~318 output tokens/3.3s on hidden thinking for a trivial prompt) | 1 (`--output-format json`: `num_turns: 1`, `permission_denials: []`) |
-
-Measured live 2026-09-30 (`claude -p --model haiku/sonnet --output-format
-json` with `MAX_THINKING_TOKENS=0` and shelp's other claude flags):
-haiku — 15 output tokens, 0 thinking tokens, 392 input tokens, 520ms API
-time, `num_turns: 1`; sonnet — 13 output tokens, 0 thinking tokens, 463
-input tokens, 1038ms API time, `num_turns: 1` (sonnet doesn't think by
-default regardless, so the env var is just harmless insurance there).
-
-## Dropped backends
-
-Four agent CLIs were evaluated and deliberately left unwired, rather than
-hardened, because none of them can be reduced to a single plain completion
-through documented flags:
-
-- **Copilot CLI** (`copilot`) — no structural way to disable its built-in
-  tools was found: `copilot help permissions` documents a bare
-  `--available-tools` (no value) as disabling every tool, but this was
-  verified live to be FALSE — the model still ran its built-in `bash` tool
-  and executed a real shell command. Only a *permission-layer*
-  `--deny-tool shell` stopped it (a denylist, not a structural absence of
-  tools) — best-effort, not a guarantee: a future release could add a
-  built-in capability not covered by `--available-tools`/
-  `--disable-builtin-mcps`/`--deny-tool`, and shelp would have no way to
-  know. Any backend whose harness can run tools shelp can't structurally
-  control is dropped, full stop — this is that rule's first casualty.
-- **Codex CLI** (`codex`) — its own agent system prompt is baked in and
-  can't be replaced (unlike claude's `--system-prompt`), and even in the
-  most restrictive sandbox it can still run read-only shell commands.
-  Reconsider if a future release adds a genuine plain-completion mode.
-- **Antigravity CLI** (`agy`) — an agent by design: it tries to run tools
-  even in `--mode plan` for anything except a trivial prompt (the
-  "auto-denied" no-output failure mode this repo used to work around), and
-  it stores every conversation under `~/.gemini/antigravity-cli/` on disk
-  regardless of what flags are passed.
-- **Gemini CLI** (`gemini`) — deprecated by Google in favor of Antigravity;
-  not worth hardening a tool its own vendor is retiring.
+In short: Apple Intelligence Pro is the most accurate when it's available,
+Claude Sonnet is the best fallback, and `fm` is fast and private but often
+wrong. Method and details: [docs/benchmark.md](docs/benchmark.md).
 
 ## Caveats
 
-- Apple's `fm` license forbids "programmatic access... except as expressly
-  permitted," and Apple hasn't clarified whether third-party tools like
-  shelp fall under that permission. Use at your own risk.
-- The `shortcuts:*` providers all run one Apple Shortcut, "shelp", which
-  you import by hand: one click on "Add Shortcut". `shelp setup
-  shortcuts` opens it for you, but can't click through the import dialog
-  itself — there's no API for that. Shortcuts only imports signed
-  shortcut files, and signing is a round trip to Apple's server that now
-  and then stalls, so shelp ships its shortcut already signed (an
-  Apple-issued certificate with nothing personal in it); it signs one at
-  setup only if that copy can't be used, retrying stalled attempts. Which model
-  answers (Apple Intelligence, Apple Intelligence Pro, ChatGPT, each with
-  or without web knowledge) is up to the provider you pick; the
-  `shortcuts:chatgpt*` ones also need Apple's ChatGPT extension.
-- **Updating the shortcut**: when shelp changes the shortcut it generates
-  (a new `ShortcutFormatVersion`), the installed one doesn't update
-  itself. shelp notices on its own — `shelp providers` shows the
-  `shortcuts:*` providers as unavailable with `outdated shortcut (format
-  vN, current vM)`, and a normal `shelp` call prints a one-line stderr
-  hint the first time it runs after a new shelp version — so re-run
-  `shelp setup shortcuts`. Shortcuts can't replace a shortcut in place
-  (importing over a name keeps both, whichever button you click), so
-  setup asks you to **delete the old "shelp" first** (right-click ›
-  Delete in the Shortcuts app), waits until it's gone, then opens the new
-  one for a plain "Add Shortcut". (After a `brew upgrade shelp`, this is
-  the same command to reach for — see the Homebrew caveats.)
-- **Shortcuts from shelp 0.2.6 and earlier** were one per model, named
-  `shelp · <Model>` / `shelp · <Model> + Web`. They're no longer used:
-  `shelp setup shortcuts` and `shelp providers` list any you still have
-  so you can delete them in the Shortcuts app. shelp never runs them —
-  the ones from shelp 0.2.0-0.2.2 fail every run ("Please choose a value
-  for each parameter in this action.") with a notification.
-- The `claude` agent-cli provider spends your account's usage quota on
-  every call, same as using the CLI directly (a paid subscription), and is
-  noticeably slower than the other backends: about 1-2s per call even
-  hardened down to a plain completion (it's a full coding agent starting
-  up in headless mode, not a lightweight API request).
+- Apple's `fm` license limits "programmatic access" and doesn't say whether
+  tools like shelp are covered. Use it at your own risk.
+- The Apple Shortcut needs one click on "Add Shortcut" to import. When a
+  shelp update changes it, `shelp setup shortcuts` asks you to delete the
+  old one first, because Shortcuts can't replace one in place.
+- Apple's cloud models have an unpublished usage limit, and `claude` uses
+  your Claude plan's quota.
 
 ## Development
 
 ```sh
-make build          # bin/shelp
-make test           # Go tests
-make test-shell     # pty tests of the shell integrations (zsh, bash >= 4,
-                    # fish: native if installed, else in Docker; uses uv/pyte)
-make ci             # exactly what CI runs: vet, build, shell suite, go test -race
-make sign-shortcut  # re-sign the embedded Apple Shortcut (after changing it)
+make build         # bin/shelp
+make test          # Go tests
+make test-shell    # terminal tests of the zsh, bash and fish hooks
+make ci            # everything CI runs
 ```
-
-`.github/workflows/ci.yml` only installs those prerequisites on macOS and
-Linux and runs `make ci`, so a green local `make ci` is a green CI run.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT

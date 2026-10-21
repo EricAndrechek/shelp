@@ -6,7 +6,7 @@ has: Apple's on-device model (`fm`), Apple's cloud models via Shortcuts,
 OpenAI-compatible endpoints (hosted with a key, or local: LM Studio, Ollama,
 llama-server), or an installed AI CLI (claude -- gemini, codex,
 Antigravity, and Copilot CLI were all evaluated and dropped, see "Dropped
-backends" in README.md and the agentcli PURITY note below).
+backends" in docs/agentcli.md and the agentcli PURITY note below).
 Successor to the `ghcs`/`ghce` shell functions in the author's dotfiles.
 
 Public repo: `github.com/EricAndrechek/shelp`. Module `github.com/ericandrechek/shelp`.
@@ -300,7 +300,7 @@ file/project access, no memory or user config, no agent loop, no hidden
 thinking. An agent CLI is wired up only with a documented, verified,
 flag-only, *structural* way down to that (not a permission denylist).
 gemini, codex, antigravity/`agy` and copilot were evaluated and dropped
-(README "Dropped backends"; `git log --all --oneline --
+(docs/agentcli.md "Dropped backends"; `git log --all --oneline --
 internal/provider/agentcli.go` has copilot's investigation). claude uses
 `--setting-sources ""` + `--strict-mcp-config` + `--tools ""` +
 `--permission-prompts none` + `--disable-slash-commands` +
