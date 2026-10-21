@@ -1,0 +1,29 @@
+# After a successful Release (a real tag push, not a dry run), ask the
+# Homebrew tap to pin the new version right away instead of waiting for its
+# six-hourly schedule. The tap verifies the signed tag before it pins.
+name: Homebrew tap
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ask-tap:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask EricAndrechek/homebrew-tap to pin the release
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TRIGGER_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::HOMEBREW_TAP_TRIGGER_TOKEN is not set; the tap will pick the release up on its six-hourly schedule"
+            exit 0
+          fi
+          gh workflow run autobump.yml -R EricAndrechek/homebrew-tap -f formula=shelp
+          echo "::notice title=Homebrew tap::asked EricAndrechek/homebrew-tap to pin the latest release"
