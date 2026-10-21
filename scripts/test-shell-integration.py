@@ -939,6 +939,12 @@ def zsh_home(tmpdir, plugin_lines="", after_lines=""):
     plugin_lines sourced before it and after_lines after it."""
     d = os.path.join(tmpdir, "zsh-home")
     os.makedirs(d, exist_ok=True)
+    # Debian/Ubuntu's /etc/zsh/zshrc runs a plain compinit unless this is
+    # set, and on GitHub's Ubuntu runner a group-writable function dir made
+    # it stop at "Ignore insecure directories and continue [y]?" before the
+    # first prompt. The completion checks run their own `compinit -u`.
+    with open(os.path.join(d, ".zshenv"), "w") as f:
+        f.write("skip_global_compinit=1\n")
     with open(os.path.join(d, ".zshrc"), "w") as f:
         f.write("PS1='TESTPROMPT%% '\n")
         f.write("HISTFILE=%s/.zsh_history\n" % d)
