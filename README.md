@@ -217,21 +217,45 @@ tries it, then every other provider -- available, then needing setup, then
 unavailable, what runs on this machine first. Each row says **local**
 (runs on this machine, works offline) or **cloud** (sends your request
 over the internet), and whether it works here; statuses fill in as the
-checks finish.
+checks finish. One dim line at the bottom says what the keys do on the
+row under the cursor, e.g. `space to remove · shift+↑↓ to reorder · → for
+details · ? for shortcuts`; `?` swaps it for a grid of every key.
 
 | key | does |
 |---|---|
-| ↑/↓, `k`/`j` | move |
+| ↑↓ (`k`/`j`) | move |
 | space | put the provider at the end of the chain, or take it out |
-| Shift+↑/↓, `K`/`J`, `+`/`-` | move a chain entry up or down |
-| Enter | on one that needs setup: how to fix it (and, for the Apple Shortcut, run its setup) |
+| shift+↑↓ (`K`/`J`, `+`/`-`) | move a chain entry up or down |
+| → (enter, `l`) | open the provider's details |
 | `a` | add a route: a hosted OpenAI-compatible endpoint or a local server |
-| `x`, Delete | remove a route you added |
+| `e` | edit a route you added, in place |
+| `x`, delete | remove a route you added |
 | `s` | save |
 | `r` | check every provider again |
 | `?` | all keys |
-| `q`, Esc | quit (asks first when there are unsaved changes) |
-| Ctrl-C | quit at once, saving nothing |
+| `q`, esc | quit (asks first when there are unsaved changes) |
+| ctrl+c | quit at once, saving nothing |
+
+**Details.** → on any row opens a page on the same screen: where the
+provider runs, in one plain sentence (on this Mac, on a server on your
+network, or over the internet and to whom); whether it works here and why
+not; its place in your chain; for a route, the entry it comes from, its
+base URL, key variable (set in this shell or not, never its value),
+models and label; and, when it needs setup, **To make it work**: the
+command for fm's license (shelp never runs sudo), how to start a local
+server, where to export a key. ← (esc, `h`, `q`) goes back, ↑↓ show the
+previous or next provider, space adds or removes it, `r` checks it again,
+`e`/`x` edit or remove a route. For the Apple Shortcut, enter runs its
+setup -- the one thing that leaves the screen, since Shortcuts opens and
+waits for your click -- and then comes back to the same page, checked
+again.
+
+**Editing a route.** `e` opens the add form filled in. Saving rewrites
+only the keys that changed, where the entry is, so its comments and other
+keys (`temperature`, `labels`) stay. A new name or a dropped model changes
+provider IDs: chain entries follow a renamed ID in place and leave with a
+dropped one (the status line says which); new models are offered for the
+chain.
 
 Nothing is written until `s`. Without a terminal, `shelp config chain`
 prints the chain, every provider ID with local/cloud, and the commands
@@ -249,6 +273,8 @@ $ shelp config add endpoint openrouter --preset openrouter \
 $ shelp config add endpoint work --base-url https://llm.internal.example.com/v1 \
     --key-env WORK_LLM_API_KEY --model gpt-4o-mini
 $ shelp config add local fm-serve --base-url http://127.0.0.1:11535/v1 --label "fm serve"
+$ shelp config add endpoint work --base-url https://llm.internal.example.com/v1 \
+    --key-env WORK_LLM_API_KEY --model gpt-4o-mini --model gpt-4o --replace
 $ shelp config remove work
 ```
 
@@ -259,7 +285,10 @@ variable is set in your shell (never its value) and, if not, to add
 one `[[openai.endpoint]]`/`[[openai.local]]` entry at the end of the file;
 on a terminal it offers to put the new providers at the end of your chain,
 otherwise it prints the `shelp config chain ...` command that would.
-`remove` deletes the entry (and its providers from your chain).
+`--replace` changes the route of that name in place instead (keeping the
+entry's comments and other keys; provider IDs that go away leave your
+chain; with no such route it adds one); without it, a taken name is an
+error. `remove` deletes the entry (and its providers from your chain).
 
 **chezmoi and symlinks.** If the config file is managed by chezmoi or is a
 symlink, shelp never writes it: it prints the exact change and the

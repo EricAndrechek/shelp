@@ -147,9 +147,11 @@ Full text and every trap: `docs/config-tui-history.md`.
   so a lone Esc is told from a sequence and a key reader stops without
   stealing the next prompt's input, pure `Decoder`, shift/option-arrows all
   count as Shift. The manager is a pure model (`manager.go`: Update/View
-  emitting probe/fix/save effects) plus `manager_form.go`, `manager_run.go`
-  (restores the terminal on return/panic/SIGTERM/SIGHUP), `manager_tty.go`
-  (alt screen; use `\r\n`, output processing is off in raw mode).
+  emitting probe/setup/save effects; `manager_detail.go` the details page,
+  `manager_keys.go` the "KEY to ACTION" hints) plus `manager_form.go`,
+  `manager_run.go` (restores the terminal on return/panic/SIGTERM/SIGHUP),
+  `manager_tty.go` (alt screen; use `\r\n`, output processing is off in
+  raw mode).
 - Manager traps: raw-mode Ctrl-C is byte 0x03, not SIGINT (return
   `errInterrupted`, exit 130); read the `probeProviders` seam before spawning
   probe goroutines (they outlive the loop; race detector); Detect is
