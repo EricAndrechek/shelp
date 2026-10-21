@@ -66,7 +66,9 @@ Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
     ask the binary (`SHELP_PROVIDER=__kind command shelp __kind ARGS`),
     because a shell keeps the hook it loaded until `exec zsh`
     (`TestRender_NoCommandLists`; 2026-10-09 incident). Raw line mode
-    decides only `explain`/`-e`, `''` and `-*` itself.
+    decides only `explain`/`-e`/`suggest` (text starting with `-` runs as
+    typed, so `shelp explain -p fm ls` gets its flags; otherwise the text
+    goes raw), `''` and `-*` itself.
   - **The three `shelp` wrappers call no other hook function** (a shell
     snapshot, Claude Code's, drops `_`-prefixed functions);
     `TestRender_WrapperSelfContained`. `_shelp_is_task` is raw-line-only.
@@ -134,7 +136,11 @@ Full text and every trap: `docs/config-tui-history.md`.
   with a plain (non-`.tmpl`, non-encrypted, non-`modify_`/`create_`) chezmoi
   source it offers (default No) to edit the source and run `chezmoi apply`.
   Prompts take Ctrl-C and Esc (Esc = no).
-- `commandFor`: `config add` claims only bare `add`, `add -h`, `add
+- `commandFor`: a word starting with `-` right after `help`, `version`,
+  `config` or `history` claims the line (a typo'd flag gets that command's
+  flag error, never a model call; `config -i` reached the model before
+  v0.3.1); a task is forced with `shelp suggest ...` or `shelp -- ...`.
+  `config -i`/`--interactive` = `providers -i`. `config add` claims only bare `add`, `add -h`, `add
   endpoint|local ...`; `config remove` at most one more word; `history` only
   with no args, all-flag args, or `show|clear|path` first (`isHistoryArgs`),
   so `history of git commits` is a task.
@@ -362,8 +368,8 @@ store, the bench circuit breaker, offline handling).
   `SHELP_LIVE_SHORTCUTS=1`), then clear the gate and restore PATH for that
   test only. `/usr/bin/log` and `plutil` are not gated. A new test package
   that reaches providers needs its own `TestMain` line.
-- `make ci` on 2026-10-20 (after merging tui-config, history, polish): pty
-  suite 379/379 (zsh 214, bash 82, fish 83), `go test -race` green.
+- `make ci` on 2026-10-21 (after merging mgr-ux and cmd-shapes): pty
+  suite 423/423 (zsh 236, bash 93, fish 94), `go test -race` green.
 - Release checklist: `make sign-shortcut` if the generator changed or the
   embedded copy is within ~60 days of expiry; `make ci`; tag; bump
   `Formula/shelp.rb`'s tag; `git -C "$(brew --repository

@@ -17,9 +17,11 @@ lists had already drifted once). A shell keeps the hook it loaded until
 `exec zsh`, so only the binary can know its commands. The SHELP_PROVIDER
 guard makes a shelp older than `__kind` (which takes `__kind ...` for a
 task) fail at once instead of calling a model; any answer but "task"
-runs the line as typed. Raw line mode still decides `explain`/`-e` (raw
-explain), `''` and `-*` (run as typed: flags need the shell's parsing)
-itself; for anything else `_shelp_line_is_task` passes the words split
+runs the line as typed. Raw line mode still decides `explain`/`-e` and
+`suggest` (raw explain/suggest, except text starting with `-`, which runs
+as typed so its flags are parsed: before v0.3.1 `shelp explain -p fm ls`
+sent `-p fm ls` to the model as the command), `''` and `-*` (run as
+typed: flags need the shell's parsing) itself; for anything else `_shelp_line_is_task` passes the words split
 on whitespace only (a quoted word is never a command) and cut at the
 first operator/redirection (`shelp help config | less` asks about `help
 config`). Cost: one exec per `shelp` line, ~6ms (~7-9ms in-shell), two
@@ -125,7 +127,8 @@ deterministic `zzhost:*` IDs; bash needs a third Tab to list.
   `TestCompletionFlagsCoverHelp`/`TestCompletionCommandsCoverHelp` tie the
   tables to help.go.
 - **Pty suite** (`scripts/test-shell-integration.py`): `SHELP_STUB_STDERR`
-  makes the stub print stderr; `SHELP_STUB_COMMANDS` also feeds
+  makes the stub print stderr; `SHELP_STUB_ARGV_LOG` logs each
+  suggest/explain argv (`flag_checks` assert flags arrive as flags); `SHELP_STUB_COMMANDS` also feeds
   `__complete`. Sessions get `XDG_STATE_HOME`, `XDG_CACHE_HOME`,
   `SHELP_HISTORY=0`, and SIGINT reset to the default in the child (a suite
   run as an `&` background job inherited an ignored SIGINT and bash's
