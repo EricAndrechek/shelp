@@ -174,10 +174,14 @@ function _shelp_on_enter
     set -l rest (string replace -r '^shelp\s+' '' -- $line)
     set -l word1 (string replace -r '^(\S*).*' '$1' -- $rest)
     switch $word1
-        case explain -e
+        case explain -e suggest
             set -l tail (string replace -r '^'"$word1"'\s+' '' -- $rest)
-            if test -z "$tail"
+            if test -z "$tail" -o "$tail" = "$rest"; or string match -q -- '-*' $tail
+                # Bare, or flags first (`shelp explain -p fm ls -la`): only
+                # the shell can parse those, so the line runs as typed.
                 commandline -f execute
+            else if test "$word1" = suggest
+                _shelp_raw_dispatch suggest "$line" "$tail"
             else
                 _shelp_raw_dispatch explain "$line" "$tail"
             end

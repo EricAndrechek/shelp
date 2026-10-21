@@ -153,12 +153,16 @@ case $- in
       rest=${rest#"${rest%%[^[:space:]]*}"}
       local word1=${rest%%[[:space:]]*}
       case $word1 in
-        explain | -e)
+        explain | -e | suggest)
           local tail=${rest#"$word1"}
           tail=${tail#"${tail%%[^[:space:]]*}"}
+          # Bare, or flags first (`shelp explain -p fm ls -la`): only the
+          # shell can parse those, so the line runs as typed.
           [ -n "$tail" ] || return 0
+          case $tail in -*) return 0 ;; esac
           history -s -- "$line" 2>/dev/null
-          READLINE_LINE="shelp explain -- $(printf '%q' "$tail")"
+          [ "$word1" = suggest ] || word1=explain
+          READLINE_LINE="shelp $word1 -- $(printf '%q' "$tail")"
           READLINE_POINT=${#READLINE_LINE}
           ;;
         '' | -*)

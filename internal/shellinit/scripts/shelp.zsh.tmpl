@@ -260,11 +260,15 @@ shelp-accept-line() {
       rest=${rest#"${rest%%[^[:space:]]*}"}
       local word1=${rest%%[[:space:]]*}
       case $word1 in
-        explain|-e)
+        explain|-e|suggest)
           local tail=${rest#"$word1"}
           tail=${tail#"${tail%%[^[:space:]]*}"}
-          if [[ -z $tail ]]; then
+          if [[ -z $tail || $tail == -* ]]; then
+            # Bare, or flags first (`shelp explain -p fm ls -la`): only
+            # the shell can parse those, so the line runs as typed.
             zle accept-line
+          elif [[ $word1 == suggest ]]; then
+            _shelp_raw_dispatch suggest "$raw" "$tail"
           else
             _shelp_raw_dispatch explain "$raw" "$tail"
           fi ;;

@@ -420,6 +420,12 @@ STUB_SOURCE = textwrap.dedent(
     if not args or args[0] not in ("suggest", "explain"):
         delegate()
 
+    argv_log = os.environ.get("SHELP_STUB_ARGV_LOG")
+    if argv_log:
+        import json
+        with open(argv_log, "a") as f:
+            f.write(json.dumps(args) + "\\n")
+
     # Real shelp catches SIGINT (signal.NotifyContext), which also undoes an
     # inherited SIG_IGN -- zsh's background job starts with one.
     import signal
@@ -771,6 +777,81 @@ def kind_checks(s, results, label, shell, prompt_re, model_log, model_log_shell=
     asked = open(model_log).read() if os.path.exists(model_log) else ""
     results.check(f"{label}: a shelp without __kind is never asked to suggest for `__kind ...`",
                   asked == "", repr(asked))
+
+
+def flag_checks(s, results, label, shell, prompt_re, argv_log, argv_log_shell=None):
+    """Flags reach the CLI as flags, and a task's text is not mangled.
+    `shelp explain -p fm ls -la` once sent `-p fm ls -la` to the model as
+    the command to explain (raw line mode passed everything after
+    `explain` as the payload). The stub logs each suggest/explain argv
+    (SHELP_STUB_ARGV_LOG): flags first runs as typed, so argv is exactly
+    the words with no `--`; otherwise the text arrives as ONE argument
+    after `--`. Through raw line mode and the wrapper (`true && ...`)."""
+    import json
+    k = KIND_SHELL[shell]
+
+    def do(line, wait=0.3):
+        s.buf = ""
+        s.send(line + "\r")
+        s.expect(prompt_re, timeout=8)
+        s.read_available(wait)
+
+    def calls():
+        try:
+            return [json.loads(l) for l in open(argv_log) if l.strip()]
+        except OSError:
+            return []
+
+    def run(typed):
+        before = len(calls())
+        s.buf = ""
+        s.send(typed + "\r")
+        end = time.time() + 8
+        while time.time() < end and len(calls()) == before:
+            s.read_available(0.1)
+        s.read_available(0.6)
+        s.send("\x15\r")  # drop a suggestion / answer bash's run> with nothing
+        s.expect(prompt_re, timeout=8)
+        s.read_available(0.3)
+        return calls()[before:]
+
+    def without_shell(argv):
+        a = list(argv)
+        if "--shell" in a:
+            i = a.index("--shell")
+            del a[i:i + 2]
+        return a
+
+    if os.path.exists(argv_log):
+        os.remove(argv_log)
+    do(k["setenv"].format("SHELP_STUB_ARGV_LOG", shlex.quote(argv_log_shell or argv_log)))
+    for how, pre in (("raw line", ""), ("wrapper", "true && ")):
+        for typed, want in (
+            ("shelp explain -p fm ls -la", ["explain", "-p", "fm", "ls", "-la"]),
+            ("shelp suggest -p fm find big files", ["suggest", "-p", "fm", "find", "big", "files"]),
+            ("shelp -p fm find big files", ["suggest", "-p", "fm", "find", "big", "files"]),
+        ):
+            got = run(pre + typed)
+            ok = len(got) == 1 and without_shell(got[0]) == want
+            results.check(f"{label}: {how}: `{typed}` passes its flags as flags", ok, repr(got))
+    for how, pre in (("raw line", ""), ("wrapper", "true && ")):
+        for typed, mode, text in (
+            ("shelp explain ls -la", "explain", "ls -la"),
+            ("shelp suggest what's my ip", "suggest", "what's my ip"),
+            ("shelp suggest config -i", "suggest", "config -i"),
+        ):
+            if pre and mode == "suggest" and "'" in text:
+                continue  # the wrapper is the shell's own parsing: an apostrophe is the user's to quote
+            got = run(pre + typed)
+            if pre:
+                # the wrapper hands the shell's words on; the stub joins them
+                ok = len(got) == 1 and got[0][0] == mode and " ".join(
+                    a for a in without_shell(got[0])[1:] if a != "--") == text
+            else:
+                a = without_shell(got[0]) if len(got) == 1 else []
+                ok = a == [mode, "--", text]
+            results.check(f"{label}: {how}: `{typed}` sends {text!r} as the text", ok, repr(got))
+    do(k["unset"].format("SHELP_STUB_ARGV_LOG"))
 
 
 HINT_ROWS = ["shelp: stub hint one", "second hint line"]
@@ -1404,6 +1485,7 @@ def run_zsh(tmpdir, results, real_bin, stub_dir, zsh_bin, with_plugins=None):
         results.check(f"{label}: plain `echo hi` still runs", ok, s.buf[-300:])
 
         kind_checks(s, results, label, "zsh", r"TESTPROMPT% \r?$", os.path.join(home, "model.log"))
+        flag_checks(s, results, label, "zsh", r"TESTPROMPT% \r?$", os.path.join(home, "argv.log"))
 
         zsh_prompt_re = r"TESTPROMPT% \r?$"
         stderr_success_checks(s, results, label, "zsh", "TESTPROMPT% ", zsh_prompt_re, [])
@@ -1791,6 +1873,7 @@ def run_bash(tmpdir, results, real_bin, stub_dir, bash_bin):
         results.check("bash: plain `echo hi` still runs", ok, s.buf[-300:])
 
         kind_checks(s, results, "bash", "bash", r"TESTPROMPT\$ \r?$", os.path.join(home, "model.log"))
+        flag_checks(s, results, "bash", "bash", r"TESTPROMPT\$ \r?$", os.path.join(home, "argv.log"))
 
         bash_prompt_re = r"TESTPROMPT\$ \r?$"
         stderr_success_checks(s, results, "bash", "bash", "TESTPROMPT$ ", bash_prompt_re, [])
@@ -2228,6 +2311,8 @@ def run_fish(tmpdir, results, host):
 
         kind_checks(s, results, "fish", "fish", r"TESTPROMPT% \r?$", os.path.join(home, "model.log"),
                     host.text_prefix and host.text_prefix + "/model.log")
+        flag_checks(s, results, "fish", "fish", r"TESTPROMPT% \r?$", os.path.join(home, "argv.log"),
+                    host.text_prefix and host.text_prefix + "/argv.log")
 
         s.buf = ""
         s.send("set -x SHELP_STUB_SLEEP 3\r")
