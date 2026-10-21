@@ -419,8 +419,8 @@ same provider to help stay under a rate limit in the first place. See
 > **Outdated numbers.** The table below is from a run on 2026-09-30 with
 > the older `v2` prompt template (the default is now `v4`). Apple
 > Intelligence Pro was rate-limited for most of that run (72% unavailable),
-> so its row covers few trials. A fresh run is planned.
-> <!-- TODO: link the benchmark issue -->
+> so its row covers few trials. A fresh run is planned:
+> [#1](https://github.com/EricAndrechek/shelp/issues/1).
 
 <!-- bench:start -->
 | Provider | Template | Trials | Graded% | Mean score% | Fully-correct% | Format-clean% | Unavailable% | Suggest p50/p90 | Explain first-chunk p50 | Explain total p50 | Cold p50 |
