@@ -360,7 +360,7 @@ func localStartHint(r *mgrRow) string {
 // needs a terminal.
 func runProvidersInteractive(ctx context.Context, stdout, stderr io.Writer) error {
 	if !isInteractive(stdout) {
-		return usageError{fmt.Errorf("providers -i needs a terminal; without one use `shelp config chain ID,ID`, `shelp config add ...`, `shelp config remove NAME` or `shelp config edit` (`shelp config chain` lists the IDs)")}
+		return usageError{fmt.Errorf("the provider manager needs a terminal; without one use `shelp config chain ID,ID`, `shelp config add ...`, `shelp config remove NAME` or `shelp config edit` (`shelp config chain` lists the IDs)")}
 	}
 	return runManagerFn(ctx, stdout, stderr)
 }
