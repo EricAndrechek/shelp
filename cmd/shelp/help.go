@@ -201,6 +201,8 @@ Commands
 
 Usage
   shelp config                 the config file and the effective settings
+  shelp config -i              open the provider manager (same as
+                               shelp providers -i; needs a terminal)
   shelp config chain [IDS]     set the provider chain: IDS (comma or space
                                separated) saves it; with none, on a terminal,
                                open the provider manager (below), and
@@ -231,7 +233,7 @@ Flags (config add)
                    that go away are taken out of the chain
   -h, --help       show help
 
-Provider manager (shelp providers -i, or shelp config chain on a terminal)
+Provider manager (shelp providers -i, shelp config -i, or shelp config chain on a terminal)
   Your chain on top, numbered in the order it is tried, then every other
   provider: available, needing setup, unavailable. "local" runs on this
   machine and works offline; "cloud" needs the internet. The bottom line

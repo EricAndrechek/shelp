@@ -112,6 +112,12 @@ func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	case "-h", "--help":
 		printHelp(stdout, "config")
 		return nil
+	case "-i", "--interactive":
+		if len(args) > 1 {
+			printHelp(stderr, "config")
+			return usageError{fmt.Errorf("%s takes no arguments, got %q", args[0], args[1])}
+		}
+		return runProvidersInteractive(ctx, stdout, stderr)
 	case "chain":
 		return runConfigChain(ctx, args[1:], stdout, stderr)
 	case "edit":
