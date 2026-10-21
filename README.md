@@ -641,7 +641,7 @@ through documented flags:
   setup asks you to **delete the old "shelp" first** (right-click ›
   Delete in the Shortcuts app), waits until it's gone, then opens the new
   one for a plain "Add Shortcut". (After a `brew upgrade shelp`, this is
-  the same command to reach for — see the Formula's caveats.)
+  the same command to reach for — see the Homebrew caveats.)
 - **Shortcuts from shelp 0.2.6 and earlier** were one per model, named
   `shelp · <Model>` / `shelp · <Model> + Web`. They're no longer used:
   `shelp setup shortcuts` and `shelp providers` list any you still have

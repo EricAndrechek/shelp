@@ -227,7 +227,7 @@ Moved out of CLAUDE.md verbatim (2026-10-20). CLAUDE.md keeps the rules; this ha
   Recorded in `$XDG_CACHE_HOME/shelp/shortcut-check.json`
   (`~/.cache/shelp/...` by default, alongside `cooldown.json`) so it only
   ever runs once per binary version. This is what a `brew upgrade shelp`
-  caveat points at (see `Formula/shelp.rb`) -- it's the mechanism that
+  caveat points at (see the formula in the tap) -- it's the mechanism that
   actually tells a user their Shortcuts wrapper needs updating, since
   Homebrew itself has no way to.
 

@@ -9,7 +9,7 @@ Antigravity, and Copilot CLI were all evaluated and dropped, see "Dropped
 backends" in README.md and the agentcli PURITY note below).
 Successor to the `ghcs`/`ghce` shell functions in Eric's dotfiles.
 
-Local-only repo for now (no remote). Module `github.com/ericandrechek/shelp`.
+Public repo: `github.com/EricAndrechek/shelp`. Module `github.com/ericandrechek/shelp`.
 
 ## Layout
 
@@ -371,10 +371,15 @@ store, the bench circuit breaker, offline handling).
 - `make ci` on 2026-10-21 (after merging mgr-ux and cmd-shapes): pty
   suite 423/423 (zsh 236, bash 93, fish 94), `go test -race` green.
 - Release checklist: `make sign-shortcut` if the generator changed or the
-  embedded copy is within ~60 days of expiry; `make ci`; tag; bump
-  `Formula/shelp.rb`'s tag; `git -C "$(brew --repository
-  ericandrechek/shelp)" pull && brew upgrade ericandrechek/shelp/shelp`.
-- Commits: one change per commit; this repo has no remote.
+  embedded copy is within ~60 days of expiry; `make ci`; a signed annotated
+  tag `vX.Y.Z` (`git tag -s vX.Y.Z`; its message becomes the release
+  notes); `git push origin main vX.Y.Z`; the `Release` workflow builds the
+  assets and publishes the GitHub release; the tap's (`EricAndrechek/
+  homebrew-tap`) `autobump` pins the new version once it verifies the
+  tag's signature (the "Homebrew tap" workflow asks it to check right
+  away). Then `brew upgrade ericandrechek/tap/shelp` locally. The formula
+  lives in the tap, not here.
+- Commits: one change per commit.
 
 ## Benchmarking etiquette (learned the hard way, 2026-09-30)
 
@@ -402,7 +407,3 @@ store, the bench circuit breaker, offline handling).
   its place only if it's faster or limited separately from Pro.
 - The Keep Both branch of the update wait is covered by scripted tests
   only (delete-first makes it rare); Replace was run live with format 4.
-- Publishing (on hold, Eric's call): a GitHub remote, release tarballs
-  for the formula's url + sha256 (today a file:// git URL to this
-  folder), a real tap repo; CI (`.github/workflows/ci.yml`) is ready and
-  only runs `make ci`.
