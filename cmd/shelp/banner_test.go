@@ -49,7 +49,7 @@ func TestBannerPlain(t *testing.T) {
 			t.Errorf("usage lacks %q", w)
 		}
 	}
-	if n := strings.Count(usage, "\n"); n > 25 {
+	if n := strings.Count(usage, "\n"); n > 27 {
 		t.Errorf("top-level help is %d lines, want it short", n)
 	}
 }

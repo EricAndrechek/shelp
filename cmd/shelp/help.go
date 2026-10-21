@@ -38,6 +38,9 @@ Flags
   -v, --verbose        show which provider answered, and how fast
   -h, --help           show help
 
+Flags go before the text: shelp -p fm <task>, shelp explain -p fm <command>.
+"shelp suggest <task>" forces a task even if it starts with a command name.
+
 Run "shelp help <command>" for a command's flags, "shelp help config" for every setting.
 `
 
@@ -65,6 +68,10 @@ Usage
 
 Prints only the command. Words that do not start with a command name
 (or a flag) are the task, so "suggest" is optional.
+
+Flags go before the task: shelp -p fm <task>. "shelp suggest <task>" always
+treats the rest as the task, even when it starts with a command name
+("shelp suggest config -i" asks the model); -- ends the flags.
 ` + generateFlags,
 
 	"explain": `shelp explain: explain a shell command.
@@ -72,6 +79,9 @@ Prints only the command. Words that do not start with a command name
 Usage
   shelp explain [flags] <command…>
   shelp -e [flags] <command…>
+
+Flags go before the command: shelp explain -p fm ls -la. -- ends the flags,
+so a command that starts with - works: shelp explain -- -rf.
 ` + generateFlags,
 
 	"providers": `shelp providers: list model providers and whether they work.
