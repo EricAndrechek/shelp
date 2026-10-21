@@ -572,7 +572,7 @@ def raw_cases(tmpdir, text_prefix=None):
         ("unquoted path with spaces", f"list files in {text_space_dir}/"),
         ("glob with match present", "compress all *.log files"),
         ("dollar HOME literal", "print $HOME please"),
-        ("backslashes", r"escape this: C:\Users\eric\thing"),
+        ("backslashes", r"escape this: C:\Users\me\thing"),
         ("pipe", 'test | echo "test"'),
         ("and-and", 'print hi && echo "hi"'),
         ("semicolon", "list files; then count them"),

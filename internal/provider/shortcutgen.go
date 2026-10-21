@@ -17,7 +17,7 @@ package provider
 // Every action shape below is taken from a real, stored action, never
 // guessed. Sources, cited per type: the live-verified format 4 generator
 // (which itself came from Gallery.bundle's Haiku.wflow and the If actions
-// in Eric's library); read-only copies of Eric's Shortcuts library
+// in the author's library); read-only copies of the author's Shortcuts library
 // (~/Library/Shortcuts/Shortcuts.sqlite, ZSHORTCUTACTIONS.ZDATA, macOS 27);
 // and github.com/viticci/shortcuts-playground-plugin's CONTROL_FLOW.md and
 // EXAMPLES.md (macOS 27, checked against Apple-built samples).

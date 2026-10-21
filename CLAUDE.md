@@ -7,7 +7,7 @@ OpenAI-compatible endpoints (hosted with a key, or local: LM Studio, Ollama,
 llama-server), or an installed AI CLI (claude -- gemini, codex,
 Antigravity, and Copilot CLI were all evaluated and dropped, see "Dropped
 backends" in README.md and the agentcli PURITY note below).
-Successor to the `ghcs`/`ghce` shell functions in Eric's dotfiles.
+Successor to the `ghcs`/`ghce` shell functions in the author's dotfiles.
 
 Public repo: `github.com/EricAndrechek/shelp`. Module `github.com/ericandrechek/shelp`.
 
@@ -196,7 +196,7 @@ Full text and every trap: `docs/config-tui-history.md`.
   purpose (`fm` reads a piped stdin as the prompt).
 - Families register in `init()`: `provider.Register(...)`; optional one-time
   installers: `provider.RegisterSetup(...)`.
-- Never hard-fail on name collisions: on Eric's Mac `goose` is the pressly
+- Never hard-fail on name collisions: on the author's Mac `goose` is the pressly
   DB-migration tool, not Block's agent, and `q` may not be Amazon Q. Verify
   identity (e.g. `--version` output) in `Detect`.
 

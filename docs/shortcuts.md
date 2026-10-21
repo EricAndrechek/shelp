@@ -133,7 +133,7 @@ Moved out of CLAUDE.md verbatim (2026-10-20). CLAUDE.md keeps the rules; this ha
   `ActionOutput` (`OutputName` "Text") of an `is.workflow.actions.gettext`
   holding Shortcut Input, the way Apple-built shortcuts compare text; and
   a missing wrapper (v2). No Gallery `.wflow` has a conditional; sources:
-  the 20 If actions in Eric's own library, and
+  the 20 If actions in the author's own library, and
   `viticci/shortcuts-playground-plugin`'s CONTROL_FLOW.md (macOS 27, checked
   against Apple-built samples). Newer Shortcuts also has a multi-condition
   `WFConditions` (`WFContentPredicateTableTemplate`) form; the
@@ -189,7 +189,7 @@ Moved out of CLAUDE.md verbatim (2026-10-20). CLAUDE.md keeps the rules; this ha
   format can't post a notification every second. Polls run every 1s.
   Legacy shortcuts and existing `<name> N` copies are pointed out and
   never run.
-- **Importing over an existing name** (verified with Eric, macOS 27,
+- **Importing over an existing name** (verified by the author, macOS 27,
   2026-10-07): the dialog says "Add Shortcut" (not "Replace"); clicking
   it asks "Replace" or "Keep Both", and NEITHER deletes anything. Replace:
   the new shortcut takes the name, the old one is renamed `<name> 1`.

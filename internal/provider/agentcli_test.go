@@ -535,7 +535,7 @@ func TestGenerate_Timeout(t *testing.T) {
 func TestDetect_Claude(t *testing.T) {
 	fakePATH(t)
 	t.Setenv("SHELP_FAKE_VERSION", "2.1.285 (Claude Code)")
-	t.Setenv("SHELP_FAKE_AUTH_JSON", `{"loggedIn":true,"email":"eric@wave-rf.com","subscriptionType":"max"}`)
+	t.Setenv("SHELP_FAKE_AUTH_JSON", `{"loggedIn":true,"email":"user@example.com","subscriptionType":"max"}`)
 
 	p := newProvider(claudeSpec, "haiku")
 	st := p.Detect(context.Background())
