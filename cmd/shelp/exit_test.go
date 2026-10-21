@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -24,5 +25,14 @@ func TestExitCode(t *testing.T) {
 		if code, show := exitCode(c.ctx, c.err); code != c.code || show != c.show {
 			t.Errorf("%s: got %d, %v; want %d, %v", c.name, code, show, c.code, c.show)
 		}
+	}
+}
+
+// moduleVersion feeds `shelp version` for `go install` builds: never
+// "(devel)", never a leading v.
+func TestModuleVersion(t *testing.T) {
+	v := moduleVersion()
+	if v == "(devel)" || strings.HasPrefix(v, "v") {
+		t.Errorf("moduleVersion() = %q", v)
 	}
 }

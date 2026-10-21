@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -26,9 +27,27 @@ import (
 	"github.com/ericandrechek/shelp/internal/style"
 )
 
+// version is set at build time (-X main.version=...) by the Makefile, the
+// release workflow and the Homebrew formula. `go install ...@v0.4.1` sets
+// nothing, so main falls back to the module version Go records in the
+// binary (a `go build` in a checkout records one from git too, such as
+// 0.4.0+dirty).
 var version = "dev"
 
+// moduleVersion is the main module's version from the build info, without
+// the leading v, or "" when there is none (a checkout's "(devel)").
+func moduleVersion() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
+		return ""
+	}
+	return strings.TrimPrefix(bi.Main.Version, "v")
+}
+
 func main() {
+	if v := moduleVersion(); version == "dev" && v != "" {
+		version = v
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
