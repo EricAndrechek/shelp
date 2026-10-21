@@ -126,7 +126,7 @@ func TestManagerLayout(t *testing.T) {
 	if !slices.Equal(order, []string{"ollama", "shortcuts:apple-pro", "shortcuts:chatgpt", "groq:llama", "claude:sonnet", "lmstudio"}) {
 		t.Errorf("others order %v", order)
 	}
-	for _, w := range []string{"  available", "  needs setup · Enter shows how", "  not available here"} {
+	for _, w := range []string{"  available", "  needs setup · enter shows how", "  not available here"} {
 		if !strings.Contains(v, w) {
 			t.Errorf("view lacks group %q", w)
 		}
@@ -202,7 +202,7 @@ func TestManagerToggleAndReorder(t *testing.T) {
 	m.cur = "claude:sonnet"
 	m.sync()
 	press(m, keys(" ")...)
-	if !m.msgWarn || !strings.Contains(m.msg, "Enter shows how") {
+	if !m.msgWarn || !strings.Contains(m.msg, "enter shows how") {
 		t.Errorf("msg %q", m.msg)
 	}
 	if o := m.ops(); !slices.Equal(o.chain, []string{"fm", "ollama", "claude:sonnet"}) {
@@ -236,9 +236,89 @@ func TestManagerNavigation(t *testing.T) {
 	if m.idx != 2 {
 		t.Errorf("jj: %d", m.idx)
 	}
+}
+
+// The footer is one dim line of "KEY to ACTION" phrases for the row under
+// the cursor; ? swaps it for a grid of every key.
+func TestManagerFooterHints(t *testing.T) {
+	m := testManager(t, "", true) // default chain: shortcuts:apple-pro, fm
+	foot := func() string {
+		lines := strings.Split(m.View(0, 0), "\n")
+		return lines[len(lines)-1]
+	}
+	if got, want := foot(), "space to remove · shift+↑↓ to reorder · ? for shortcuts"; got != want {
+		t.Errorf("chain row footer\n got %q\nwant %q", got, want)
+	}
+	m.cur = "ollama"
+	m.sync()
+	if got, want := foot(), "space to add · a to add a route · ? for shortcuts"; got != want {
+		t.Errorf("other row footer\n got %q\nwant %q", got, want)
+	}
+	m.cur = "lmstudio" // not running: says what this row needs
+	m.sync()
+	if got := foot(); !strings.Contains(got, "enter for how to set it up") {
+		t.Errorf("needs-setup row footer %q", got)
+	}
+	// One hint line, no glyph modifiers anywhere.
+	v := m.View(0, 0)
+	for _, g := range []string{"⇧", "⌥", "⌃"} {
+		if strings.Contains(v, g) {
+			t.Errorf("view has %q:\n%s", g, v)
+		}
+	}
+	// A narrow terminal drops the least useful phrases, never "? for shortcuts".
+	m.cur = "shortcuts:apple-pro"
+	m.sync()
+	press(m, keys("J")...) // dirty: s to save joins in
+	if got := fitHints(m.listHints(), 0); !strings.Contains(got, "s to save") {
+		t.Errorf("dirty footer %q", got)
+	}
+	if got := fitHints(m.listHints(), 40); style.Width(got) > 39 || !strings.HasSuffix(got, "? for shortcuts") || !strings.HasPrefix(got, "space to remove") {
+		t.Errorf("40 columns: %q", got)
+	}
+	// ? shows the grid instead of the line; ? or esc closes it.
 	press(m, keys("?")...)
-	if !strings.Contains(viewOf(m), "x, Delete") {
-		t.Error("? shows no key help")
+	v = m.View(100, 0)
+	t.Logf("grid at 100 columns:\n%s", v)
+	for _, w := range []string{"↑↓ to move", "shift+↑↓ to reorder", "ctrl+c to quit now", "? to close", "also: j/k to move"} {
+		if !strings.Contains(v, w) {
+			t.Errorf("grid lacks %q", w)
+		}
+	}
+	if strings.Contains(v, "? for shortcuts") {
+		t.Error("the grid and the hint line both show")
+	}
+	press(m, kEsc)
+	if m.help || m.quit || m.mode != modeList {
+		t.Errorf("esc with the grid open: help %v quit %v", m.help, m.quit)
+	}
+}
+
+func TestKeyGrid(t *testing.T) {
+	cells := []string{"a to x", "bb to y", "ccc to z", "d to w", "eeeee to v", "? to close"}
+	got := keyGrid(cells, 0)
+	want := []string{
+		"a to x       bb to y      ccc to z   d to w",
+		"eeeee to v   ? to close",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("4 columns:\n%s", strings.Join(got, "\n"))
+	}
+	// Narrower: fewer columns, still aligned.
+	got = keyGrid(cells, 30)
+	for _, l := range got {
+		if style.Width(l) > 29 {
+			t.Errorf("too wide for 30: %q", l)
+		}
+	}
+	if len(got) != 3 || got[1] != "ccc to z     d to w" {
+		t.Errorf("30 columns:\n%s", strings.Join(got, "\n"))
+	}
+	if got := keyGrid(cells, 8); len(got) != len(cells) {
+		t.Errorf("one column: %q", got)
+	}
+	if got := wrapPhrases("also: ", []string{"one two", "three", "four five"}, 22); len(got) != 2 || got[1] != "      four five" {
+		t.Errorf("wrap: %q", got)
 	}
 }
 

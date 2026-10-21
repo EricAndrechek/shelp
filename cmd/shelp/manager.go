@@ -310,6 +310,8 @@ func (m *manager) Update(k term.Key) {
 		m.sync()
 	case k.Is('?'):
 		m.help = !m.help
+	case k.Code == term.KeyEsc && m.help: // Esc closes the key grid first
+		m.help = false
 	case k.Code == term.KeyEsc || k.Is('q'):
 		if !m.dirty() {
 			m.quit = true
@@ -357,9 +359,9 @@ func (m *manager) toggle() {
 	r := m.rows[id]
 	switch {
 	case r != nil && r.class() != clsOK && r.class() != clsChecking:
-		m.say(true, "added %s, but it does not work here yet: Enter shows how to set it up", id)
+		m.say(true, "added %s, but it does not work here yet: enter shows how to set it up", id)
 	default:
-		m.say(false, "added %s as #%d; ⇧↑ or K moves it up", id, len(m.chain))
+		m.say(false, "added %s as #%d; shift+↑ moves it up", id, len(m.chain))
 	}
 }
 
@@ -555,7 +557,7 @@ func (m *manager) View(width, height int) string {
 	} else {
 		head := m.headLines()
 		body, at := m.bodyLines(width)
-		foot := m.footLines()
+		foot := m.footLines(width)
 		if avail := height - len(head) - len(foot); height > 0 && len(body) > avail && avail >= 3 {
 			body = m.crop(body, at, avail)
 		}
@@ -630,8 +632,8 @@ func (m *manager) bodyLines(width int) (out []string, at int) {
 	out = append(out, "", p.Bold("Other providers")+p.Dim(" · space adds one to the end of the chain"))
 	titles := map[int]string{
 		clsOK:          "available",
-		clsSetup:       "needs setup · Enter shows how",
-		clsUnavailable: "not available here · Enter shows how to start or install it",
+		clsSetup:       "needs setup · enter shows how",
+		clsUnavailable: "not available here · enter shows how to start or install it",
 		clsChecking:    "checking…",
 	}
 	last := -1
@@ -704,50 +706,19 @@ func (m *manager) rowLine(id string, num int, sel bool, w mgrWidths) string {
 		style.PadRight(whereBadge(p, provider.Kind(r.Kind)), 5) + "  " + tail
 }
 
-func (m *manager) footLines() []string {
+// footLines are a blank line, the question or the last message if there
+// is one, then the key hints (one dim line, or the ? grid). A question
+// says its own keys, so it stands alone.
+func (m *manager) footLines(width int) []string {
 	p := m.pal
 	out := []string{""}
 	switch {
 	case m.mode == modeConfirm:
-		out = append(out, p.Bold(p.Warn(m.question)))
+		return append(out, p.Bold(p.Warn(m.question)))
 	case m.msg != "" && m.msgWarn:
 		out = append(out, p.Warn(m.msg))
 	case m.msg != "":
 		out = append(out, p.OK(m.msg))
-	default:
-		out = append(out, p.Dim(m.hint()))
 	}
-	out = append(out, p.Dim("↑↓ move · space add/remove · ⇧↑⇧↓ or K/J reorder · enter fix · a add route · s save · q quit · ? keys"))
-	if m.help {
-		out = append(out,
-			p.Dim("  ↑/↓, k/j          move                 space      put in / take out of the chain"),
-			p.Dim("  ⇧↑/⇧↓, K/J, +/-   move a chain entry   enter      how to set up a provider that needs it"),
-			p.Dim("  a                 add a route: a hosted OpenAI-compatible endpoint (key from an env var) or a local server"),
-			p.Dim("  x, Delete         remove a route you added           r   check every provider again"),
-			p.Dim("  s                 save to the config file            q, Esc   quit (asks first if unsaved)   Ctrl-C   quit now"),
-		)
-	}
-	return out
-}
-
-// hint is the footer line for the highlighted row.
-func (m *manager) hint() string {
-	r := m.rows[m.cur]
-	inChain := slices.Contains(m.chain, m.cur)
-	var parts []string
-	switch {
-	case r == nil:
-		return "space: take it out of the chain"
-	case inChain:
-		parts = append(parts, "space: take it out of the chain", "⇧↑⇧↓ or K/J: move it")
-	default:
-		parts = append(parts, "space: put it at the end of the chain")
-	}
-	if c := r.class(); c == clsSetup || c == clsUnavailable {
-		parts = append(parts, "enter: how to set it up")
-	}
-	if r.hasRoute && (r.route.Configured || r.isNew) {
-		parts = append(parts, "x: remove this route")
-	}
-	return strings.Join(parts, " · ")
+	return append(out, m.keyLines(width)...)
 }

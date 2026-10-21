@@ -322,16 +322,16 @@ func (f *addForm) view(p style.Palette, width int) []string {
 	case hint != "":
 		out = append(out, p.Dim(hint))
 	}
-	keys := "enter next · shift+tab back · esc cancel · ctrl-c quit"
+	keys := []keyHint{{"enter for next", keepHigh}, {"shift+tab to go back", keepMid}, {"esc to cancel", keepAlways}}
 	switch f.step {
 	case stepKind, stepPreset:
-		keys = "↑↓ choose · enter next · shift+tab back · esc cancel"
+		keys = append([]keyHint{{"↑↓ to choose", keepHigh}}, keys...)
 	case stepChain:
-		keys = "y yes · n no · esc cancel"
+		keys = []keyHint{{"y for yes", keepAlways}, {"n for no", keepAlways}, {"esc to cancel", keepAlways}}
 	case stepReview:
-		keys = "enter add it · shift+tab back · esc cancel"
+		keys[0].text = "enter to add it"
 	}
-	return append(out, "", p.Dim(keys))
+	return append(out, "", p.Dim(fitHints(keys, width)))
 }
 
 func routeKind(r provider.CustomRoute) provider.Kind {
@@ -398,7 +398,7 @@ func (f *addForm) question() (q, hint string) {
 	case stepModels:
 		return "Model IDs, as the API names them (comma-separated)", "each one becomes a provider, " + f.val(stepName) + ":<model>"
 	case stepLabel:
-		return "Label (optional)", "how it reads in lists, e.g. \"Haiku via OpenRouter\"; Enter skips it"
+		return "Label (optional)", "how it reads in lists, e.g. \"Haiku via OpenRouter\"; enter skips it"
 	case stepReview:
 		return "Add this route?", "it goes in your config file when you save in the list (s)"
 	case stepChain:
@@ -443,7 +443,7 @@ func (f *addForm) keyStatus(p style.Palette) []string {
 	v := f.val(stepKeyEnv)
 	if v == "" {
 		if _, k, ok := provider.PresetDefaults(f.preset); ok {
-			return []string{p.Dim("Enter uses " + f.preset + "'s usual $" + k)}
+			return []string{p.Dim("enter uses " + f.preset + "'s usual $" + k)}
 		}
 		return []string{p.Dim("empty: requests are sent without a key")}
 	}
