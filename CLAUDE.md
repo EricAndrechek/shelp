@@ -373,12 +373,16 @@ store, the bench circuit breaker, offline handling).
 - Release checklist: `make sign-shortcut` if the generator changed or the
   embedded copy is within ~60 days of expiry; `make ci`; a signed annotated
   tag `vX.Y.Z` (`git tag -s vX.Y.Z`; its message becomes the release
-  notes); `git push origin main vX.Y.Z`; the `Release` workflow builds the
+  notes); `git push origin main`, wait for CI on main to pass, then `git
+  push origin vX.Y.Z` on its own (GitHub fires no workflow events when more
+  than three tags arrive in one push); the `Release` workflow builds the
   assets and publishes the GitHub release; the tap's (`EricAndrechek/
   homebrew-tap`) `autobump` pins the new version once it verifies the
-  tag's signature (the "Homebrew tap" workflow asks it to check right
-  away). Then `brew upgrade ericandrechek/tap/shelp` locally. The formula
-  lives in the tap, not here.
+  tag's signature and that GitHub's tarball is the tag's tree. The
+  "Homebrew tap" workflow asks it to check right away, using the repo
+  secret `HOMEBREW_TAP_TRIGGER_TOKEN` (set 2026-10-22; the token lives in
+  the tap checkout's untracked `.env`). Then `brew upgrade
+  ericandrechek/tap/shelp` locally. The formula lives in the tap, not here.
 - Commits: one change per commit.
 
 ## Benchmarking etiquette (learned the hard way, 2026-09-30)
@@ -398,12 +402,13 @@ store, the bench circuit breaker, offline handling).
   successful import did too. Have the user run that first check
   themselves.
 
-## Open items (2026-10-09)
+## Open items (2026-10-22)
 
-- Benchmark the other Shortcuts variants (apple, apple-web, apple-pro-web,
-  chatgpt, chatgpt-web) -- one installed shortcut serves them all now --
-  and grade v4's Markdown explain output; pace them (`--min-interval`) to
-  stay under Apple's limit. Plain "Apple Intelligence" (also PCC) earns
+- Re-run the benchmark (GitHub issue #1): the README's table is from
+  2026-09-30 with the v2 template. Cover the other Shortcuts variants
+  (apple, apple-web, apple-pro-web, chatgpt, chatgpt-web) -- one installed
+  shortcut serves them all now -- and grade v4's Markdown explain output;
+  pace them (`--min-interval`) to stay under Apple's limit. Plain "Apple Intelligence" (also PCC) earns
   its place only if it's faster or limited separately from Pro.
 - The Keep Both branch of the update wait is covered by scripted tests
   only (delete-first makes it rare); Replace was run live with format 4.
