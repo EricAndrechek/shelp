@@ -1,0 +1,23 @@
+# Keep the pinned action SHAs and the Go modules current. A new release
+# waits a week before Dependabot proposes it, so a bad or compromised
+# release has time to be noticed and pulled first.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      go:
+        patterns: ["*"]
