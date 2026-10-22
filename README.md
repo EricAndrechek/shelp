@@ -37,7 +37,9 @@ go install github.com/ericandrechek/shelp/cmd/shelp@latest
 ```
 
 Binaries for macOS and Linux are on the
-[releases page](https://github.com/EricAndrechek/shelp/releases).
+[releases page](https://github.com/EricAndrechek/shelp/releases). Each
+carries a build attestation: `gh attestation verify <file> -R
+EricAndrechek/shelp` checks it was built here from a signed tag.
 
 Then run the guided setup. It adds the shell hook, installs the Apple
 Shortcut if you want it, and picks your providers:
