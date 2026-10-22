@@ -383,7 +383,19 @@ store, the bench circuit breaker, offline handling).
   secret `HOMEBREW_TAP_TRIGGER_TOKEN` (set 2026-10-22; the token lives in
   the tap checkout's untracked `.env`). Then `brew upgrade
   ericandrechek/tap/shelp` locally. The formula lives in the tap, not here.
-- Commits: one change per commit.
+- Commits: one change per commit, GPG-signed (the `main` ruleset rejects
+  unsigned commits, force-pushes and deletion; the `release tags` ruleset
+  lets only repo admins create `v*` tags and nobody move or delete them).
+- Supply chain (2026-10-22): every action is pinned to a full commit SHA
+  with its version in a comment, and Dependabot (`.github/dependabot.yml`,
+  7-day cooldown) keeps them and the Go modules current; checkouts use
+  `persist-credentials: false`; the release builds without caches, attests
+  build provenance (`gh attestation verify <file> -R EricAndrechek/shelp`)
+  and creates a draft before publishing, because releases are immutable
+  once published. `uvx zizmor .github/workflows/` should stay clean (one
+  pedantic hint about `./` vs `$/` reusable-workflow paths is left as is).
+  CodeQL default setup scans Go, Actions and Python; workflow runs from
+  outside contributors need approval.
 
 ## Benchmarking etiquette (learned the hard way, 2026-09-30)
 
