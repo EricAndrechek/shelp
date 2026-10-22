@@ -1,19 +1,36 @@
-# After a successful Release (a real tag push, not a dry run), ask the
-# Homebrew tap to pin the new version right away instead of waiting for its
-# six-hourly schedule. The tap verifies the signed tag before it pins.
 name: Homebrew tap
+
+# Ask EricAndrechek/homebrew-tap to pin the latest release. The tap pins
+# releases itself (its `autobump` workflow): livecheck finds the version,
+# and it pins it only once the tag proves to be signed by our key and the
+# GitHub tarball is exactly that tag's tree. This repo holds no key that can
+# write to the tap: HOMEBREW_TAP_TRIGGER_TOKEN is a fine-grained token
+# limited to the tap's Actions (read & write), so all it can do is start
+# that check early. Without it, the tap's six-hourly schedule picks the
+# release up anyway.
+#
+# Release calls this as its last job, after publishing; run it by hand to
+# test the token without cutting a release. A reusable workflow rather than
+# a workflow_run trigger, so nothing here ever runs for an event it didn't
+# expect.
+
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
+  workflow_call:
+    secrets:
+      HOMEBREW_TAP_TRIGGER_TOKEN:
+        required: false
   workflow_dispatch:
+
+# The tap is reached with the trigger token, not this repo's GITHUB_TOKEN.
 permissions: {}
+
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+
 jobs:
   ask-tap:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push')
+    name: Ask the tap to pin the release
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
