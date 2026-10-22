@@ -5,6 +5,7 @@ on:
   pull_request:
   workflow_dispatch:
 
+# CI only reads the code; fork pull requests get no secrets either way.
 permissions:
   contents: read
 
@@ -19,14 +20,17 @@ concurrency:
 # have none on macOS).
 jobs:
   macos:
+    name: macos
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
       # /bin/bash is 3.2; the zsh plugins add the suite's plugin-coexistence
       # runs, as on a Mac that has them.
       - name: Install shell-suite prerequisites
@@ -36,14 +40,17 @@ jobs:
   # Shortcuts/fm tests skip by capability here; the rest, shell suite
   # included, runs as on macOS.
   linux:
+    name: linux
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
       - name: Install shell-suite prerequisites
         run: sudo apt-get update && sudo apt-get install -y zsh fish
       - run: make ci
