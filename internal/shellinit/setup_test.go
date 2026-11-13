@@ -2,6 +2,7 @@ package shellinit
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -332,7 +333,7 @@ func TestSetup_UnknownShell(t *testing.T) {
 func TestSetupSkipsWhenHookActive(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("SHELP_HOOKS", "bash zsh")
+	t.Setenv("SHELP_HOOKS", fmt.Sprintf("bash:%d zsh:%d", os.Getppid(), os.Getppid()))
 	res, err := Setup(context.Background(), SetupOptions{Shell: "zsh"})
 	if err != nil {
 		t.Fatal(err)
@@ -343,8 +344,34 @@ func TestSetupSkipsWhenHookActive(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".zshrc")); !os.IsNotExist(err) {
 		t.Fatalf(".zshrc should not have been created (err=%v)", err)
 	}
-	t.Setenv("SHELP_HOOKS", "bash")
+	t.Setenv("SHELP_HOOKS", fmt.Sprintf("bash:%d", os.Getppid()))
 	if res, _ := Setup(context.Background(), SetupOptions{Shell: "zsh", DryRun: true}); res.Action == "active" {
 		t.Fatal("zsh hook should not count as active when only bash is hooked")
+	}
+}
+
+// An entry counts only when it names the shell that launched us: a nested
+// shell that never loaded the hook inherits its parent's entry (issue #2).
+// A bare name, from a hook loaded by shelp 0.4.2 or older, still counts.
+func TestHookActive(t *testing.T) {
+	me, other := os.Getppid(), os.Getppid()+1
+	for _, c := range []struct {
+		hooks string
+		want  bool
+	}{
+		{"", false},
+		{fmt.Sprintf("zsh:%d", me), true},
+		{fmt.Sprintf("bash:%d zsh:%d", other, me), true},
+		{fmt.Sprintf("zsh:%d", other), false},
+		{fmt.Sprintf("bash:%d", me), false},
+		{fmt.Sprintf("zshx:%d", me), false},
+		{"zsh", true},
+		{"bash zsh", true},
+		{"zsh:", false},
+	} {
+		t.Setenv("SHELP_HOOKS", c.hooks)
+		if got := hookActive("zsh"); got != c.want {
+			t.Errorf("SHELP_HOOKS=%q: hookActive(zsh) = %v, want %v", c.hooks, got, c.want)
+		}
 	}
 }

@@ -135,3 +135,27 @@ deterministic `zzhost:*` IDs; bash needs a third Tab to list.
   Ctrl-C checks failed). Importing the script as a module re-execs under
   `uv run` when pyte is missing. Tab checks poll (~5s) because the stub is
   a slow Python script.
+
+## Added 2026-10-27
+
+- **A hook must survive loading twice in one shell.** `source ~/.zshrc`
+  does it, and so does VS Code's zsh integration whenever a zsh starts
+  inside a VS Code terminal (`exec zsh`, a nested `zsh`, tmux): the
+  exported `VSCODE_INJECTION=1` is never unset, so a `.zshrc` that also
+  sources `code --locate-shell-integration-path zsh` gets re-sourced by
+  that script. The zsh wrapper is `function shelp {`, never `shelp() {`:
+  the first load's `alias shelp='noglob shelp'` turns the second
+  `shelp() {` into "defining function based on alias `shelp'" plus a
+  parse error, which skips the whole second load and prints into
+  powerlevel10k's instant-prompt warning. `TestRender_LoadsTwice` loads
+  each installed shell's hook twice without rc files.
+- **`SHELP_HOOKS` entries are `shell:pid`** (`$$`, `$fish_pid`), and a
+  load replaces its own shell's entry, so nesting adds none. `hookActive`
+  counts an entry only when its pid is shelp's parent: an inherited entry
+  names another process, so a nested shell that never loaded the hook
+  (`zsh -f`) no longer reports "already hooked" (issue #2). The wrapper's
+  `command shelp` and a bare `command shelp` at the prompt are both
+  direct children of the shell; `$(...)` or `( ... )` is not, and falls
+  back to the rc-file check. A bare `zsh` entry comes from a 0.4.2-or-older
+  hook still loaded in a shell started before an upgrade: unverifiable,
+  so it still counts.

@@ -1,7 +1,9 @@
 package shellinit
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -254,6 +256,58 @@ func TestRender_FishSuggestCleanup(t *testing.T) {
 	syntaxCheck(t, "fish", got, "--no-execute")
 }
 
+// A hook can load twice in one shell: `source ~/.zshrc` does it, and so
+// does VS Code's shell integration in a nested zsh (it re-sources .zshrc).
+// The second load must be silent (in zsh the first load's `shelp` alias
+// made a `shelp() {` definition a parse error) and leave one entry for
+// this shell in SHELP_HOOKS, with its own pid, ahead of the other shells'
+// entries (issue #2). Runs each shell that is installed, without its rc
+// files.
+func TestRender_LoadsTwice(t *testing.T) {
+	runs := map[string][]string{
+		"zsh":  {"-f", "-c", `source $SHELP_TEST_HOOK; source $SHELP_TEST_HOOK; (( $+functions[shelp] )) && print -r -- "$SHELP_HOOKS|$$"`},
+		"bash": {"--norc", "--noprofile", "-c", `source "$SHELP_TEST_HOOK"; source "$SHELP_TEST_HOOK"; declare -F shelp >/dev/null && printf '%s|%s\n' "$SHELP_HOOKS" "$$"`},
+		"fish": {"--no-config", "-c", `source $SHELP_TEST_HOOK; source $SHELP_TEST_HOOK; functions -q shelp; and printf '%s|%s\n' "$SHELP_HOOKS" $fish_pid`},
+	}
+	for _, shell := range Shells() {
+		bin, err := exec.LookPath(shell)
+		if err != nil {
+			continue
+		}
+		for _, o := range []Options{{}, {LineMode: true, Bind: "^G"}} {
+			got, err := Render(shell, o)
+			if err != nil {
+				t.Fatalf("Render(%s, %+v): %v", shell, o, err)
+			}
+			hook := filepath.Join(t.TempDir(), "hook")
+			if err := os.WriteFile(hook, []byte(got), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bin, runs[shell]...)
+			// another shell's entries stay; this shell's stale and
+			// pre-pid entries go
+			cmd.Env = append(os.Environ(), "SHELP_TEST_HOOK="+hook,
+				"SHELP_HOOKS=bash:1 "+shell+" zsh:2 "+shell+":3 fish:4")
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil || stderr.Len() > 0 {
+				t.Errorf("%s %+v, loaded twice: %v\n%s", shell, o, err, stderr.String())
+				continue
+			}
+			hooks, pid, _ := strings.Cut(strings.TrimSpace(stdout.String()), "|")
+			var want []string
+			for _, h := range []string{"bash:1", "zsh:2", "fish:4"} {
+				if !strings.HasPrefix(h, shell+":") {
+					want = append(want, h)
+				}
+			}
+			if w := shell + ":" + pid + " " + strings.Join(want, " "); hooks != w {
+				t.Errorf("%s %+v: SHELP_HOOKS = %q, want %q", shell, o, hooks, w)
+			}
+		}
+	}
+}
+
 // syntaxCheck runs `<shell> <flag>` on script when that shell is installed.
 func syntaxCheck(t *testing.T, shell, script, flag string) {
 	t.Helper()
@@ -272,7 +326,7 @@ func syntaxCheck(t *testing.T, shell, script, flag string) {
 // Code's shell snapshot drops every function named with a leading `_`), so
 // its body may call no other function the hook defines.
 func TestRender_WrapperSelfContained(t *testing.T) {
-	starts := map[string]string{"zsh": "shelp() {", "bash": "shelp() {", "fish": "function shelp\n"}
+	starts := map[string]string{"zsh": "function shelp {", "bash": "shelp() {", "fish": "function shelp\n"}
 	for _, shell := range Shells() {
 		for _, o := range []Options{{}, {LineMode: true, Bind: "^G"}} {
 			got, err := Render(shell, o)

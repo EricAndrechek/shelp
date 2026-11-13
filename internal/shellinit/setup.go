@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -278,11 +279,18 @@ func writeFile(path, content string) error {
 	return nil
 }
 
-// hookActive reports whether this process inherited SHELP_HOOKS naming
-// shell, i.e. `shelp init <shell>` ran in the shell that launched us.
+// hookActive reports whether `shelp init <shell>` ran in the shell that
+// launched us. Each hook puts "<shell>:<pid>" in the exported SHELP_HOOKS,
+// so an entry counts only when its pid is our parent's: a nested shell
+// that never loaded the hook (`zsh -f`, another ZDOTDIR) inherits its
+// parent's entry, which names another process. A bare "<shell>" comes
+// from a hook loaded by shelp 0.4.2 or older in a shell started before an
+// upgrade; it can't be checked, so it counts, as it always did.
 func hookActive(shell string) bool {
+	ppid := strconv.Itoa(os.Getppid())
 	for _, h := range strings.Fields(os.Getenv("SHELP_HOOKS")) {
-		if h == shell {
+		name, pid, hasPID := strings.Cut(h, ":")
+		if name == shell && (!hasPID || pid == ppid) {
 			return true
 		}
 	}

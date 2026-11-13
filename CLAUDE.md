@@ -72,6 +72,12 @@ Public repo: `github.com/EricAndrechek/shelp`. Module `github.com/ericandrechek/
   - **The three `shelp` wrappers call no other hook function** (a shell
     snapshot, Claude Code's, drops `_`-prefixed functions);
     `TestRender_WrapperSelfContained`. `_shelp_is_task` is raw-line-only.
+  - **A hook loads twice in one shell** (`source ~/.zshrc`; VS Code
+    re-sources .zshrc in any zsh started inside its terminal): zsh's wrapper
+    is `function shelp {`, never `shelp() {` (the first load's alias makes
+    that a parse error). `SHELP_HOOKS` entries are `shell:pid`, replaced on
+    reload; `hookActive` counts one only if its pid is shelp's parent
+    (issue #2). `TestRender_LoadsTwice`.
   - stderr beside a good answer is shown in all three shells. In zsh
     **`zle -M` must come AFTER `zle reset-prompt`** or the message is
     wiped (byte-stream checks can't see it: read the pyte screen). Raw-mode

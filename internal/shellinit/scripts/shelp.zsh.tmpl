@@ -1,7 +1,14 @@
 # shelp shell integration for zsh. Load with:  eval "$(shelp init zsh)"
-# SHELP_HOOKS lists the shells whose integration is loaded, so
-# `shelp setup shell` can tell the hook is already active.
-typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
+# SHELP_HOOKS lists the shells whose integration is loaded, as
+# shell:pid, so `shelp setup shell` can tell the hook is already active in
+# the shell that ran it, not just in an ancestor it inherited the variable
+# from. Loading again (a nested zsh, `source ~/.zshrc`) replaces this
+# shell's entry instead of adding one.
+() {
+  local -a others
+  others=(${${${(s: :)SHELP_HOOKS-}:#zsh}:#zsh:*})
+  typeset -gx SHELP_HOOKS="zsh:$$${others:+ ${(j: :)others}}"
+}
 # `shelp <task>` puts the suggested command on your next prompt line
 # (print -rz: -r, or print would turn a `\n` in the command into a real
 # newline), ready to edit or run; so does `shelp suggest <task>`. Commands
@@ -17,7 +24,13 @@ typeset -gx SHELP_HOOKS="zsh${SHELP_HOOKS:+ $SHELP_HOOKS}"
 # command>` to the model. SHELP_PROVIDER names no provider so a shelp too
 # old to know __kind fails at once instead of asking a model about
 # "__kind ..."; any answer but "task" runs the arguments as typed.
-shelp() {
+#
+# `function shelp`, not `shelp()`: when the hook loads a second time in
+# one shell (`source ~/.zshrc`, or VS Code's shell integration re-sourcing
+# .zshrc in a nested zsh), the alias below already exists, and zsh expands
+# it in `shelp() {`: "defining function based on alias `shelp'", a parse
+# error that skips the whole second load.
+function shelp {
   if [[ ${1-} == suggest ]]; then
     shift
   elif [[ -z ${1-} || $(SHELP_PROVIDER=__kind command shelp __kind "$@" 2>/dev/null) != task ]]; then
